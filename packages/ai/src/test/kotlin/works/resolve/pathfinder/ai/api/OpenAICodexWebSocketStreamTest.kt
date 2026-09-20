@@ -39,6 +39,7 @@ import works.resolve.pathfinder.ai.transport.WebSocketCloseException
 import works.resolve.pathfinder.ai.transport.WebSocketConnection
 import works.resolve.pathfinder.ai.transport.WebSocketEvent
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class OpenAICodexWebSocketStreamTest {
 
@@ -248,10 +249,10 @@ class OpenAICodexWebSocketStreamTest {
 
         val events = api.stream(
             model,
-            Context(
+            normalizeContext(Context(
                 systemPrompt = "You are a helpful assistant.",
                 messages = listOf(UserMessage.ofText("Say hello"))
-            ),
+            )),
             OpenAICodexResponsesOptions(
                 apiKey = jwt("acc_test"),
                 sessionId = "session-auto",
@@ -285,10 +286,10 @@ class OpenAICodexWebSocketStreamTest {
         val http = FakeTransport()
         val api = api(http, ws, sessions)
 
-        val firstContext = Context(
+        val firstContext = normalizeContext(Context(
             systemPrompt = "You are a helpful assistant.",
             messages = listOf(UserMessage.ofText("Say hello"))
-        )
+        ))
         var responseCount = 0
         ws.onConnect = { connection ->
             connection.onSend = { _ ->
@@ -309,10 +310,10 @@ class OpenAICodexWebSocketStreamTest {
         val first = messageOf(firstEvents)
         assertEquals(StopReason.STOP, first.stopReason)
 
-        val secondContext = Context(
+        val secondContext = normalizeContext(Context(
             systemPrompt = "You are a helpful assistant.",
             messages = firstContext.messages + first + UserMessage.ofText("Now finish")
-        )
+        ))
         val secondEvents = api.stream(
             model,
             secondContext,
@@ -378,7 +379,7 @@ class OpenAICodexWebSocketStreamTest {
                 connection.serverAll(completedOnly("resp_$responseId"))
             }
         }
-        val context = Context(systemPrompt = "", messages = emptyList())
+        val context = normalizeContext(Context(systemPrompt = "", messages = emptyList()))
 
         suspend fun runOnce(key: String) {
             api.stream(
@@ -426,10 +427,10 @@ class OpenAICodexWebSocketStreamTest {
             transport = Transport.AUTO
         )
         val context =
-            Context(
+            normalizeContext(Context(
                 systemPrompt = "You are a helpful assistant.",
                 messages = listOf(UserMessage.ofText("Say hello"))
-            )
+            ))
         api.stream(model, context, options).toList()
         api.stream(model, context, options).toList()
 
@@ -452,10 +453,10 @@ class OpenAICodexWebSocketStreamTest {
             http.enqueueResponse(sse(*sseChunks().toTypedArray()))
             val api = api(http, ws, sessions)
             val context =
-                Context(
+                normalizeContext(Context(
                     systemPrompt = "You are a helpful assistant.",
                     messages = listOf(UserMessage.ofText("Say hello"))
-                )
+                ))
 
             val events = api.stream(
                 model,
@@ -514,7 +515,7 @@ class OpenAICodexWebSocketStreamTest {
 
         val events = api.stream(
             model,
-            Context(systemPrompt = "", messages = emptyList()),
+            normalizeContext(Context(systemPrompt = "", messages = emptyList())),
             OpenAICodexResponsesOptions(apiKey = jwt("acc_test"))
         ).toList()
         assertEquals(StopReason.STOP, messageOf(events).stopReason)
@@ -530,10 +531,10 @@ class OpenAICodexWebSocketStreamTest {
         http.enqueueResponse(sse(*sseChunks().toTypedArray()))
         val api = api(http, ws, sessions)
         val context =
-            Context(
+            normalizeContext(Context(
                 systemPrompt = "You are a helpful assistant.",
                 messages = listOf(UserMessage.ofText("Say hello"))
-            )
+            ))
 
         val events = api.stream(
             model,
@@ -579,10 +580,10 @@ class OpenAICodexWebSocketStreamTest {
 
         val events = api.stream(
             model,
-            Context(
+            normalizeContext(Context(
                 systemPrompt = "You are a helpful assistant.",
                 messages = listOf(UserMessage.ofText("Say hello"))
-            ),
+            )),
             OpenAICodexResponsesOptions(
                 apiKey = jwt("acc_test"),
                 transport = Transport.AUTO,
@@ -609,10 +610,10 @@ class OpenAICodexWebSocketStreamTest {
                 connection.serverAll(completedOnly("resp_$responseCount"))
             }
         }
-        val firstContext = Context(
+        val firstContext = normalizeContext(Context(
             systemPrompt = "You are a helpful assistant.",
             messages = listOf(UserMessage.ofText("Say hello"))
-        )
+        ))
         api.stream(
             model,
             firstContext,
@@ -623,10 +624,10 @@ class OpenAICodexWebSocketStreamTest {
             )
         ).toList()
         clock.advanceMillis(56 * 60 * 1000)
-        val secondContext = Context(
+        val secondContext = normalizeContext(Context(
             systemPrompt = "You are a helpful assistant.",
             messages = firstContext.messages + UserMessage.ofText("Now finish")
-        )
+        ))
         api.stream(
             model,
             secondContext,
@@ -650,10 +651,10 @@ class OpenAICodexWebSocketStreamTest {
         val ws = FakeWebSocketTransport()
         val http = FakeTransport()
         val api = api(http, ws, sessions)
-        val context = Context(
+        val context = normalizeContext(Context(
             systemPrompt = "You are a helpful assistant.",
             messages = listOf(UserMessage.ofText("Say hello"))
-        )
+        ))
         var responseCount = 0
         ws.onConnect = { connection ->
             connection.onSend = { _ ->
@@ -686,10 +687,10 @@ class OpenAICodexWebSocketStreamTest {
         ).toList()
         assertEquals(StopReason.STOP, messageOf(first).stopReason)
 
-        val secondContext = Context(
+        val secondContext = normalizeContext(Context(
             systemPrompt = "You are a helpful assistant.",
             messages = context.messages + messageOf(first) + UserMessage.ofText("Now finish")
-        )
+        ))
         val second = api.stream(
             model,
             secondContext,
@@ -749,10 +750,10 @@ class OpenAICodexWebSocketStreamTest {
         val job = launch(start = CoroutineStart.UNDISPATCHED) {
             api.stream(
                 model,
-                Context(
+                normalizeContext(Context(
                     systemPrompt = "You are a helpful assistant.",
                     messages = listOf(UserMessage.ofText("Say hello"))
-                ),
+                )),
                 OpenAICodexResponsesOptions(
                     apiKey = jwt("acc_test"),
                     sessionId = "abort-session",
@@ -779,10 +780,10 @@ class OpenAICodexWebSocketStreamTest {
         }
         val events = api.stream(
             model,
-            Context(
+            normalizeContext(Context(
                 systemPrompt = "You are a helpful assistant.",
                 messages = listOf(UserMessage.ofText("Say hello"))
-            ),
+            )),
             OpenAICodexResponsesOptions(apiKey = jwt("acc_test"), transport = Transport.AUTO)
         ).toList()
         // Closed before anything started: transport failure -> SSE fallback.

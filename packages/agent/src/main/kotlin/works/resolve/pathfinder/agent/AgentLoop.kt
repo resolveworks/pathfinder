@@ -790,7 +790,6 @@ private fun createToolResultMessage(
     content = finalized.result.content,
     details = finalized.result.details,
     usage = finalized.result.usage,
-    addedToolNames = finalized.result.addedToolNames,
     isError = finalized.isError,
     timestamp = clock.now().toEpochMilliseconds()
 )

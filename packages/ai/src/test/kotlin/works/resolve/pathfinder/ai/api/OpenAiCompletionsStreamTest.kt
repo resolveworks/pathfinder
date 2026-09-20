@@ -42,11 +42,12 @@ import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class OpenAiCompletionsStreamTest {
 
     private val model = TestCatalogs.GLM_5_2
-    private val context = Context(messages = listOf(UserMessage.ofText("hi")))
+    private val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
     private fun api(transport: FakeTransport) = OpenAiCompletionsApi(
         transport,
@@ -288,7 +289,7 @@ class OpenAiCompletionsStreamTest {
             api(transport)
                 .stream(
                     model,
-                    Context(messages = listOf(UserMessage.ofText("hi"), done.message)),
+                    normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"), done.message))),
                     OpenAiCompletionsOptions(apiKey = "test-key")
                 )
                 .toList()
@@ -377,7 +378,7 @@ class OpenAiCompletionsStreamTest {
             api(transport)
                 .stream(
                     model,
-                    Context(messages = listOf(UserMessage.ofText("hi"), done.message)),
+                    normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"), done.message))),
                     OpenAiCompletionsOptions(apiKey = "test-key")
                 )
                 .toList()
@@ -1234,7 +1235,7 @@ class OpenAiCompletionsStreamTest {
         // reasoning_content wire field.
         val replay = OpenAiCompletionsPayload.convertMessages(
             goModel,
-            Context(messages = listOf(context.messages.single(), done.message))
+            normalizeContext(Context(messages = listOf(context.messages.single(), done.message)))
         )
         val assistant = replay.last()
         assertEquals(
@@ -1620,10 +1621,10 @@ class OpenAiCompletionsStreamTest {
         api(transport)
             .stream(
                 cloudflareKimi(),
-                Context(
+                normalizeContext(Context(
                     systemPrompt = "You are helpful.",
                     messages = listOf(UserMessage.ofText("hi"))
-                ),
+                )),
                 OpenAiCompletionsOptions(
                     headers = mapOf(
                         "cf-aig-authorization" to "Bearer cf-token",
@@ -1780,7 +1781,7 @@ class OpenAiCompletionsStreamTest {
         val events = api(transport)
             .stream(
                 asText,
-                Context(
+                normalizeContext(Context(
                     messages = listOf(
                         UserMessage.ofText("hello"),
                         AssistantMessage(
@@ -1794,7 +1795,7 @@ class OpenAiCompletionsStreamTest {
                         ),
                         UserMessage.ofText("continue")
                     )
-                ),
+                )),
                 OpenAiCompletionsOptions(apiKey = "test-key")
             )
             .toList()

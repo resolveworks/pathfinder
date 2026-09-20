@@ -1428,7 +1428,10 @@ internal class AnthropicStreamState(
         return emptyList()
     }
 
-    fun onContentBlockStart(event: JsonObject, tools: List<Tool>): List<AssistantMessageEvent> {
+    fun onContentBlockStart(
+        event: JsonObject,
+        tools: List<works.resolve.pathfinder.ai.Tool>
+    ): List<AssistantMessageEvent> {
         val index = event.int("index") ?: return emptyList()
         val contentBlock = event.obj("content_block") ?: return emptyList()
         val type = contentBlock.str("type")

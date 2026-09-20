@@ -27,12 +27,13 @@ import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 /** telemetryContext is dormant: no adapter reads it, and none may emit spans. */
 class TelemetryOptionsTest {
 
     private val telemetry = InMemoryTelemetryContext()
-    private val context = Context(messages = emptyList())
+    private val context = normalizeContext(Context(messages = emptyList()))
 
     private val model = Model(
         id = "model",
@@ -132,7 +133,7 @@ class TelemetryOptionsTest {
         )
             .streamSimple(
                 model,
-                Context(messages = listOf(UserMessage.ofText("hi"))),
+                normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
                 SimpleStreamOptions(apiKey = "k", telemetryContext = telemetry)
             )
             .toList()

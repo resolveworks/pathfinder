@@ -37,11 +37,12 @@ import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.NetworkException
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class MistralConversationsApiTest {
 
     private val model = mistralModel()
-    private val context = Context(messages = listOf(UserMessage.ofText("hello")))
+    private val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hello"))))
 
     private fun api(transport: FakeTransport) = MistralConversationsApi(
         transport,
@@ -62,7 +63,7 @@ class MistralConversationsApiTest {
 
         val done = api(transport).stream(
             imageModel,
-            Context(
+            normalizeContext(Context(
                 systemPrompt = "Be precise",
                 messages = listOf(
                     UserMessage(
@@ -81,7 +82,7 @@ class MistralConversationsApiTest {
                         )
                     )
                 )
-            ),
+            )),
             MistralOptions(
                 apiKey = "secret",
                 sessionId = "session-1",
@@ -141,7 +142,7 @@ class MistralConversationsApiTest {
 
         api(transport).stream(
             imageModel,
-            Context(
+            normalizeContext(Context(
                 messages = listOf(
                     AssistantMessage(
                         content = listOf(
@@ -163,7 +164,7 @@ class MistralConversationsApiTest {
                         )
                     )
                 )
-            ),
+            )),
             MistralOptions(apiKey = "test")
         ).toList()
 
@@ -190,7 +191,7 @@ class MistralConversationsApiTest {
 
         api(transport).stream(
             model,
-            Context(
+            normalizeContext(Context(
                 messages = listOf(
                     AssistantMessage(
                         content = listOf(
@@ -207,7 +208,7 @@ class MistralConversationsApiTest {
                         content = listOf(TextContent("ok"))
                     )
                 )
-            ),
+            )),
             MistralOptions(apiKey = "test")
         ).toList()
 
@@ -649,7 +650,7 @@ class MistralConversationsApiTest {
         transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
         api(transport).stream(
             mistralModel(input = listOf(InputModality.TEXT)),
-            Context(
+            normalizeContext(Context(
                 messages = listOf(
                     UserMessage(
                         listOf(
@@ -661,7 +662,7 @@ class MistralConversationsApiTest {
                         )
                     )
                 )
-            ),
+            )),
             MistralOptions(apiKey = "test")
         ).toList()
         val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
@@ -683,7 +684,7 @@ class MistralConversationsApiTest {
         transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
         api(transport).stream(
             mistralModel(input = listOf(InputModality.TEXT)),
-            Context(
+            normalizeContext(Context(
                 messages = listOf(
                     AssistantMessage(
                         content = listOf(ToolCall("abc123456", "lookup", "{}")),
@@ -702,7 +703,7 @@ class MistralConversationsApiTest {
                     ),
                     UserMessage.ofText("thanks")
                 )
-            ),
+            )),
             MistralOptions(apiKey = "test")
         ).toList()
         val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
@@ -723,7 +724,7 @@ class MistralConversationsApiTest {
             transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
             api(transport).stream(
                 model,
-                Context(
+                normalizeContext(Context(
                     messages = listOf(
                         AssistantMessage(
                             content = listOf(
@@ -748,7 +749,7 @@ class MistralConversationsApiTest {
                         ),
                         UserMessage.ofText("interrupted")
                     )
-                ),
+                )),
                 MistralOptions(apiKey = "test")
             ).toList()
             val messages = Json.parseToJsonElement(
@@ -777,7 +778,7 @@ class MistralConversationsApiTest {
         transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
         api(transport).stream(
             model,
-            Context(
+            normalizeContext(Context(
                 messages = listOf(
                     AssistantMessage(
                         content = listOf(
@@ -792,7 +793,7 @@ class MistralConversationsApiTest {
                     ),
                     UserMessage.ofText("continue")
                 )
-            ),
+            )),
             MistralOptions(apiKey = "test")
         ).toList()
         val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())

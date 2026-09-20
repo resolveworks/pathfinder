@@ -31,6 +31,7 @@ import works.resolve.pathfinder.ai.auth.oauth.OAuthHttpResponse
 import works.resolve.pathfinder.ai.auth.resolveProviderAuth
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class AnthropicOAuthRuntimeTest {
 
@@ -76,10 +77,10 @@ class AnthropicOAuthRuntimeTest {
         )
     )
 
-    private val context = Context(
+    private val context = normalizeContext(Context(
         systemPrompt = "Be terse.",
         messages = listOf(UserMessage.ofText("hi"))
-    )
+    ))
 
     private val sseBody = sequence {
         yield(

@@ -131,7 +131,7 @@ data class MistralOptions(
 
 internal fun buildMistralOptions(
     model: Model,
-    context: Context,
+    context: TranscriptContext,
     options: SimpleStreamOptions
 ): MistralOptions {
     val clamped = options.reasoning?.let { clampThinkingLevel(model, it.toModelThinkingLevel()) }
@@ -1002,6 +1002,8 @@ object MistralConversationsPayload {
                         }
                     )
                 }
+
+                MessageRole.SYSTEM -> Unit
             }
         }
 
@@ -1053,12 +1055,6 @@ object MistralConversationsPayload {
 
     private fun sanitizeText(text: String): String = sanitizeSurrogates(text)
 }
-
-internal fun buildMistralSystemMessage(systemPrompt: String): JsonObject =
-    kotlinx.serialization.json.buildJsonObject {
-        put("role", "system")
-        put("content", sanitizeSurrogates(systemPrompt))
-    }
 
 internal fun usesReasoningEffort(model: Model): Boolean =
     model.id == "mistral-small-2603" || model.id == "mistral-small-latest" ||

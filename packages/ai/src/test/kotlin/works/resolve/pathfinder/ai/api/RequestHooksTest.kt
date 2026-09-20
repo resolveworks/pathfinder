@@ -31,6 +31,7 @@ import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class RequestHooksTest {
 
@@ -71,7 +72,7 @@ class RequestHooksTest {
                 sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]")
             )
             val model = works.resolve.pathfinder.ai.testing.TestCatalogs.GLM_5_2
-            val context = Context(messages = listOf(UserMessage.ofText("hi")))
+            val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
             val seen = mutableListOf<JsonObject>()
             val events = OpenAiCompletionsApi(transport, retry).streamSimple(
                 model,
@@ -99,7 +100,7 @@ class RequestHooksTest {
         )
         OpenAiCompletionsApi(transport, retry).streamSimple(
             works.resolve.pathfinder.ai.testing.TestCatalogs.GLM_5_2,
-            Context(messages = listOf(UserMessage.ofText("hi"))),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
             SimpleStreamOptions(apiKey = "k", onPayload = { _, _ -> null })
         ).toList()
         assertNull(bodyOf(transport)["top_k"])
@@ -115,7 +116,7 @@ class RequestHooksTest {
         val responses = mutableListOf<ProviderResponse>()
         OpenAiCompletionsApi(transport, retry).streamSimple(
             works.resolve.pathfinder.ai.testing.TestCatalogs.GLM_5_2,
-            Context(messages = listOf(UserMessage.ofText("hi"))),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
             SimpleStreamOptions(
                 apiKey = "k",
                 onResponse = { response, _ -> responses.add(response) }
@@ -134,7 +135,7 @@ class RequestHooksTest {
         val responses = mutableListOf<ProviderResponse>()
         OpenAiCompletionsApi(transport, retry).streamSimple(
             works.resolve.pathfinder.ai.testing.TestCatalogs.GLM_5_2,
-            Context(messages = listOf(UserMessage.ofText("hi"))),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
             SimpleStreamOptions(apiKey = "k", onResponse = { r, _ -> responses.add(r) })
         ).toList()
         assertTrue(responses.isEmpty())
@@ -155,7 +156,7 @@ class RequestHooksTest {
             )
             OpenAiCompletionsApi(transport, retry).streamSimple(
                 model,
-                Context(messages = listOf(UserMessage.ofText("hi"))),
+                normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
                 SimpleStreamOptions(
                     apiKey = "k",
                     temperature = 0.5,
@@ -176,7 +177,7 @@ class RequestHooksTest {
         )
         OpenAiCompletionsApi(transport, retry).streamSimple(
             works.resolve.pathfinder.ai.testing.TestCatalogs.GLM_5_2,
-            Context(messages = listOf(UserMessage.ofText("hi"))),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
             SimpleStreamOptions(apiKey = "k")
         ).toList()
         assertNull(bodyOf(transport)["top_p"])
@@ -193,7 +194,7 @@ class RequestHooksTest {
         maxTokens = 64_000
     )
 
-    private val anthropicContext = Context(messages = listOf(UserMessage.ofText("hi")))
+    private val anthropicContext = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
     private fun anthropicEvents() = listOf(
         "message_start" to
@@ -288,7 +289,7 @@ class RequestHooksTest {
         val responses = mutableListOf<ProviderResponse>()
         GoogleGenerativeAiApi(transport, retry).streamSimple(
             model,
-            Context(messages = listOf(UserMessage.ofText("hi"))),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
             SimpleStreamOptions(
                 apiKey = "k",
                 onPayload = { payload, _ ->
@@ -315,7 +316,7 @@ class RequestHooksTest {
         maxTokens = 131_000
     )
 
-    private val mistralContext = Context(messages = listOf(UserMessage.ofText("hi")))
+    private val mistralContext = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
     private fun mistralTerminal() = """
         {"id":"mistral-response-id","model":"${mistral.id}",
@@ -388,7 +389,7 @@ class RequestHooksTest {
             val responses = mutableListOf<ProviderResponse>()
             OpenAiResponsesApi(transport, retry).streamSimple(
                 gpt,
-                Context(messages = listOf(UserMessage.ofText("hi"))),
+                normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
                 SimpleStreamOptions(
                     apiKey = "k",
                     maxTokens = 512,
@@ -435,7 +436,7 @@ class RequestHooksTest {
         val responses = mutableListOf<ProviderResponse>()
         AzureOpenAiResponsesApi(transport, retry).streamSimple(
             model,
-            Context(messages = listOf(UserMessage.ofText("hi"))),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
             SimpleStreamOptions(
                 apiKey = "k",
                 temperature = 0.5,
@@ -478,10 +479,10 @@ class RequestHooksTest {
                 webSocketTransport = NoWebSocketTransport
             ).streamSimple(
                 model,
-                Context(
+                normalizeContext(Context(
                     systemPrompt = "You are Codex.",
                     messages = listOf(UserMessage.ofText("hi"))
-                ),
+                )),
                 SimpleStreamOptions(
                     apiKey = jwt("acc-1"),
                     onPayload = { payload, _ ->

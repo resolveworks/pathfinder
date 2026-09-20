@@ -26,6 +26,7 @@ import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class AzureOpenAiResponsesApiTest {
 
@@ -41,7 +42,7 @@ class AzureOpenAiResponsesApiTest {
         responsesCompat = OpenAiResponsesCompat()
     )
 
-    private val context = Context(messages = listOf(UserMessage.ofText("hi")))
+    private val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
     private fun api(transport: FakeTransport) = AzureOpenAiResponsesApi(
         transport,
@@ -262,7 +263,9 @@ class AzureOpenAiResponsesApiTest {
         val tool = Tool("get_weather", "Get weather", buildJsonObject { put("type", "object") })
         api(transport).stream(
             model,
-            context.copy(tools = listOf(tool)),
+            normalizeContext(
+                Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))
+            ),
             AzureOpenAiResponsesOptions(apiKey = "k", toolChoice = "required")
         ).toList()
         val body = bodyOf(transport)
@@ -350,7 +353,12 @@ class AzureOpenAiResponsesApiTest {
         transport.enqueueResponse(sse(*completed().toTypedArray()))
         api(transport).stream(
             model.copy(responsesCompat = null),
-            context.copy(tools = listOf(Tool("t", "T", buildJsonObject { put("type", "object") }))),
+            normalizeContext(
+                Context(
+                    messages = listOf(UserMessage.ofText("hi")),
+                    tools = listOf(Tool("t", "T", buildJsonObject { put("type", "object") }))
+                )
+            ),
             AzureOpenAiResponsesOptions(apiKey = "k")
         ).toList()
         assertEquals(
@@ -364,7 +372,12 @@ class AzureOpenAiResponsesApiTest {
         strictOff.enqueueResponse(sse(*completed().toTypedArray()))
         api(strictOff).stream(
             model.copy(responsesCompat = OpenAiResponsesCompat(supportsStrictMode = false)),
-            context.copy(tools = listOf(Tool("t", "T", buildJsonObject { put("type", "object") }))),
+            normalizeContext(
+                Context(
+                    messages = listOf(UserMessage.ofText("hi")),
+                    tools = listOf(Tool("t", "T", buildJsonObject { put("type", "object") }))
+                )
+            ),
             AzureOpenAiResponsesOptions(apiKey = "k")
         ).toList()
         assertNull(bodyOf(strictOff)["tools"]!!.jsonArray.single().jsonObject["strict"])
@@ -378,14 +391,17 @@ class AzureOpenAiResponsesApiTest {
         transport.enqueueResponse(sse(*completed().toTypedArray()))
         api(transport).streamSimple(
             model,
-            context.copy(
-                tools = listOf(
-                    Tool(
-                        "read",
-                        "Read a file",
-                        buildJsonObject {
-                            put("type", "object")
-                        }
+            normalizeContext(
+                Context(
+                    messages = listOf(UserMessage.ofText("hi")),
+                    tools = listOf(
+                        Tool(
+                            "read",
+                            "Read a file",
+                            buildJsonObject {
+                                put("type", "object")
+                            }
+                        )
                     )
                 )
             ),

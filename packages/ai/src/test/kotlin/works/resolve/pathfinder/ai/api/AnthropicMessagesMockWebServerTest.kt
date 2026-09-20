@@ -23,6 +23,7 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class AnthropicMessagesMockWebServerTest {
 
@@ -41,10 +42,10 @@ class AnthropicMessagesMockWebServerTest {
         maxTokens = 64_000
     )
 
-    private val context = Context(
+    private val context = normalizeContext(Context(
         systemPrompt = "Be terse.",
         messages = listOf(UserMessage.ofText("hi"))
-    )
+    ))
 
     private val sseBody = sequence {
         yield(

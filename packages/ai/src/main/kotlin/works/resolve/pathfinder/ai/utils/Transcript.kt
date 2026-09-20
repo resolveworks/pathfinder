@@ -5,8 +5,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
+import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.GrammarFormat
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.MessageRole
@@ -17,7 +17,7 @@ import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolReference
 import works.resolve.pathfinder.ai.TranscriptContext
 
-/**
+/*
  * Pathfinder twin of pi's `utils/transcript.ts`: the replay and normalization
  * helpers shared by every provider adapter.
  */
@@ -44,7 +44,11 @@ fun createInitialSystemMessage(systemPrompt: String?, tools: List<Tool>?): Syste
  */
 fun normalizeContext(context: Context): TranscriptContext {
     val initialMessage = createInitialSystemMessage(context.systemPrompt, context.tools)
-    val messages = if (initialMessage != null) listOf(initialMessage) + context.messages else context.messages
+    val messages = if (initialMessage != null) {
+        listOf(initialMessage) + context.messages
+    } else {
+        context.messages
+    }
     return TranscriptContext(messages)
 }
 
@@ -88,7 +92,11 @@ fun getCurrentSystemMessage(messages: List<Message>): SystemMessage? {
     val tools = getCurrentTools(messages)
     if (timestamp == null && tools.isEmpty()) return null
     return SystemMessage(
-        content = if (content.isEmpty()) emptyList() else listOf(TextContent(content.joinToString("\n\n"))),
+        content = if (content.isEmpty()) {
+            emptyList()
+        } else {
+            listOf(TextContent(content.joinToString("\n\n")))
+        },
         sections = if (sections.isNotEmpty()) sections else null,
         toolsAdded = if (tools.isNotEmpty()) tools else null,
         timestamp = timestamp ?: 0L
@@ -115,9 +123,16 @@ fun collapseSystemMessages(context: TranscriptContext): TranscriptContext {
 fun resolveTranscript(
     context: TranscriptContext,
     supportsMidConvoSystemMessages: Boolean?
-): TranscriptContext = if (supportsMidConvoSystemMessages == true) context else collapseSystemMessages(context)
+): TranscriptContext = if (supportsMidConvoSystemMessages == true) {
+    context
+} else {
+    collapseSystemMessages(context)
+}
 
-/** Strip executable and display-only fields from a tool before transcript comparison or persistence. */
+/**
+ * Strip executable and display-only fields from a tool before transcript comparison or
+ * persistence.
+ */
 fun toToolDeclaration(tool: Tool): Tool = Tool(
     name = tool.name,
     description = tool.description,
@@ -139,10 +154,7 @@ fun declarationsEqual(left: Tool, right: Tool): Boolean =
     lenientJson.encodeToString(JsonElement.serializer(), toolToJson(toToolDeclaration(left))) ==
         lenientJson.encodeToString(JsonElement.serializer(), toolToJson(toToolDeclaration(right)))
 
-data class ToolStateChanges(
-    val toolsAdded: List<Tool>,
-    val toolsRemoved: List<ToolReference>
-)
+data class ToolStateChanges(val toolsAdded: List<Tool>, val toolsRemoved: List<ToolReference>)
 
 /** Compare two complete tool states. A changed definition is a removal followed by an addition. */
 fun getToolStateChanges(previous: List<Tool>, current: List<Tool>): ToolStateChanges {
@@ -187,7 +199,10 @@ fun hasToolRedefinitions(messages: List<Message>): Boolean {
     return false
 }
 
-/** Whether tool history contains a removal or same-name redeclaration that an addition-only transport cannot replay. */
+/**
+ * Whether tool history contains a removal or same-name redeclaration that an addition-only
+ * transport cannot replay.
+ */
 fun hasNonAdditiveToolChanges(messages: List<Message>): Boolean {
     val declared = mutableSetOf<String>()
     for (message in messages) {
@@ -217,7 +232,10 @@ data class TranscriptTools(
  * top and load later ones where they appear; that only works when no tool was removed or
  * redeclared, so everything else sends the current tool list.
  */
-fun resolveTranscriptTools(messages: List<Message>, supportsToolAdditions: Boolean): TranscriptTools {
+fun resolveTranscriptTools(
+    messages: List<Message>,
+    supportsToolAdditions: Boolean
+): TranscriptTools {
     val anchorsAdditions = supportsToolAdditions && !hasNonAdditiveToolChanges(messages)
     return TranscriptTools(
         requestTools = if (anchorsAdditions) {
@@ -245,26 +263,33 @@ internal fun toolToJson(tool: Tool): JsonObject = buildJsonObject {
 internal fun toolReferenceToJson(reference: ToolReference): JsonObject =
     buildJsonObject { put("name", reference.name) }
 
-private fun constrainedSamplingToJson(config: ConstrainedSamplingConfig): JsonElement = when (config) {
-    ConstrainedSamplingConfig.Disabled -> JsonPrimitive(false)
+private fun constrainedSamplingToJson(config: ConstrainedSamplingConfig): JsonElement =
+    when (config) {
+        ConstrainedSamplingConfig.Disabled -> JsonPrimitive(false)
 
-    is ConstrainedSamplingConfig.JsonSchema -> buildJsonObject {
-        put("type", "json_schema")
-        put("strict", if (config.strict == StrictJsonSchemaMode.PREFER) "prefer" else "require")
-    }
+        is ConstrainedSamplingConfig.JsonSchema -> buildJsonObject {
+            put("type", "json_schema")
+            put("strict", if (config.strict == StrictJsonSchemaMode.PREFER) "prefer" else "require")
+        }
 
-    is ConstrainedSamplingConfig.Grammar -> buildJsonObject {
-        put("type", "grammar")
-        put(
-            "variants",
-            buildJsonObject {
-                config.variants.forEach { (format, definition) ->
-                    put(
-                        if (format == GrammarFormat.OPENAI_LARK) "openai_lark" else "openai_regex",
-                        definition
-                    )
+        is ConstrainedSamplingConfig.Grammar -> buildJsonObject {
+            put("type", "grammar")
+            put(
+                "variants",
+                buildJsonObject {
+                    config.variants.forEach { (format, definition) ->
+                        put(
+                            if (format ==
+                                GrammarFormat.OPENAI_LARK
+                            ) {
+                                "openai_lark"
+                            } else {
+                                "openai_regex"
+                            },
+                            definition
+                        )
+                    }
                 }
-            }
-        )
+            )
+        }
     }
-}

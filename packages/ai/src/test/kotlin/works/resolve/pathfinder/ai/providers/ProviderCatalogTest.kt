@@ -14,7 +14,6 @@ import org.junit.Assume.assumeTrue
 import works.resolve.pathfinder.ai.CacheControlFormat
 import works.resolve.pathfinder.ai.ChatTemplateKwargValue
 import works.resolve.pathfinder.ai.Context
-import works.resolve.pathfinder.ai.DeferredToolsMode
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.MaxTokensField
 import works.resolve.pathfinder.ai.Model
@@ -265,8 +264,7 @@ class ProviderCatalogTest {
                    "compat": {"supportsMaxOutputTokens": false}},
                   {"id": "b", "name": "B", "api": "openai-responses"},
                   {"id": "c", "name": "C",
-                   "compat": {"requiresReasoningContentOnAssistantMessages": true,
-                               "deferredToolsMode": "kimi"}}
+                   "compat": {"requiresReasoningContentOnAssistantMessages": true}}
                 ]
               }]
             }
@@ -275,25 +273,6 @@ class ProviderCatalogTest {
         assertEquals(false, catalog.getModel("p", "a")!!.responsesCompat?.supportsMaxOutputTokens)
         assertEquals(true, catalog.getModel("p", "b")!!.responsesCompat?.supportsMaxOutputTokens)
         assertTrue(catalog.getModel("p", "c")!!.compat.requiresReasoningContentOnAssistantMessages)
-        assertEquals(DeferredToolsMode.KIMI, catalog.getModel("p", "c")!!.compat.deferredToolsMode)
-        assertNull(catalog.getModel("p", "a")!!.compat.deferredToolsMode)
-    }
-
-    @Test
-    fun `unknown deferredToolsMode value fails fast with context`() {
-        val error = assertFailsWith<IllegalArgumentException> {
-            ProviderCatalog.parse(
-                """
-                {
-                  "providers": [{
-                    "id": "p", "name": "P", "baseUrl": "https://p.test/v1",
-                    "models": [{"id": "a", "name": "A", "compat": {"deferredToolsMode": "anthropic"}}]
-                  }]
-                }
-                """
-            )
-        }
-        assertTrue("deferred tools mode" in (error.message ?: ""))
     }
 
     @Test
@@ -324,12 +303,10 @@ class ProviderCatalogTest {
     @Test
     fun `real asset compat keys are all modeled by CompatDto`() {
         val catalog = realAsset()
-        var deferred = 0
         var requiresReasoningContent = 0
         var supportsMaxOutputTokensFalse = 0
         for (provider in catalog.providers) {
             for (model in provider.models) {
-                if (model.compat.deferredToolsMode == DeferredToolsMode.KIMI) deferred++
                 if (model.compat.requiresReasoningContentOnAssistantMessages) {
                     requiresReasoningContent++
                 }
@@ -340,7 +317,6 @@ class ProviderCatalogTest {
                 }
             }
         }
-        assertTrue(deferred > 0, "expected kimi deferredToolsMode models in the asset")
         assertTrue(
             requiresReasoningContent > 0,
             "expected requiresReasoningContentOnAssistantMessages models"

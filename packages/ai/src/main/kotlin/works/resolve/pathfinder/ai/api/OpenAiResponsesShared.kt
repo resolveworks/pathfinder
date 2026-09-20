@@ -95,7 +95,10 @@ object OpenAiResponsesShared {
     data class ConvertResponsesMessagesOptions(
         val includeSystemPrompt: Boolean = true,
         val grammarToolInputProperties: Map<String, String> = emptyMap(),
-        /** Whether later system messages are sent in place; otherwise they are folded into the leading prompt. */
+        /**
+         * Whether later system messages are sent in place; otherwise they are folded into the
+         * leading prompt.
+         */
         val supportsMidConvoSystemMessages: Boolean = false,
         val supportsAdditionalTools: Boolean = false,
         val supportsToolSearch: Boolean = false,
@@ -146,14 +149,19 @@ object OpenAiResponsesShared {
             }
         }
 
-        val transformedMessages = transformMessages(normalizedContext.messages, model, normalizeToolCallId)
+        val transformedMessages =
+            transformMessages(normalizedContext.messages, model, normalizeToolCallId)
         val transcriptTools = resolveTranscriptTools(
             normalizedContext.messages,
             options.supportsAdditionalTools || options.supportsToolSearch
         )
 
         fun appendSystemToolAdditions(message: SystemMessage, seed: String) {
-            val tools = if (transcriptTools.anchorsAdditions) message.toolsAdded.orEmpty() else emptyList()
+            val tools = if (transcriptTools.anchorsAdditions) {
+                message.toolsAdded.orEmpty()
+            } else {
+                emptyList()
+            }
             if (tools.isEmpty()) return
             if (options.supportsAdditionalTools) {
                 messages.add(
@@ -192,7 +200,10 @@ object OpenAiResponsesShared {
                     put(
                         "tools",
                         JsonArray(
-                            convertResponsesTools(tools, options.toolOptions.copy(toolSearchResult = true))
+                            convertResponsesTools(
+                                tools,
+                                options.toolOptions.copy(toolSearchResult = true)
+                            )
                         )
                     )
                 }
@@ -217,8 +228,11 @@ object OpenAiResponsesShared {
                     if (!isLeadingSystemMessage) appendSystemToolAdditions(msg, "system:$msgIndex")
                     if (!isLeadingSystemMessage || includeInitialSystemMessage) {
                         val text =
-                            if (isLeadingSystemMessage) getSystemMessageText(msg)
-                            else renderSystemMessageUpdate(msg)
+                            if (isLeadingSystemMessage) {
+                                getSystemMessageText(msg)
+                            } else {
+                                renderSystemMessageUpdate(msg)
+                            }
                         if (text.isNotEmpty()) {
                             messages.add(
                                 buildJsonObject {
@@ -333,8 +347,7 @@ object OpenAiResponsesShared {
                                 ) {
                                     itemId = null
                                 }
-                                val canReplayNamespace =
-                                    isSameModel || options.deferredTools[block.name] != null
+                                val canReplayNamespace = isSameModel
                                 if (customInputProperty != null) {
                                     // Raw argument JSON (see class header) is parsed here for the
                                     // grammar input lookup; unparseable bodies become {} and
@@ -407,69 +420,6 @@ object OpenAiResponsesShared {
                             put("output", converted)
                         }
                     )
-
-                    val deferredTools = mutableListOf<Tool>()
-                    for (name in msg.addedToolNames) {
-                        val tool = options.deferredTools[name] ?: continue
-                        if (!loadedToolNames.add(name)) continue
-                        deferredTools.add(tool)
-                    }
-                    if (deferredTools.isNotEmpty() &&
-                        options.deferredToolsMode == DeferredToolsMode.ADDITIONAL_TOOLS
-                    ) {
-                        messages.add(
-                            buildJsonObject {
-                                put("type", "additional_tools")
-                                put("role", "developer")
-                                put(
-                                    "tools",
-                                    JsonArray(
-                                        convertResponsesTools(deferredTools, options.toolOptions)
-                                    )
-                                )
-                            }
-                        )
-                    } else if (deferredTools.isNotEmpty() &&
-                        options.deferredToolsMode == DeferredToolsMode.TOOL_SEARCH
-                    ) {
-                        val names = deferredTools.map { it.name }
-                        val searchCallId =
-                            "pi_tool_load_${shortHash(
-                                "${msg.toolCallId}:${names.joinToString(",")}"
-                            )}"
-                        messages.add(
-                            buildJsonObject {
-                                put("type", "tool_search_call")
-                                put("call_id", searchCallId)
-                                put("execution", "client")
-                                put("status", "completed")
-                                put(
-                                    "arguments",
-                                    buildJsonObject {
-                                        put("query", names.joinToString(" "))
-                                        put("limit", names.size)
-                                    }
-                                )
-                            }
-                        )
-                        messages.add(
-                            buildJsonObject {
-                                put("type", "tool_search_output")
-                                put("call_id", searchCallId)
-                                put("execution", "client")
-                                put("status", "completed")
-                                put(
-                                    "tools",
-                                    JsonArray(
-                                        convertResponsesTools(
-                                            deferredTools,
-                                            options.toolOptions.copy(deferLoading = true)
-                                        )
-                                    )
-                                )
-                            }
-                        )
-                    }
                 }
             }
         }

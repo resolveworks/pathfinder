@@ -11,9 +11,9 @@ import works.resolve.pathfinder.ai.AnthropicAllowedFallbackModel
 import works.resolve.pathfinder.ai.AnthropicMessagesCompat
 import works.resolve.pathfinder.ai.CacheControlFormat
 import works.resolve.pathfinder.ai.ChatTemplateKwargValue
-import works.resolve.pathfinder.ai.DeferredToolsMode
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.MaxTokensField
+import works.resolve.pathfinder.ai.MistralConversationsCompat
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelCost
 import works.resolve.pathfinder.ai.ModelCostTier
@@ -150,9 +150,13 @@ class CatalogProvider(
         authResolver = authResolver,
         models = models,
         apis = apis.mapNotNull { apiId ->
-            ChatApiRegistry.create(apiId, transport, retry, webSocketTransport)?.let {
-                apiId to
-                    it
+            ChatApiRegistry.create(apiId, transport, retry, webSocketTransport)?.let { api ->
+                val wrapped = if (id == "opencode" || id == "opencode-go") {
+                    OpenCodeSessionHeaderChatApi(api)
+                } else {
+                    api
+                }
+                apiId to wrapped
             }
         }.toMap()
     )
@@ -304,6 +308,9 @@ private data class ModelDto(
 ) {
     fun toDomain(owner: ProviderDto): Model {
         val resolvedProvider = provider.ifEmpty { owner.id }
+        val effectiveBaseUrl = baseUrl.ifEmpty { owner.baseUrl }
+        val isOpenRouter = resolvedProvider == "openrouter" ||
+            effectiveBaseUrl.contains("openrouter.ai")
         val detectedCacheControlFormat =
             if (resolvedProvider == "openrouter" && id.startsWith("anthropic/")) {
                 CacheControlFormat.ANTHROPIC
@@ -315,7 +322,7 @@ private data class ModelDto(
             name = name,
             api = api,
             provider = resolvedProvider,
-            baseUrl = baseUrl.ifEmpty { owner.baseUrl },
+            baseUrl = effectiveBaseUrl,
             reasoning = reasoning,
             thinkingLevelMap = thinkingLevelMap?.let {
                 parseThinkingLevelMap(it, "${owner.id}/$id")
@@ -325,13 +332,24 @@ private data class ModelDto(
             contextWindow = contextWindow,
             maxTokens = maxTokens,
             compat = compat.toDomain("${owner.id}/$id", detectedCacheControlFormat),
-            anthropicCompat = compat.toAnthropicDomain(),
+            anthropicCompat = compat.toAnthropicDomain(
+                where = "${owner.id}/$id",
+                isOpenRouter = isOpenRouter
+            ),
             responsesCompat = if (api in
                 RESPONSES_FAMILY_APIS
             ) {
                 compat.toResponsesDomain("${owner.id}/$id")
             } else {
                 null
+            },
+            mistralCompat = if (api == "mistral-conversations") {
+                MistralConversationsCompat(
+                    supportsMidConvoSystemMessages =
+                        compat.supportsMidConvoSystemMessages ?: false
+                )
+            } else {
+                MistralConversationsCompat()
             },
             headers = headers
         )
@@ -403,7 +421,9 @@ private data class CompatDto(
     val forceAdaptiveThinking: Boolean? = null,
     val allowedFallbackModels: List<AllowedFallbackModelDto>? = null,
     val supportsMidConvoEffort: Boolean? = null,
-    val supportsToolReferences: Boolean? = null,
+    val supportsMidConvoSystemMessages: Boolean? = null,
+    val supportsMidConvoToolAdditions: Boolean? = null,
+    val supportsMidConvoToolChanges: Boolean? = null,
     // Consumed via [Model.responsesCompat]; [supportsStrictMode] also maps
     // to the completions compat via [Model.compat].
     val supportsStrictMode: Boolean? = null,
@@ -415,7 +435,6 @@ private data class CompatDto(
     val supportsExplicitPromptCacheMode: Boolean? = null,
     val supportsMaxOutputTokens: Boolean? = null,
     val requiresReasoningContentOnAssistantMessages: Boolean? = null,
-    val deferredToolsMode: String? = null,
     val vllmPriority: Int? = null
 ) {
     fun toDomain(where: String, detectedCacheControlFormat: CacheControlFormat?) =
@@ -444,18 +463,20 @@ private data class CompatDto(
             supportsLongCacheRetention = supportsLongCacheRetention ?: true,
             supportsStrictMode = supportsStrictMode ?: true,
             supportsOpenAIGrammarTools = supportsOpenAIGrammarTools ?: false,
+            supportsMidConvoSystemMessages = supportsMidConvoSystemMessages ?: false,
+            supportsMidConvoToolAdditions = supportsMidConvoToolAdditions ?: false,
             cacheControlFormat = cacheControlFormat
                 ?.let { parseCacheControlFormat(it, where) }
                 ?: detectedCacheControlFormat,
             requiresReasoningContentOnAssistantMessages =
                 requiresReasoningContentOnAssistantMessages ?: false,
-            deferredToolsMode = deferredToolsMode?.let { parseDeferredToolsMode(it, where) },
             vllmPriority = vllmPriority
         )
 
     /** Per-field defaults mirror pi's openai-responses getCompat. */
     fun toResponsesDomain(where: String) = OpenAiResponsesCompat(
         supportsDeveloperRole = supportsDeveloperRole ?: true,
+        supportsMidConvoSystemMessages = supportsMidConvoSystemMessages ?: false,
         sessionAffinityFormat = sessionAffinityFormat?.let {
             parseSessionAffinityFormat(it, where)
         },
@@ -469,10 +490,10 @@ private data class CompatDto(
     )
 
     /** Per-field defaults mirror pi's getAnthropicCompat. */
-    fun toAnthropicDomain() = AnthropicMessagesCompat(
+    fun toAnthropicDomain(where: String, isOpenRouter: Boolean) = AnthropicMessagesCompat(
         supportsEagerToolInputStreaming = supportsEagerToolInputStreaming ?: true,
         supportsLongCacheRetention = supportsLongCacheRetention ?: true,
-        sendSessionAffinityHeaders = sendSessionAffinityHeaders ?: false,
+        sendSessionAffinityHeaders = sendSessionAffinityHeaders ?: isOpenRouter,
         supportsCacheControlOnTools = supportsCacheControlOnTools ?: true,
         supportsTemperature = supportsTemperature ?: true,
         allowEmptySignature = allowEmptySignature ?: false,
@@ -480,7 +501,11 @@ private data class CompatDto(
         forceAdaptiveThinking = forceAdaptiveThinking,
         allowedFallbackModels = allowedFallbackModels?.map { it.toDomain() } ?: emptyList(),
         supportsMidConvoEffort = supportsMidConvoEffort ?: false,
-        supportsToolReferences = supportsToolReferences
+        sessionAffinityFormat = sessionAffinityFormat
+            ?.let { parseSessionAffinityFormat(it, where) }
+            ?: if (isOpenRouter) SessionAffinityFormat.OPENROUTER else null,
+        supportsMidConvoSystemMessages = supportsMidConvoSystemMessages ?: false,
+        supportsMidConvoToolChanges = supportsMidConvoToolChanges ?: false
     )
 }
 
@@ -489,11 +514,6 @@ private fun parseCacheControlFormat(value: String, where: String): CacheControlF
         "anthropic" -> CacheControlFormat.ANTHROPIC
         else -> throw IllegalArgumentException("Unknown cache control format '$value' for $where")
     }
-
-private fun parseDeferredToolsMode(value: String, where: String): DeferredToolsMode = when (value) {
-    "kimi" -> DeferredToolsMode.KIMI
-    else -> throw IllegalArgumentException("Unknown deferred tools mode '$value' for $where")
-}
 
 private fun parseSessionAffinityFormat(value: String, where: String): SessionAffinityFormat =
     when (value) {

@@ -22,6 +22,7 @@ import works.resolve.pathfinder.ai.mergeHeaders
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.GITHUB_COPILOT_PROVIDER_ID
 import works.resolve.pathfinder.ai.providers.filterGitHubCopilotModels
+import works.resolve.pathfinder.ai.utils.normalizeContext
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
 
@@ -170,6 +171,7 @@ class Models(providers: List<Provider>, private val clock: Clock = Clock.System)
                 "Provider '${provider.id}' has no API implementation for '${model.api}'" +
                     " (model '${model.id}')"
             )
+        val transcript = normalizeContext(context)
         return flow {
             // Resolve the credential lazily inside the flow so stored-credential
             // lookups can suspend without making stream() a suspend call.
@@ -212,7 +214,7 @@ class Models(providers: List<Provider>, private val clock: Clock = Clock.System)
                 },
                 headers = mergeHeaders(authHeaders, options.headers)
             )
-            api.streamSimple(requestModel, context, merged).collect { emit(it) }
+            api.streamSimple(requestModel, transcript, merged).collect { emit(it) }
         }
     }
 

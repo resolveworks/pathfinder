@@ -13,8 +13,6 @@ import works.resolve.pathfinder.ai.MessageRole
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
-import works.resolve.pathfinder.ai.Tool
-import works.resolve.pathfinder.ai.ToolReference
 import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 
@@ -54,8 +52,8 @@ fun estimateMessageTokens(message: Message): Int = when (message.role) {
     MessageRole.SYSTEM -> {
         val system = message as SystemMessage
         estimateTextTokens(getSystemMessageText(system)) +
-            estimateToolsTokens(system.toolsAdded) +
-            estimateToolsTokens(system.toolsRemoved)
+            toolsTokens(system.toolsAdded?.map { toolToJson(it) }) +
+            toolsTokens(system.toolsRemoved?.map { toolReferenceToJson(it) })
     }
 
     MessageRole.USER, MessageRole.TOOL_RESULT ->
@@ -156,15 +154,6 @@ private fun toolsTokens(objects: List<JsonObject>?): Int = if (objects.isNullOrE
 } else {
     estimateTextTokens(safeJsonStringify(JsonArray(objects)))
 }
-
-private fun estimateToolsTokens(tools: List<Tool>?): Int = toolsTokens(
-    tools?.map {
-        toolToJson(it)
-    }
-)
-
-private fun estimateToolsTokens(tools: List<ToolReference>?): Int =
-    toolsTokens(tools?.map { toolReferenceToJson(it) })
 
 /**
  * Token estimate for a normalized transcript. System messages now carry the

@@ -83,8 +83,6 @@ data class AgentToolResult(
     val details: JsonElement? = null,
     /** Usage of the final tool execution itself; not used for main LLM context accounting. */
     val usage: Usage? = null,
-    /** Tools introduced by this result, available from this transcript point onward. */
-    val addedToolNames: List<String> = emptyList(),
     /**
      * Hint that the agent should stop after the current tool batch.
      * Early termination only happens when every finalized tool result in

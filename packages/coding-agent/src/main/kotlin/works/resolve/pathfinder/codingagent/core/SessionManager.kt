@@ -33,6 +33,7 @@ import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
@@ -522,6 +523,10 @@ internal object JsonlCodec {
             put("content", encodeContentList(message.content))
         }
 
+        is SystemMessage -> throw IllegalArgumentException(
+            "System messages are not part of the classic session transcript"
+        )
+
         is AssistantMessage -> buildJsonObject {
             put("role", "assistant")
             put("timestamp", message.timestamp)
@@ -548,9 +553,6 @@ internal object JsonlCodec {
             put("isError", message.isError)
             message.details?.let { put("details", it) }
             message.usage?.let { put("usage", encodeUsage(it)) }
-            if (message.addedToolNames.isNotEmpty()) {
-                put("addedToolNames", JsonArray(message.addedToolNames.map(::JsonPrimitive)))
-            }
         }
     }
 
@@ -591,7 +593,6 @@ internal object JsonlCodec {
                 content = decodeContentList(obj["content"]),
                 details = obj["details"],
                 usage = obj["usage"]?.let(::decodeUsage),
-                addedToolNames = decodeStringList(obj["addedToolNames"]),
                 isError =
                     obj["isError"]?.let { (it as JsonPrimitive).content.toBooleanStrict() }
                         ?: invalid(),

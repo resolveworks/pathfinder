@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Model
@@ -21,6 +22,7 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class GoogleSharedConvertMessagesTest {
 
@@ -34,7 +36,7 @@ class GoogleSharedConvertMessagesTest {
     )
 
     private fun contextFor(model: Model, content: List<works.resolve.pathfinder.ai.Content>) =
-        Context(
+        normalizeContext(Context(
             messages = listOf(
                 UserMessage.ofText("Hi"),
                 AssistantMessage(
@@ -45,9 +47,9 @@ class GoogleSharedConvertMessagesTest {
                     stopReason = StopReason.TOOL_USE
                 )
             )
-        )
+        ))
 
-    private fun contents(model: Model, context: Context): List<JsonObject> =
+    private fun contents(model: Model, context: TranscriptContext): List<JsonObject> =
         GoogleShared.convertMessages(model, context).map { it.jsonObject }
 
     private fun partsOf(turn: JsonObject) = turn["parts"]!!.jsonArray.map { it.jsonObject }
@@ -165,14 +167,14 @@ class GoogleSharedConvertMessagesTest {
             model = "glm-4.7",
             stopReason = StopReason.STOP
         )
-        val turns = contents(model, Context(messages = listOf(UserMessage.ofText("Hi"), foreign)))
+        val turns = contents(model, normalizeContext(Context(messages = listOf(UserMessage.ofText("Hi"), foreign))))
         val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
         val part = partsOf(modelTurn).single()
         assertEquals("foreign reasoning", part["text"]!!.jsonPrimitive.content)
         assertNull(part["thought"])
     }
 
-    private fun imageToolContext() = Context(
+    private fun imageToolContext() = normalizeContext(Context(
         messages = listOf(
             UserMessage.ofText("read the files"),
             AssistantMessage(
@@ -190,7 +192,7 @@ class GoogleSharedConvertMessagesTest {
             ToolResultMessage("call_img", "read", listOf(ImageContent("abc", "image/png"))),
             ToolResultMessage("call_b", "read", listOf(TextContent("beta text")))
         )
-    )
+    ))
 
     @Test
     fun `keeps separate synthetic image turn for Gemini 2 dot x models`() {
@@ -227,7 +229,7 @@ class GoogleSharedConvertMessagesTest {
         val model = model(id = "gemini-3-pro-preview")
         val turns = contents(
             model,
-            Context(
+            normalizeContext(Context(
                 messages = listOf(
                     UserMessage.ofText("go"),
                     AssistantMessage(
@@ -240,7 +242,7 @@ class GoogleSharedConvertMessagesTest {
                     ToolResultMessage("c1", "ok", listOf(TextContent("fine"))),
                     ToolResultMessage("c2", "bad", listOf(TextContent("boom")), isError = true)
                 )
-            )
+            ))
         )
         val userTurn = turns.last { it["role"]!!.jsonPrimitive.content == "user" }
         val responses = partsOf(userTurn).map { it["functionResponse"]!!.jsonObject }
@@ -256,7 +258,7 @@ class GoogleSharedConvertMessagesTest {
         val model = model()
         val turns = contents(
             model,
-            Context(
+            normalizeContext(Context(
                 messages = listOf(
                     UserMessage.ofText("go"),
                     AssistantMessage(
@@ -269,7 +271,7 @@ class GoogleSharedConvertMessagesTest {
                     ToolResultMessage("c1", "t", listOf(TextContent("one"))),
                     ToolResultMessage("c2", "t", listOf(TextContent("two")))
                 )
-            )
+            ))
         )
         assertEquals(3, turns.size)
         assertEquals(2, partsOf(turns[2]).size)
@@ -282,7 +284,7 @@ class GoogleSharedConvertMessagesTest {
             "call|with|symbols|and-a-very-long-id-that-exceeds-sixty-four-characters-1234567890"
         val turns = contents(
             model,
-            Context(
+            normalizeContext(Context(
                 messages = listOf(
                     UserMessage.ofText("go"),
                     // Tool call IDs are normalized only when replaying across
@@ -296,7 +298,7 @@ class GoogleSharedConvertMessagesTest {
                     ),
                     ToolResultMessage(weird, "t", listOf(TextContent("ok")))
                 )
-            )
+            ))
         )
         val callPart = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
             .let { partsOf(it).single() }["functionCall"]!!.jsonObject
@@ -314,7 +316,7 @@ class GoogleSharedConvertMessagesTest {
         val model = model(id = "gemini-2.5-flash")
         val turns = contents(
             model,
-            Context(
+            normalizeContext(Context(
                 messages = listOf(
                     UserMessage.ofText("go"),
                     AssistantMessage(
@@ -326,7 +328,7 @@ class GoogleSharedConvertMessagesTest {
                     ),
                     ToolResultMessage("call_1", "t", listOf(TextContent("ok")))
                 )
-            )
+            ))
         )
         val callPart = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
             .let { partsOf(it).single() }["functionCall"]!!.jsonObject
@@ -340,7 +342,7 @@ class GoogleSharedConvertMessagesTest {
             val model = model(id = modelId)
             val turns = contents(
                 model,
-                Context(
+                normalizeContext(Context(
                     messages = listOf(
                         UserMessage.ofText("Hi"),
                         AssistantMessage(
@@ -356,7 +358,7 @@ class GoogleSharedConvertMessagesTest {
                         ToolResultMessage("call_1", "bash", listOf(TextContent("hi"))),
                         ToolResultMessage("call_2", "bash", listOf(TextContent("files")))
                     )
-                )
+                ))
             )
             val functionCallIds = turns.flatMap { partsOf(it) }
                 .mapNotNull { it["functionCall"]?.jsonObject?.get("id")?.jsonPrimitive?.content }
@@ -667,13 +669,6 @@ class GoogleSharedConvertToolsTest {
             baseUrl = "https://example.invalid/v1beta",
             reasoning = true
         )
-        assertEquals(
-            GoogleShared.ResolvedGoogleThinkingLevel.HIGH,
-            GoogleShared.resolveGoogleThinkingLevel(
-                base,
-                works.resolve.pathfinder.ai.ModelThinkingLevel.OFF
-            )
-        )
         for ((level, mapped) in listOf(
             "MINIMAL" to GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL,
             "LOW" to GoogleShared.ResolvedGoogleThinkingLevel.LOW,
@@ -690,14 +685,14 @@ class GoogleSharedConvertToolsTest {
                 mapped,
                 GoogleShared.resolveGoogleThinkingLevel(
                     model,
-                    works.resolve.pathfinder.ai.ModelThinkingLevel.HIGH
+                    works.resolve.pathfinder.ai.ThinkingLevel.HIGH
                 )
             )
             assertEquals(
                 mapped,
                 GoogleShared.resolveGoogleThinkingLevel(
                     model,
-                    works.resolve.pathfinder.ai.ModelThinkingLevel.XHIGH
+                    works.resolve.pathfinder.ai.ThinkingLevel.XHIGH
                 )
             )
         }
@@ -710,7 +705,7 @@ class GoogleSharedConvertToolsTest {
         val error = assertFailsWith<IllegalStateException> {
             GoogleShared.resolveGoogleThinkingLevel(
                 invalid,
-                works.resolve.pathfinder.ai.ModelThinkingLevel.XHIGH
+                works.resolve.pathfinder.ai.ThinkingLevel.XHIGH
             )
         }
         assertEquals(

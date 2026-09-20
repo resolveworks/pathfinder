@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.ContentType
 import works.resolve.pathfinder.ai.Message
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.utils.contentText
 import works.resolve.pathfinder.ai.utils.lenientJson
@@ -134,6 +135,8 @@ fun serializeConversation(messages: List<Message>): String {
                     )
                 }
             }
+
+            is SystemMessage -> Unit
         }
     }
 

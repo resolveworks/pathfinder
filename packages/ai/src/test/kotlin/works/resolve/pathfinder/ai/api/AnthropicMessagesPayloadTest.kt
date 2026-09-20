@@ -34,9 +34,11 @@ import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class AnthropicMessagesPayloadTest {
 
@@ -62,13 +64,13 @@ class AnthropicMessagesPayloadTest {
     )
 
     private fun body(
-        context: Context,
+        context: TranscriptContext,
         options: AnthropicMessagesOptions = AnthropicMessagesOptions(apiKey = "k"),
         model: Model = claude
     ): JsonObject = buildRequestBody(model, context, isOAuthToken = false, options)
 
     /** Deferred-tool OAuth cases run with the Claude Code name canonicalizer. */
-    private fun oauthBody(context: Context, model: Model = claude): JsonObject = buildRequestBody(
+    private fun oauthBody(context: TranscriptContext, model: Model = claude): JsonObject = buildRequestBody(
         model,
         context,
         isOAuthToken = true,
@@ -94,10 +96,10 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `basic request shape matches pi buildParams`() {
-        val context = Context(
+        val context = normalizeContext(Context(
             systemPrompt = "Be helpful.",
             messages = listOf(UserMessage.ofText("hi"))
-        )
+        ))
         val json = body(context)
         assertEquals("claude-sonnet-4-5", json["model"]!!.jsonPrimitive.content)
         assertEquals(64_000L, json["max_tokens"]!!.jsonPrimitive.content.toLong())
@@ -118,7 +120,7 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `long retention uses the 1h ttl when supported`() {
-        val context = Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi")))
+        val context = normalizeContext(Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi"))))
         val json =
             body(
                 context,
@@ -153,11 +155,11 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `cache retention none omits cache_control everywhere`() {
-        val context = Context(
+        val context = normalizeContext(Context(
             systemPrompt = "s",
             messages = listOf(UserMessage.ofText("hi")),
             tools = listOf(tool)
-        )
+        ))
         val json =
             body(
                 context,
@@ -176,7 +178,7 @@ class AnthropicMessagesPayloadTest {
      */
     @Test
     fun `default cache retention sends cache_control without a ttl`() {
-        val context = Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi")))
+        val context = normalizeContext(Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi"))))
         val cacheControl = body(
             context
         )["system"]!!.jsonArray.single().jsonObject["cache_control"]!!.jsonObject
@@ -191,7 +193,7 @@ class AnthropicMessagesPayloadTest {
      */
     @Test
     fun `long retention applies the 1h ttl for proxy base urls`() {
-        val context = Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi")))
+        val context = normalizeContext(Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi"))))
         val proxy = claude.copy(baseUrl = "https://my-proxy.example.com/v1")
         val json = body(
             context,
@@ -210,12 +212,12 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `cache_control lands on the last block of the last user message`() {
-        val context = Context(
+        val context = normalizeContext(Context(
             messages = listOf(
                 UserMessage.ofText("first"),
                 UserMessage(listOf(TextContent("a"), TextContent("b")))
             )
-        )
+        ))
         val messages = body(context)["messages"]!!.jsonArray
         assertEquals(2, messages.size)
         val first = messages[0].jsonObject["content"]!!.jsonArray[0].jsonObject
@@ -230,7 +232,7 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `images become base64 source blocks with placeholder text`() {
-        val context = Context(
+        val context = normalizeContext(Context(
             messages = listOf(
                 UserMessage(
                     listOf(
@@ -238,7 +240,7 @@ class AnthropicMessagesPayloadTest {
                     )
                 )
             )
-        )
+        ))
         val content = body(context)["messages"]!!.jsonArray.single()
             .jsonObject["content"]!!.jsonArray
         // No "(see attached image)" placeholder: pi applies convertContentBlocks
@@ -261,7 +263,7 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `empty user text is dropped and empty messages skipped`() {
-        val context = Context(messages = listOf(UserMessage(listOf(TextContent("   ")))))
+        val context = normalizeContext(Context(messages = listOf(UserMessage(listOf(TextContent("   "))))))
         val messages = body(context)["messages"]!!.jsonArray
         assertEquals(0, messages.size)
     }
@@ -279,7 +281,7 @@ class AnthropicMessagesPayloadTest {
             model = "claude-sonnet-4-5",
             stopReason = StopReason.STOP
         )
-        val json = body(Context(messages = listOf(sameModelAssistant, UserMessage.ofText("next"))))
+        val json = body(normalizeContext(Context(messages = listOf(sameModelAssistant, UserMessage.ofText("next")))))
         val content = json["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
         assertEquals("thinking", content[0].jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("sig-1", content[0].jsonObject["signature"]!!.jsonPrimitive.content)
@@ -296,7 +298,7 @@ class AnthropicMessagesPayloadTest {
                 ThinkingContent("[Reasoning redacted]", "opaque-data", redacted = true)
             )
         )
-        val redactedJson = body(Context(messages = listOf(redacted, UserMessage.ofText("next"))))
+        val redactedJson = body(normalizeContext(Context(messages = listOf(redacted, UserMessage.ofText("next")))))
         val block = redactedJson["messages"]!!.jsonArray[0]
             .jsonObject["content"]!!.jsonArray[0].jsonObject
         assertEquals("redacted_thinking", block["type"]!!.jsonPrimitive.content)
@@ -311,7 +313,7 @@ class AnthropicMessagesPayloadTest {
             provider = "anthropic",
             model = "claude-sonnet-4-5"
         )
-        val json = body(Context(messages = listOf(abortedThinking, UserMessage.ofText("next"))))
+        val json = body(normalizeContext(Context(messages = listOf(abortedThinking, UserMessage.ofText("next")))))
         val block = json["messages"]!!.jsonArray[0]
             .jsonObject["content"]!!.jsonArray[0].jsonObject
         assertEquals("text", block["type"]!!.jsonPrimitive.content)
@@ -322,7 +324,7 @@ class AnthropicMessagesPayloadTest {
         )
         val allowJson =
             body(
-                Context(messages = listOf(abortedThinking, UserMessage.ofText("next"))),
+                normalizeContext(Context(messages = listOf(abortedThinking, UserMessage.ofText("next")))),
                 model = allowModel
             )
         val allowBlock = allowJson["messages"]!!.jsonArray[0]
@@ -346,7 +348,7 @@ class AnthropicMessagesPayloadTest {
             model = "claude-sonnet-4-5",
             stopReason = StopReason.STOP
         )
-        val json = body(Context(messages = listOf(signedEmptyThinking, UserMessage.ofText("next"))))
+        val json = body(normalizeContext(Context(messages = listOf(signedEmptyThinking, UserMessage.ofText("next")))))
         val block = json["messages"]!!.jsonArray[0]
             .jsonObject["content"]!!.jsonArray[0].jsonObject
         assertEquals("thinking", block["type"]!!.jsonPrimitive.content)
@@ -360,7 +362,7 @@ class AnthropicMessagesPayloadTest {
             anthropicCompat = claude.anthropicCompat.copy(allowEmptySignature = true)
         )
         val whitespaceBlock = body(
-            Context(messages = listOf(whitespaceSignature, UserMessage.ofText("next"))),
+            normalizeContext(Context(messages = listOf(whitespaceSignature, UserMessage.ofText("next")))),
             model = allowModel
         )["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray[0].jsonObject
         assertEquals("thinking", whitespaceBlock["type"]!!.jsonPrimitive.content)
@@ -384,13 +386,13 @@ class AnthropicMessagesPayloadTest {
             stopReason = StopReason.STOP
         )
         val block = body(
-            Context(
+            normalizeContext(Context(
                 messages = listOf(
                     UserMessage.ofText("first"),
                     assistant,
                     UserMessage.ofText("second")
                 )
-            ),
+            )),
             model = k3
         )["messages"]!!.jsonArray[1].jsonObject["content"]!!.jsonArray[0].jsonObject
         assertEquals("thinking", block["type"]!!.jsonPrimitive.content)
@@ -400,7 +402,7 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `consecutive tool results group into one user message with cache_control`() {
-        val context = Context(
+        val context = normalizeContext(Context(
             messages = listOf(
                 AssistantMessage(
                     content = listOf(
@@ -415,7 +417,7 @@ class AnthropicMessagesPayloadTest {
                 ToolResultMessage("toolu_1", "edit", listOf(TextContent("r1"))),
                 ToolResultMessage("toolu_2", "read", listOf(TextContent("r2")), isError = true)
             )
-        )
+        ))
         val messages = body(context)["messages"]!!.jsonArray
         assertEquals(2, messages.size)
         val grouped = messages[1].jsonObject
@@ -437,7 +439,7 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `orphaned tool calls get synthetic error results`() {
-        val context = Context(
+        val context = normalizeContext(Context(
             messages = listOf(
                 AssistantMessage(
                     content = listOf(ToolCall("toolu_orphan", "edit", "{}")),
@@ -448,7 +450,7 @@ class AnthropicMessagesPayloadTest {
                 ),
                 UserMessage.ofText("never answered the tool")
             )
-        )
+        ))
         val messages = body(context)["messages"]!!.jsonArray
         assertEquals(3, messages.size)
         val synthetic = messages[1].jsonObject["content"]!!.jsonArray[0].jsonObject
@@ -463,7 +465,7 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `error and aborted assistant messages are skipped entirely`() {
-        val context = Context(
+        val context = normalizeContext(Context(
             messages = listOf(
                 AssistantMessage(
                     content = listOf(TextContent("partial")),
@@ -481,7 +483,7 @@ class AnthropicMessagesPayloadTest {
                 ),
                 UserMessage.ofText("hi")
             )
-        )
+        ))
         val messages = body(context)["messages"]!!.jsonArray
         assertEquals(1, messages.size)
     }
@@ -498,7 +500,7 @@ class AnthropicMessagesPayloadTest {
             model = "gpt-5",
             stopReason = StopReason.TOOL_USE
         )
-        val json = body(Context(messages = listOf(foreign, UserMessage.ofText("next"))))
+        val json = body(normalizeContext(Context(messages = listOf(foreign, UserMessage.ofText("next")))))
         val content = json["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
         assertEquals("text", content[0].jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("foreign thoughts", content[0].jsonObject["text"]!!.jsonPrimitive.content)
@@ -528,7 +530,7 @@ class AnthropicMessagesPayloadTest {
     @Test
     fun `non-vision model downgrades images to deduplicated placeholders`() {
         val textModel = claude.copy(input = listOf(InputModality.TEXT))
-        val context = Context(
+        val context = normalizeContext(Context(
             messages = listOf(
                 UserMessage(
                     listOf(
@@ -538,7 +540,7 @@ class AnthropicMessagesPayloadTest {
                     )
                 )
             )
-        )
+        ))
         val content = body(context, model = textModel)["messages"]!!.jsonArray.single()
             .jsonObject["content"]!!
         assertEquals(
@@ -555,7 +557,7 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `temperature sent only without thinking and when supported`() {
-        val context = Context(messages = listOf(UserMessage.ofText("hi")))
+        val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
         assertEquals(
             0.7,
             body(
@@ -590,7 +592,7 @@ class AnthropicMessagesPayloadTest {
     @Test
     fun `catalog opus 4 7 and 4 8 omit temperature while opus 4 6 keeps it`() {
         val catalog = realAsset()
-        val context = Context(messages = listOf(UserMessage.ofText("hi")))
+        val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
         for (modelId in listOf("claude-opus-4-7", "claude-opus-4-8")) {
             val model = catalog.getModel("anthropic", modelId)!!
@@ -621,7 +623,7 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `thinking maps to adaptive budget and disabled forms`() {
-        val context = Context(messages = listOf(UserMessage.ofText("hi")))
+        val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
         val budget = body(
             context,
@@ -692,7 +694,7 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `tool choice maps to anthropic tool_choice objects`() {
-        val context = Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))
+        val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool)))
         assertEquals(
             "any",
             body(
@@ -711,7 +713,7 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `tools convert with eager streaming and trailing cache_control`() {
-        val context = Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))
+        val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool)))
         val converted = body(context)["tools"]!!.jsonArray[0].jsonObject
         assertEquals("edit", converted["name"]!!.jsonPrimitive.content)
         assertEquals("Edit a file.", converted["description"]!!.jsonPrimitive.content)
@@ -741,11 +743,11 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `oauth requests carry claude code identity and tool name casing`() {
-        val context = Context(
+        val context = normalizeContext(Context(
             systemPrompt = "Custom prompt.",
             messages = listOf(UserMessage.ofText("hi")),
             tools = listOf(tool.copy(name = "bash"), tool.copy(name = "custom_tool"))
-        )
+        ))
         val json =
             buildRequestBody(
                 claude,
@@ -804,7 +806,7 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `thinking budget tokens of zero coerces to 1024 like pi`() {
-        val context = Context(messages = listOf(UserMessage.ofText("hi")))
+        val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
         val budget = body(
             context,
             AnthropicMessagesOptions(
@@ -836,10 +838,10 @@ class AnthropicMessagesPayloadTest {
         fun firstTool(json: JsonObject): JsonObject = json["tools"]!!.jsonArray[0].jsonObject
 
         val legacy = body(
-            Context(
+            normalizeContext(Context(
                 messages = listOf(UserMessage.ofText("hi")),
                 tools = listOf(schemaCompatibilityTool)
-            ),
+            )),
             model = strictModel
         )
         assertEquals(
@@ -851,7 +853,7 @@ class AnthropicMessagesPayloadTest {
         assertNull(firstTool(legacy)["strict"])
 
         val strict = body(
-            Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(strictTool)),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(strictTool))),
             model = strictModel
         )
         val strictToolJson = firstTool(strict)
@@ -873,7 +875,7 @@ class AnthropicMessagesPayloadTest {
         assertEquals("object", inputSchema["type"]!!.jsonPrimitive.content)
 
         val downgraded = body(
-            Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(strictTool))
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(strictTool)))
         )
         assertNull(firstTool(downgraded)["strict"])
         assertEquals(
@@ -892,7 +894,7 @@ class AnthropicMessagesPayloadTest {
             )
         )
         val failure = assertFailsWith<ConstrainedSamplingError> {
-            body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(requireTool)))
+            body(normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(requireTool))))
         }
         assertEquals(
             "Tool \"edit\" requires JSON-schema constrained sampling, but strict tools are unsupported.",
@@ -904,7 +906,7 @@ class AnthropicMessagesPayloadTest {
     // fallback targets, so an empty catalog list omits it entirely.
     @Test
     fun `fallbacks carry model ids only when the catalog list is non-empty`() {
-        val context = Context(messages = listOf(UserMessage.ofText("hi")))
+        val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
         val fable = claude.copy(
             anthropicCompat = claude.anthropicCompat.copy(
                 allowedFallbackModels = listOf(
@@ -1007,18 +1009,18 @@ class AnthropicMessagesPayloadTest {
     fun `managed effort reconstructs the historical marker prefix and appends the current marker`() {
         val model = managedModel()
         val first = body(
-            Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("one", timestamp = 1)))),
             managedOptions("low"),
             model
         )
         val second = body(
-            Context(
+            normalizeContext(Context(
                 messages = listOf(
                     UserMessage.ofText("one", timestamp = 1),
                     managedAssistant(model, "low"),
                     UserMessage.ofText("two", timestamp = 2)
                 )
-            ),
+            )),
             managedOptions("high"),
             model
         )
@@ -1052,7 +1054,7 @@ class AnthropicMessagesPayloadTest {
     fun `managed effort preserves each native effort level`() {
         for (effort in listOf("low", "medium", "high", "xhigh", "max")) {
             val json = body(
-                Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
+                normalizeContext(Context(messages = listOf(UserMessage.ofText("one", timestamp = 1)))),
                 managedOptions(effort),
                 managedModel()
             )
@@ -1070,7 +1072,7 @@ class AnthropicMessagesPayloadTest {
     @Test
     fun `managed effort defaults omitted effort to high and still enables drop_block`() {
         val json = body(
-            Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("one", timestamp = 1)))),
             managedOptions(),
             managedModel()
         )
@@ -1092,7 +1094,7 @@ class AnthropicMessagesPayloadTest {
         val legacy = managedAssistant(model)
         val otherProvider = managedAssistant(model, "low").copy(provider = "other-provider")
         val json = body(
-            Context(
+            normalizeContext(Context(
                 messages = listOf(
                     UserMessage.ofText("one", timestamp = 1),
                     legacy,
@@ -1100,7 +1102,7 @@ class AnthropicMessagesPayloadTest {
                     otherProvider,
                     UserMessage.ofText("three", timestamp = 3)
                 )
-            ),
+            )),
             managedOptions("medium"),
             model
         )
@@ -1116,7 +1118,7 @@ class AnthropicMessagesPayloadTest {
             anthropicCompat = managedModel().anthropicCompat.copy(supportsMidConvoEffort = false)
         )
         val json = body(
-            Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("one", timestamp = 1)))),
             managedOptions("low"),
             model
         )
@@ -1131,14 +1133,14 @@ class AnthropicMessagesPayloadTest {
     @Test
     fun `managed effort suppresses temperature`() {
         val json = body(
-            Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("one", timestamp = 1)))),
             managedOptions().copy(temperature = 0.5),
             managedModel()
         )
         assertNull(json["temperature"])
         // The same options still send temperature on an unmanaged model.
         val unmanaged = body(
-            Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("one", timestamp = 1)))),
             managedOptions().copy(temperature = 0.5, thinkingEnabled = null),
             managedModel().copy(
                 anthropicCompat = claude.anthropicCompat.copy(forceAdaptiveThinking = true)
@@ -1150,403 +1152,6 @@ class AnthropicMessagesPayloadTest {
     // ---- Deferred tools (ports the anthropic wiring of splitDeferredTools) ----
 
     @Test
-    fun `defaultSupportsToolReferences gates on provider family and version`() {
-        fun model(id: String, provider: String = "anthropic") =
-            claude.copy(id = id, provider = provider)
-
-        assertTrue(defaultSupportsToolReferences(model("claude-sonnet-4-5")))
-        assertTrue(defaultSupportsToolReferences(model("claude-opus-4-6")))
-        assertTrue(defaultSupportsToolReferences(model("claude-fable-5-1")))
-        assertTrue(defaultSupportsToolReferences(model("claude-sonnet-5")))
-        // Haiku rejects client-side tool references.
-        assertFalse(defaultSupportsToolReferences(model("claude-haiku-4-5")))
-        // Claude 3.x and pre-4.5 Opus predate tool search.
-        assertFalse(defaultSupportsToolReferences(model("claude-3-7-sonnet-20250219")))
-        assertFalse(defaultSupportsToolReferences(model("claude-opus-4-1-20250805")))
-        assertFalse(defaultSupportsToolReferences(model("claude-opus-4-0")))
-        // Unknown families and other providers stay off.
-        assertFalse(defaultSupportsToolReferences(model("claude-mythos-preview")))
-        assertFalse(
-            defaultSupportsToolReferences(model("claude-sonnet-4-5", provider = "openrouter"))
-        )
-        // An explicit compat value overrides the default in both directions.
-        assertTrue(
-            supportsToolReferences(
-                model("claude-haiku-4-5").copy(
-                    anthropicCompat = claude.anthropicCompat.copy(supportsToolReferences = true)
-                )
-            )
-        )
-        assertFalse(
-            supportsToolReferences(
-                model("claude-sonnet-4-5").copy(
-                    anthropicCompat = claude.anthropicCompat.copy(supportsToolReferences = false)
-                )
-            )
-        )
-    }
-
-    @Test
-    fun `deferred tools split into defer_loading definitions and tool_reference results`() {
-        // Ports deferred-tools.test.ts "loads an Anthropic tool at its tool-result
-        // marker": the loaded tool must differ from the called tool — a tool the
-        // assistant already used stays immediate ("keeps a tool immediate when
-        // it was used before its marker").
-        val search = tool.copy(name = "search", description = "Search the web.")
-        val call = ToolCall(id = "toolu_edit", name = "edit", arguments = "{}")
-        val context = Context(
-            messages = listOf(
-                AssistantMessage(
-                    content = listOf(call),
-                    api = "anthropic-messages",
-                    provider = "anthropic",
-                    model = "claude-sonnet-4-5",
-                    stopReason = StopReason.TOOL_USE
-                ),
-                ToolResultMessage(
-                    toolCallId = "toolu_edit",
-                    toolName = "edit",
-                    content = listOf(TextContent("search results")),
-                    addedToolNames = listOf("search")
-                ),
-                UserMessage.ofText("next")
-            ),
-            tools = listOf(tool, search)
-        )
-        val json =
-            body(
-                context,
-                AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE)
-            )
-        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
-        assertEquals(listOf("edit", "search"), tools.map { it["name"]!!.jsonPrimitive.content })
-        assertNull(tools[0]["defer_loading"])
-        assertEquals(true, tools[1]["defer_loading"]!!.jsonPrimitive.content.toBoolean())
-
-        val messages = json["messages"]!!.jsonArray.map { it.jsonObject }
-        // Assistant tool_use for the base tool, then the grouped tool-result
-        // user message: the tool_reference replaces the ordinary content and
-        // the displaced text follows after the tool_result block.
-        val resultBlocks = messages[1]["content"]!!.jsonArray.map { it.jsonObject }
-        assertEquals(
-            "edit",
-            messages[0]["content"]!!.jsonArray[0].jsonObject["name"]!!.jsonPrimitive.content
-        )
-        assertEquals(
-            """{"type":"tool_result","tool_use_id":"toolu_edit","content":[{"type":"tool_reference","tool_name":"search"}],"is_error":false}""",
-            resultBlocks[0].wire()
-        )
-        assertEquals("""{"type":"text","text":"search results"}""", resultBlocks[1].wire())
-        // No marker system messages: unmanaged model.
-        assertNull(json["output_config"])
-    }
-
-    @Test
-    fun `only the first load emits a tool_reference`() {
-        val search = tool.copy(name = "search")
-        val context = Context(
-            messages = listOf(
-                ToolResultMessage(
-                    toolCallId = "toolu_1",
-                    toolName = "search",
-                    content = listOf(TextContent("first load")),
-                    addedToolNames = listOf("search")
-                ),
-                ToolResultMessage(
-                    toolCallId = "toolu_2",
-                    toolName = "search",
-                    content = listOf(TextContent("plain result"))
-                )
-            ),
-            tools = listOf(tool, search)
-        )
-        val json =
-            body(
-                context,
-                AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE)
-            )
-        val messages = json["messages"]!!.jsonArray.map { it.jsonObject }
-        val blocks = messages[0]["content"]!!.jsonArray.map { it.jsonObject }
-        // The second result has no addedToolNames and stays ordinary content.
-        assertEquals(
-            """{"type":"tool_result","tool_use_id":"toolu_2","content":"plain result","is_error":false}""",
-            blocks[1].wire()
-        )
-    }
-
-    @Test
-    fun `all-deferred tools fall back to immediate`() {
-        val search = tool.copy(name = "search")
-        // A tool result that loaded "search" without a preceding assistant
-        // call leaves no immediate tools; everything is sent immediate.
-        val context = Context(
-            messages = listOf(
-                ToolResultMessage(
-                    toolCallId = "toolu_1",
-                    toolName = "search",
-                    content = listOf(TextContent("loaded")),
-                    addedToolNames = listOf("search")
-                )
-            ),
-            tools = listOf(search)
-        )
-        val json =
-            body(
-                context,
-                AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE)
-            )
-        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
-        assertEquals(listOf("search"), tools.map { it["name"]!!.jsonPrimitive.content })
-        assertNull(tools[0]["defer_loading"])
-    }
-
-    @Test
-    fun `preserves tool output as sibling content after emitting references across a batch`() {
-        // Ports deferred-tools.test.ts "preserves tool output as sibling content
-        // after emitting references": reference-bearing results emit only
-        // tool_reference content, and the displaced text/image follows every
-        // tool_result block of the consecutive run.
-        val search = tool.copy(name = "search")
-        val context = Context(
-            messages = listOf(
-                AssistantMessage(
-                    content = listOf(
-                        ToolCall("toolu_1", "edit", "{}"),
-                        ToolCall("toolu_2", "edit", "{}")
-                    ),
-                    api = "anthropic-messages",
-                    provider = "anthropic",
-                    model = "claude-sonnet-4-5",
-                    stopReason = StopReason.TOOL_USE
-                ),
-                ToolResultMessage(
-                    toolCallId = "toolu_1",
-                    toolName = "edit",
-                    content = listOf(
-                        TextContent("work completed"),
-                        ImageContent("aW1hZ2U=", "image/png")
-                    ),
-                    addedToolNames = listOf("search")
-                ),
-                ToolResultMessage("toolu_2", "edit", listOf(TextContent("second result"))),
-                UserMessage.ofText("next")
-            ),
-            tools = listOf(tool, search)
-        )
-        val json =
-            body(
-                context,
-                AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE)
-            )
-        val grouped = json["messages"]!!.jsonArray[1].jsonObject["content"]!!.jsonArray.map {
-            it.jsonObject.wire()
-        }
-        assertEquals(
-            listOf(
-                """{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"tool_reference","tool_name":"search"}],"is_error":false}""",
-                """{"type":"tool_result","tool_use_id":"toolu_2","content":"second result","is_error":false}""",
-                """{"type":"text","text":"work completed"}""",
-                """{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}}"""
-            ),
-            grouped
-        )
-    }
-
-    @Test
-    fun `does not resurrect a marked tool missing from Context tools`() {
-        // Ports deferred-tools.test.ts "does not resurrect a marked tool missing
-        // from Context.tools": without an active definition the marker stays
-        // inert and the ordinary result content survives.
-        val context = Context(
-            messages = listOf(
-                ToolResultMessage(
-                    toolCallId = "toolu_1",
-                    toolName = "edit",
-                    content = listOf(TextContent("done")),
-                    addedToolNames = listOf("search")
-                )
-            ),
-            tools = listOf(tool)
-        )
-        val json =
-            body(
-                context,
-                AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE)
-            )
-        assertEquals(
-            listOf("edit"),
-            json["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
-        )
-        val resultContent = json["messages"]!!.jsonArray[0]
-            .jsonObject["content"]!!.jsonArray[0].jsonObject
-        assertEquals(
-            "done",
-            (resultContent["content"] as kotlinx.serialization.json.JsonPrimitive).content
-        )
-    }
-
-    @Test
-    fun `keeps a tool immediate when it was used before its marker`() {
-        // Ports deferred-tools.test.ts "keeps a tool immediate when it was used
-        // before its marker": the usedNames guard keeps an already-called tool
-        // out of the deferred set.
-        val search = tool.copy(name = "search")
-        val context = Context(
-            messages = listOf(
-                AssistantMessage(
-                    content = listOf(ToolCall("toolu_1", "search", "{}")),
-                    api = "anthropic-messages",
-                    provider = "anthropic",
-                    model = "claude-sonnet-4-5",
-                    stopReason = StopReason.TOOL_USE
-                ),
-                ToolResultMessage(
-                    toolCallId = "toolu_1",
-                    toolName = "search",
-                    content = listOf(TextContent("loaded")),
-                    addedToolNames = listOf("search")
-                )
-            ),
-            tools = listOf(tool, search)
-        )
-        val json =
-            body(
-                context,
-                AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE)
-            )
-        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
-        assertEquals(listOf("edit", "search"), tools.map { it["name"]!!.jsonPrimitive.content })
-        assertTrue(tools.none { it.containsKey("defer_loading") })
-    }
-
-    @Test
-    fun `loads a tool introduced by OpenAI history after switching to Anthropic`() {
-        // Ports deferred-tools.test.ts "loads a tool introduced by OpenAI
-        // history after switching to Anthropic": the marker travels with the
-        // message list, not the assistant's provider.
-        val search = tool.copy(name = "search")
-        val context = Context(
-            messages = listOf(
-                AssistantMessage(
-                    content = listOf(ToolCall("call_1", "edit", "{}")),
-                    api = "openai-responses",
-                    provider = "openai",
-                    model = "gpt-5.4",
-                    stopReason = StopReason.TOOL_USE
-                ),
-                ToolResultMessage(
-                    toolCallId = "call_1",
-                    toolName = "edit",
-                    content = listOf(TextContent("done")),
-                    addedToolNames = listOf("search")
-                )
-            ),
-            tools = listOf(tool, search)
-        )
-        val json =
-            body(
-                context,
-                AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE)
-            )
-        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
-        assertEquals(listOf("edit", "search"), tools.map { it["name"]!!.jsonPrimitive.content })
-        assertNull(tools[0]["defer_loading"])
-        assertEquals(true, tools[1]["defer_loading"]!!.jsonPrimitive.content.toBoolean())
-        val resultBlock = json["messages"]!!.jsonArray[1]
-            .jsonObject["content"]!!.jsonArray[0].jsonObject
-        assertEquals(
-            """{"type":"tool_reference","tool_name":"search"}""",
-            resultBlock["content"]!!.jsonArray[0].jsonObject.wire()
-        )
-    }
-
-    @Test
-    fun `normalizes OAuth names before checking prior tool usage`() {
-        // Ports deferred-tools.test.ts "normalizes OAuth names before checking
-        // prior tool usage": Read/read canonicalize to one Claude Code name, so
-        // a tool the assistant already used stays immediate.
-        val read = tool.copy(name = "read", description = "Read a file.")
-        val context = Context(
-            messages = listOf(
-                AssistantMessage(
-                    content = listOf(ToolCall("toolu_1", "Read", "{}")),
-                    api = "anthropic-messages",
-                    provider = "anthropic",
-                    model = "claude-sonnet-4-5",
-                    stopReason = StopReason.TOOL_USE
-                ),
-                ToolResultMessage(
-                    toolCallId = "toolu_1",
-                    toolName = "Read",
-                    content = listOf(TextContent("done")),
-                    addedToolNames = listOf("read")
-                )
-            ),
-            tools = listOf(tool, read)
-        )
-        val json = oauthBody(context)
-        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
-        // "edit" itself canonicalizes to the Claude Code "Edit" under OAuth.
-        assertEquals(listOf("Edit", "Read"), tools.map { it["name"]!!.jsonPrimitive.content })
-        assertTrue(tools.none { it.containsKey("defer_loading") })
-        val resultContent = json["messages"]!!.jsonArray[1]
-            .jsonObject["content"]!!.jsonArray[0].jsonObject
-        assertEquals(
-            "done",
-            (resultContent["content"] as kotlinx.serialization.json.JsonPrimitive).content
-        )
-    }
-
-    @Test
-    fun `matches OAuth-canonicalized markers to active tools`() {
-        // Ports deferred-tools.test.ts "matches OAuth-canonicalized markers to
-        // active tools": a "Read" marker defers the "read" tool and emits the
-        // canonical name in the reference.
-        val read = tool.copy(name = "read")
-        val context = Context(
-            messages = listOf(
-                ToolResultMessage(
-                    toolCallId = "toolu_1",
-                    toolName = "edit",
-                    content = listOf(TextContent("done")),
-                    addedToolNames = listOf("Read")
-                )
-            ),
-            tools = listOf(tool, read)
-        )
-        val json = oauthBody(context)
-        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
-        // "edit" itself canonicalizes to the Claude Code "Edit" under OAuth.
-        assertEquals(listOf("Edit", "Read"), tools.map { it["name"]!!.jsonPrimitive.content })
-        assertNull(tools[0]["defer_loading"])
-        assertEquals(true, tools[1]["defer_loading"]!!.jsonPrimitive.content.toBoolean())
-        val resultBlock = json["messages"]!!.jsonArray[0]
-            .jsonObject["content"]!!.jsonArray[0].jsonObject
-        assertEquals(
-            """{"type":"tool_reference","tool_name":"Read"}""",
-            resultBlock["content"]!!.jsonArray[0].jsonObject.wire()
-        )
-    }
-
-    @Test
-    fun `deduplicates active tools after OAuth canonicalization`() {
-        // Ports deferred-tools.test.ts "deduplicates active tools after OAuth
-        // canonicalization": read/Read collapse to the later canonical entry.
-        val context = Context(
-            messages = listOf(UserMessage.ofText("hi")),
-            tools = listOf(
-                tool.copy(name = "read"),
-                tool.copy(name = "Read", description = "Canonical definition")
-            )
-        )
-        val json = oauthBody(context)
-        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
-        assertEquals(1, tools.size)
-        assertEquals("Read", tools[0]["name"]!!.jsonPrimitive.content)
-        assertEquals("Canonical definition", tools[0]["description"]!!.jsonPrimitive.content)
-    }
-
-    @Test
     fun `prefilled pipe-separated tool call ids normalize identically on tool_use and tool_result`() {
         // Ports the unit essence of tool-call-id-normalization.test.ts
         // "Prefilled Context" (pi-mono #1022): OpenAI Responses ids
@@ -1554,7 +1159,7 @@ class AnthropicMessagesPayloadTest {
         // of the exchange when replayed to Anthropic.
         val failingId =
             "call_pAYbIr76hXIjncD9UE4eGfnS|t5nnb2qYMFWGSsr13fhCd1CaCu3t3qONEPuOudu4HSVEtA8YJSL6FAZUxvoOoD792VIJWl91g87EdqsCWp9krVsdBysQoDaf9lMCLb8BS4EYi4gQd5kBQBYLlgD71PYwvf+TbMD9J9/5OMD42oxSRj8H+vRf78/l2Xla33LWz4nOgsddBlbvabICRs8GHt5C9PK5keFtzyi3lsyVKNlfduK3iphsZqs4MLv4zyGJnvZo/+QzShyk5xnMSQX/f98+aEoNflEApCdEOXipipgeiNWnpFSHbcwmMkZoJhURNu+JEz3xCh1mrXeYoN5o+trLL3IXJacSsLYXDrYTipZZbJFRPAucgbnjYBC+/ZzJOfkwCs+Gkw7EoZR7ZQgJ8ma+9586n4tT4cI8DEhBSZsWMjrCt8dxKg=="
-        val context = Context(
+        val context = normalizeContext(Context(
             messages = listOf(
                 UserMessage.ofText("Use the echo tool to echo 'hello'"),
                 AssistantMessage(
@@ -1567,7 +1172,7 @@ class AnthropicMessagesPayloadTest {
                 ToolResultMessage(failingId, "echo", listOf(TextContent("hello"))),
                 UserMessage.ofText("Say hi")
             )
-        )
+        ))
         val json =
             body(
                 context,

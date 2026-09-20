@@ -16,6 +16,7 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.TestCatalogs
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class TokenEstimateTest {
 
@@ -63,7 +64,7 @@ class TokenEstimateTest {
             stopReason = StopReason.STOP,
             timestamp = 2L
         )
-        val context = Context(
+        val context = normalizeContext(Context(
             systemPrompt = "system", // covered by usage, must not be added
             messages = listOf(
                 UserMessage.ofText("hi", 1L),
@@ -71,7 +72,7 @@ class TokenEstimateTest {
                 UserMessage.ofText("hello!", 3L)
             ),
             tools = listOf(Tool("t", "d", JsonPrimitive("x")))
-        )
+        ))
         val estimate = estimateContextTokens(context)
         assertEquals(100, estimate.usageTokens)
         assertEquals(2, estimate.trailingTokens) // ceil(6/4)
@@ -89,7 +90,7 @@ class TokenEstimateTest {
             usage = Usage(totalTokens = 999),
             stopReason = StopReason.ABORTED
         )
-        val estimate = estimateContextTokens(Context(messages = listOf(aborted)))
+        val estimate = estimateContextTokens(normalizeContext(Context(messages = listOf(aborted))))
         assertNull(estimate.lastUsageIndex)
         assertEquals(0, estimate.usageTokens)
     }
@@ -108,7 +109,7 @@ class TokenEstimateTest {
             timestamp = 1L
         )
         val laterSummary = UserMessage.ofText("summary", 5L) // inserted after the response
-        val estimate = estimateContextTokens(Context(messages = listOf(laterSummary, assistant)))
+        val estimate = estimateContextTokens(normalizeContext(Context(messages = listOf(laterSummary, assistant))))
         assertNull(estimate.lastUsageIndex)
         assertEquals(2, estimate.tokens)
     }
@@ -128,14 +129,14 @@ class TokenEstimateTest {
             stopReason = StopReason.STOP,
             timestamp = 100L
         )
-        val context = Context(
+        val context = normalizeContext(Context(
             systemPrompt = "system", // 6 chars → 2 tokens
             messages = listOf(
                 UserMessage.ofText("summary", 200L), // inserted after the response
                 assistant, // stale: timestamp 100 < 200 → usage cannot apply
                 UserMessage.ofText("x".repeat(4_000), 300L) // 1000 tokens
             )
-        )
+        ))
         assertEquals(
             ContextUsageEstimate(
                 tokens = 1_005,
@@ -158,7 +159,7 @@ class TokenEstimateTest {
             stopReason = StopReason.STOP,
             timestamp = timestamp
         )
-        val context = Context(
+        val context = normalizeContext(Context(
             messages = listOf(
                 UserMessage.ofText("summary", 200L),
                 assistant(100L, 9_500), // stale: predates the inserted summary
@@ -166,7 +167,7 @@ class TokenEstimateTest {
                 assistant(400L, 2_000),
                 UserMessage.ofText("tail", 500L)
             )
-        )
+        ))
         val estimate = estimateContextTokens(context)
         assertEquals(2_000, estimate.usageTokens)
         assertEquals(1, estimate.trailingTokens) // ceil(4/4)
@@ -176,11 +177,11 @@ class TokenEstimateTest {
 
     @Test
     fun `without usage system prompt and tools are estimated`() {
-        val context = Context(
+        val context = normalizeContext(Context(
             systemPrompt = "12345678", // 2 tokens
             messages = listOf(UserMessage.ofText("abcd")), // 1 token
             tools = listOf(Tool("t", "d", JsonPrimitive("x")))
-        )
+        ))
         val estimate = estimateContextTokens(context)
         assertNull(estimate.lastUsageIndex)
         assertEquals(
@@ -190,44 +191,9 @@ class TokenEstimateTest {
     }
 
     @Test
-    fun `tools introduced after the usage point are re-added via addedToolNames`() {
-        val assistant = AssistantMessage(
-            content = emptyList(),
-            api = "openai-completions",
-            provider = "zai",
-            model = "glm",
-            usage = Usage(totalTokens = 100),
-            stopReason = StopReason.STOP,
-            timestamp = 1L
-        )
-        val addedTool = Tool("late_tool", "d", JsonPrimitive("x"))
-        val context = Context(
-            messages = listOf(
-                UserMessage.ofText("hi", 0L),
-                assistant,
-                ToolResultMessage(
-                    toolCallId = "c1",
-                    toolName = "t",
-                    content = listOf(TextContent("ok")),
-                    addedToolNames = listOf("late_tool"),
-                    timestamp = 2L
-                )
-            ),
-            tools = listOf(Tool("t", "d", JsonPrimitive("x")), addedTool)
-        )
-        val estimate = estimateContextTokens(context)
-        val expectedAdded =
-            estimateTextTokens("""[{"name":"late_tool","description":"d","parameters":"x"}]""")
-        assertTrue("expected a positive re-add, was $expectedAdded") { expectedAdded > 0 }
-        assertEquals(1, estimate.trailingTokens - expectedAdded) // ceil(2/4)
-        assertEquals(100 + 1 + expectedAdded, estimate.tokens)
-        assertEquals(1, estimate.lastUsageIndex)
-    }
-
-    @Test
     fun `clamping keeps 4096 safety tokens and minimum one output`() {
         val model = TestCatalogs.GLM_5_2
-        val context = Context(messages = listOf(UserMessage.ofText("hi"))) // 1 token
+        val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))) // 1 token
 
         assertEquals(500, clampMaxTokensToContext(model, context, 500))
         assertEquals(1_000_000 - 1 - 4096, clampMaxTokensToContext(model, context, 1_000_000))
@@ -237,7 +203,7 @@ class TokenEstimateTest {
     @Test
     fun `non-positive context window skips clamping`() {
         val model = TestCatalogs.GLM_5_2.copy(contextWindow = 0)
-        val context = Context(messages = listOf(UserMessage.ofText("hi")))
+        val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
         assertEquals(5000, clampMaxTokensToContext(model, context, 5000))
         assertEquals(1, clampMaxTokensToContext(model, context, 0))
     }

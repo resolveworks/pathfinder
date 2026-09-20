@@ -27,11 +27,12 @@ import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class GoogleGenerativeAiStreamTest {
 
     private val model = geminiModel()
-    private val context = Context(messages = listOf(UserMessage.ofText("hi")))
+    private val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
     private fun geminiModel(id: String = "gemini-2.5-flash", baseUrl: String = "") = Model(
         id = id, name = id, api = "google-generative-ai", provider = "google",
@@ -286,7 +287,7 @@ class GoogleGenerativeAiStreamTest {
         transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
         api(transport).stream(
             model,
-            Context(
+            normalizeContext(Context(
                 systemPrompt = "be brief",
                 messages = listOf(UserMessage.ofText("hi")),
                 tools = listOf(
@@ -296,7 +297,7 @@ class GoogleGenerativeAiStreamTest {
                         parameters = Json.parseToJsonElement("""{"type":"object"}""")
                     )
                 )
-            ),
+            )),
             GoogleGenerativeAiApi.GoogleOptions(
                 apiKey = "k",
                 toolChoice = "any",

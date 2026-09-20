@@ -46,7 +46,7 @@ const OAUTH_METADATA = {
 };
 
 /** Static pi providers deliberately excluded from the pathfinder catalog. */
-const EXCLUDED_PROVIDERS = new Set(["amazon-bedrock", "google-vertex"]);
+const EXCLUDED_PROVIDERS = new Set(["amazon-bedrock", "google-vertex", "meta", "radius"]);
 
 const OAUTH_ONLY_NAME = { "openai-codex": "OpenAI Codex" };
 

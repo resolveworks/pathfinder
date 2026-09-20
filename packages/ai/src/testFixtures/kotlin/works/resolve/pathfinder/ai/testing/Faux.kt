@@ -6,7 +6,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -18,7 +17,6 @@ import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
 import works.resolve.pathfinder.ai.Content
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.GrammarFormat
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.InputModality
@@ -30,17 +28,20 @@ import works.resolve.pathfinder.ai.ProviderResponse
 import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.getSystemMessageText
 
 fun interface FauxResponseFactory {
     suspend fun create(
-        context: Context,
+        context: TranscriptContext,
         options: SimpleStreamOptions,
         state: FauxProviderState,
         model: Model
@@ -75,7 +76,7 @@ class FauxProvider(
     private val api = object : ChatApi {
         override fun streamSimple(
             model: Model,
-            context: Context,
+            context: TranscriptContext,
             options: SimpleStreamOptions
         ): Flow<AssistantMessageEvent> {
             val step = responses.removeFirstOrNull()
@@ -235,18 +236,33 @@ private fun toolResultToText(message: ToolResultMessage): String =
         .joinToString("\n")
 
 private fun messageToText(message: Message): String = when (message) {
+    is SystemMessage -> {
+        val parts = mutableListOf<String>()
+        val text = getSystemMessageText(message)
+        if (text.isNotEmpty()) parts.add(text)
+        for (tool in message.toolsRemoved.orEmpty()) {
+            parts.add("tool-:${buildJsonObject { put("name", tool.name) }}")
+        }
+        for (tool in message.toolsAdded.orEmpty()) parts.add("tool+:${toolToJson(tool)}")
+        parts.joinToString("\n")
+    }
+
     is UserMessage -> contentToText(message.content)
+
     is AssistantMessage -> assistantContentToText(message.content)
+
     is ToolResultMessage -> toolResultToText(message)
 }
 
 private fun messageRole(message: Message): String = when (message) {
+    is SystemMessage -> "system"
+
     is UserMessage -> "user"
+
     is AssistantMessage -> "assistant"
+
     is ToolResultMessage -> "toolResult"
 }
-
-private fun serializeTools(tools: List<Tool>): JsonArray = JsonArray(tools.map(::toolToJson))
 
 private fun toolToJson(tool: Tool): JsonObject = buildJsonObject {
     put("name", tool.name)
@@ -283,19 +299,8 @@ private fun ConstrainedSamplingConfig.toJson(): JsonElement = when (this) {
     }
 }
 
-private fun serializeContext(context: Context): String {
-    val parts = mutableListOf<String>()
-    if (!context.systemPrompt.isNullOrEmpty()) {
-        parts.add("system:${context.systemPrompt}")
-    }
-    for (message in context.messages) {
-        parts.add("${messageRole(message)}:${messageToText(message)}")
-    }
-    if (context.tools.isNotEmpty()) {
-        parts.add("tools:${serializeTools(context.tools)}")
-    }
-    return parts.joinToString("\n\n")
-}
+private fun serializeContext(context: TranscriptContext): String =
+    context.messages.joinToString("\n\n") { "${messageRole(it)}:${messageToText(it)}" }
 
 private fun commonPrefixLength(a: String, b: String): Int {
     val length = minOf(a.length, b.length)
@@ -305,7 +310,7 @@ private fun commonPrefixLength(a: String, b: String): Int {
 }
 
 private fun AssistantMessage.withUsageEstimate(
-    context: Context,
+    context: TranscriptContext,
     options: SimpleStreamOptions,
     promptCache: MutableMap<String, String>
 ): AssistantMessage {
