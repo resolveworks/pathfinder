@@ -14,8 +14,13 @@ import java.util.Locale
 import kotlin.time.Clock
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -42,6 +47,7 @@ import works.resolve.pathfinder.ai.ToolReference
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
 import works.resolve.pathfinder.ai.utils.uuidv7
@@ -79,7 +85,9 @@ data class MessageEntry(
 /**
  * A compaction cut: the summary replacing the compacted history and the id
  * of the first entry kept after it (entries between the previous leaf path
- * root and that id are summarized away).
+ * root and that id are summarized away). [systemMessage] is the complete
+ * prompt and tool state replayed at this boundary; it leads the compacted
+ * context in place of the system messages dropped from the kept cut.
  */
 data class CompactionEntry(
     override val id: String,
@@ -91,7 +99,8 @@ data class CompactionEntry(
     /** File-operation details of the compacted history. */
     val details: CompactionDetails? = null,
     /** Usage from the LLM call(s) that generated this summary. */
-    val usage: Usage? = null
+    val usage: Usage? = null,
+    val systemMessage: SystemMessage? = null
 ) : SessionEntry()
 
 /**
@@ -238,9 +247,10 @@ data class SessionContext(
 fun sessionEntryToContextMessages(entry: SessionEntry): List<Message> = when (entry) {
     is MessageEntry -> listOf(entry.message)
 
-    is CompactionEntry -> listOf(
-        createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp)
-    )
+    is CompactionEntry -> buildList {
+        entry.systemMessage?.let(::add)
+        add(createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp))
+    }
 
     // Upstream guards summary truthiness; with a non-null summary here, that
     // reduces to excluding the empty string.
@@ -279,7 +289,10 @@ fun buildContextEntries(
     for (i in 0 until compactionIndex) {
         val entry = pathEntries[i]
         if (entry.id == compaction!!.firstKeptEntryId) foundFirstKept = true
-        if (foundFirstKept) contextEntries.add(entry)
+        // System messages among the kept entries are dropped: the compaction
+        // entry's systemMessage already carries their replay.
+        val isSystemMessage = entry is MessageEntry && entry.message is SystemMessage
+        if (foundFirstKept && !isSystemMessage) contextEntries.add(entry)
     }
     contextEntries.addAll(pathEntries.subList(compactionIndex + 1, pathEntries.size))
     return contextEntries
@@ -395,6 +408,7 @@ internal object JsonlCodec {
                     }
                 }
                 entry.usage?.let { put("usage", encodeUsage(it)) }
+                entry.systemMessage?.let { put("systemMessage", encodeMessage(it)) }
             }
 
             is ModelChangeEntry -> {
@@ -465,7 +479,10 @@ internal object JsonlCodec {
                 firstKeptEntryId = obj.string("firstKeptEntryId") ?: invalid(),
                 tokensBefore = obj.number("tokensBefore")?.toInt() ?: invalid(),
                 details = decodeDetails(obj["details"]),
-                usage = obj["usage"]?.let(::decodeUsage)
+                usage = obj["usage"]?.let(::decodeUsage),
+                systemMessage = obj["systemMessage"]?.let {
+                    decodeMessage(it) as? SystemMessage ?: invalid()
+                }
             )
 
             "model_change" -> ModelChangeEntry(
@@ -1013,7 +1030,9 @@ class SessionManager private constructor(
                 firstKeptEntryId,
                 tokensBefore,
                 details,
-                usage
+                usage,
+                systemMessage = getCurrentSystemMessage(buildSessionContext().messages)
+                    ?.copy(timestamp = timestamp)
             )
         }
     }
@@ -1311,7 +1330,10 @@ class SessionManager private constructor(
 
         /**
          * List sessions sorted by `modified` descending. Unparseable files
-         * are skipped; one corrupt file must not hide the others.
+         * are skipped; one corrupt file must not hide the others. Loads run
+         * with pi's bounded concurrency over name-descending file order, and
+         * ties in `modified` keep that load order (pi's stable sort over the
+         * same ordering).
          */
         suspend fun list(
             dir: File,
@@ -1320,8 +1342,17 @@ class SessionManager private constructor(
             val files = withContext(ioDispatcher) {
                 dir.listFiles { f: File -> f.isFile && f.name.endsWith(".jsonl") }
             } ?: return emptyList()
-            return files.mapNotNull { buildSessionInfo(it, ioDispatcher) }
-                .sortedByDescending { it.modified }
+            val semaphore = Semaphore(MAX_CONCURRENT_SESSION_INFO_LOADS)
+            val infos = coroutineScope {
+                files.sortedWith(compareByDescending { it.name })
+                    .map { file ->
+                        async {
+                            semaphore.withPermit { buildSessionInfo(file, ioDispatcher) }
+                        }
+                    }
+                    .awaitAll()
+            }
+            return infos.filterNotNull().sortedByDescending { it.modified }
         }
 
         /**
@@ -1394,6 +1425,9 @@ class SessionManager private constructor(
         private const val SESSION_HEADER_READ_BUFFER_SIZE = 4096
         private const val MAX_SESSION_HEADER_SCAN_BYTES = 1024 * 1024
         private const val NEWLINE_BYTE: Byte = 10
+
+        /** pi's MAX_CONCURRENT_SESSION_INFO_LOADS. */
+        private const val MAX_CONCURRENT_SESSION_INFO_LOADS = 10
 
         /**
          * Bounded scan for the session header: blank and malformed lines
@@ -1481,9 +1515,12 @@ class SessionManager private constructor(
 
         /**
          * pi's findMostRecentSession: the session file with the newest
-         * [File.lastModified] in [dir], or null when none. Divergence: pi
-         * optionally filters sessions by header cwd; sessions here share
-         * one unscoped directory, so that filter is omitted.
+         * [File.lastModified] in [dir], or null when none. Candidates are
+         * ordered by mtime so the first file with a valid session header
+         * wins — headers are read newest-first, not for every file.
+         * Divergence: pi optionally filters sessions by header cwd;
+         * sessions here share one unscoped directory, so that filter is
+         * omitted.
          */
         suspend fun findMostRecentSession(
             dir: File,
@@ -1491,7 +1528,10 @@ class SessionManager private constructor(
         ): File? = withContext(ioDispatcher) {
             val files = dir.listFiles { f: File -> f.isFile && f.name.endsWith(".jsonl") }
                 ?: return@withContext null
-            files.filter { readSessionHeader(it) != null }.maxByOrNull { it.lastModified() }
+            files.sortedByDescending { it.lastModified() }.firstOrNull {
+                readSessionHeader(it) !=
+                    null
+            }
         }
 
         /** The session file whose header id equals [id], or null when none. */

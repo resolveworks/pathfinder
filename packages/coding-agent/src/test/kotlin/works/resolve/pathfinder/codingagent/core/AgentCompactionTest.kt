@@ -31,14 +31,15 @@ import works.resolve.pathfinder.ai.Provider
 import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.codingagent.core.CompactionEntry
+import works.resolve.pathfinder.codingagent.core.CompactionSettings
 import works.resolve.pathfinder.codingagent.core.RetrySettings
 import works.resolve.pathfinder.codingagent.core.SessionManager
-import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
 import works.resolve.pathfinder.codingagent.core.createCompactionSummaryMessage
 
 class AgentCompactionTest {
@@ -219,9 +220,12 @@ class AgentCompactionTest {
             compaction.firstKeptEntryId
         )
         val rebuilt = agent.state.value.messages
-        // Summary message + the kept entries (prompt user + assistant).
-        assertEquals(3, rebuilt.size)
-        val summaryMessage = rebuilt.first() as UserMessage
+        // Replayed system message + summary message + the kept entries
+        // (prompt user + assistant).
+        assertEquals(4, rebuilt.size)
+        val replay = rebuilt.first() as SystemMessage
+        assertEquals(compaction.systemMessage, replay)
+        val summaryMessage = rebuilt[1] as UserMessage
         assertEquals(
             createCompactionSummaryMessage(
                 "SUMMARY",

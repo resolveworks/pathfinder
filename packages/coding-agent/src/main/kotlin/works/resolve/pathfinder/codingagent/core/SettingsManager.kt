@@ -9,9 +9,12 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
-import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
+import works.resolve.pathfinder.ai.utils.DEFAULT_MAX_AGENT_RETRY_DELAY_MS
+import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings as ResolvedCompactionSettings
 import works.resolve.pathfinder.codingagent.core.compaction.DEFAULT_COMPACTION_SETTINGS
 import works.resolve.pathfinder.codingagent.core.utils.stripBom
 
@@ -29,6 +32,20 @@ data class Settings(
     val enabledModels: List<String>? = null,
     val compaction: CompactionSettings? = null,
     val retry: RetrySettings? = null
+)
+
+/** pi's CompactionModelOverride: per-model token budgets keyed by "provider/modelId". */
+data class CompactionModelOverride(
+    val reserveTokens: Int? = null,
+    val keepRecentTokens: Int? = null
+)
+
+/** pi's settings-manager `CompactionSettings`: the raw optional stored shape. */
+data class CompactionSettings(
+    val enabled: Boolean? = null,
+    val reserveTokens: Int? = null,
+    val keepRecentTokens: Int? = null,
+    val modelOverrides: Map<String, CompactionModelOverride>? = null
 )
 
 /**
@@ -83,18 +100,32 @@ private fun encodeSettings(settings: Settings): JsonObject = JsonObject(
 )
 
 private fun encodeCompaction(compaction: CompactionSettings): JsonObject = JsonObject(
-    mapOf(
-        "enabled" to JsonPrimitive(compaction.enabled),
-        "reserveTokens" to JsonPrimitive(compaction.reserveTokens),
-        "keepRecentTokens" to JsonPrimitive(compaction.keepRecentTokens)
-    )
+    buildMap {
+        compaction.enabled?.let { put("enabled", JsonPrimitive(it)) }
+        compaction.reserveTokens?.let { put("reserveTokens", JsonPrimitive(it)) }
+        compaction.keepRecentTokens?.let { put("keepRecentTokens", JsonPrimitive(it)) }
+        compaction.modelOverrides?.let { overrides ->
+            put(
+                "modelOverrides",
+                JsonObject(overrides.mapValues { (_, override) -> encodeModelOverride(override) })
+            )
+        }
+    }
+)
+
+private fun encodeModelOverride(override: CompactionModelOverride): JsonObject = JsonObject(
+    buildMap {
+        override.reserveTokens?.let { put("reserveTokens", JsonPrimitive(it)) }
+        override.keepRecentTokens?.let { put("keepRecentTokens", JsonPrimitive(it)) }
+    }
 )
 
 private fun encodeRetry(retry: RetrySettings): JsonObject = JsonObject(
     mapOf(
         "enabled" to JsonPrimitive(retry.enabled),
         "maxRetries" to JsonPrimitive(retry.maxRetries),
-        "baseDelayMs" to JsonPrimitive(retry.baseDelayMs)
+        "baseDelayMs" to JsonPrimitive(retry.baseDelayMs),
+        "maxAgentDelayMs" to JsonPrimitive(retry.maxAgentDelayMs)
     )
 )
 
@@ -102,7 +133,10 @@ private fun encodeRetry(retry: RetrySettings): JsonObject = JsonObject(
  * Tolerant decode: unknown fields and non-object roots yield defaults, and an
  * invalid thinking-level value is ignored rather than rejecting the file —
  * pi stores thinking levels as unvalidated strings, so no other field may be
- * lost to one bad value.
+ * lost to one bad value. Compaction token budgets are the exception: pi
+ * validates them when read, and here that validation runs at decode (pi's
+ * reads are untyped; this parse is typed), so an invalid budget fails the
+ * whole settings load with pi's message instead.
  */
 private fun decodeSettings(content: String): Settings {
     val obj = Json.parseToJsonElement(stripBom(content)) as? JsonObject ?: return Settings()
@@ -133,17 +167,55 @@ private fun decodeSettings(content: String): Settings {
 }
 
 private fun decodeCompaction(obj: JsonObject) = CompactionSettings(
-    enabled = obj.booleanField("enabled") ?: DEFAULT_COMPACTION_SETTINGS.enabled,
-    reserveTokens = obj.intField("reserveTokens") ?: DEFAULT_COMPACTION_SETTINGS.reserveTokens,
-    keepRecentTokens =
-        obj.intField("keepRecentTokens") ?: DEFAULT_COMPACTION_SETTINGS.keepRecentTokens
+    enabled = obj.booleanField("enabled"),
+    reserveTokens = obj.nonNegativeIntField(
+        setting = "compaction.reserveTokens",
+        key = "reserveTokens"
+    ),
+    keepRecentTokens = obj.nonNegativeIntField(
+        setting = "compaction.keepRecentTokens",
+        key = "keepRecentTokens"
+    ),
+    modelOverrides = (obj["modelOverrides"] as? JsonObject)?.let(::decodeModelOverrides)
 )
+
+private fun decodeModelOverrides(obj: JsonObject): Map<String, CompactionModelOverride> =
+    obj.mapValues { (key, element) ->
+        val entry = element as? JsonObject
+            ?: throw IllegalArgumentException(
+                "Invalid compaction.modelOverrides[\"$key\"] setting: $element. Expected an object."
+            )
+        CompactionModelOverride(
+            reserveTokens = entry.nonNegativeIntField(
+                setting = "compaction.modelOverrides[\"$key\"].reserveTokens",
+                key = "reserveTokens"
+            ),
+            keepRecentTokens = entry.nonNegativeIntField(
+                setting = "compaction.modelOverrides[\"$key\"].keepRecentTokens",
+                key = "keepRecentTokens"
+            )
+        )
+    }
 
 private fun decodeRetry(obj: JsonObject) = RetrySettings(
     enabled = obj.booleanField("enabled") ?: true,
     maxRetries = obj.intField("maxRetries") ?: 3,
-    baseDelayMs = obj.longField("baseDelayMs") ?: 2000
+    baseDelayMs = obj.longField("baseDelayMs") ?: 2000,
+    maxAgentDelayMs = obj.longField("maxAgentDelayMs") ?: DEFAULT_MAX_AGENT_RETRY_DELAY_MS
 )
+
+private fun JsonObject.nonNegativeIntField(setting: String, key: String): Int? {
+    val element = this[key] ?: return null
+    val value = (element as? JsonPrimitive)?.takeIf { !it.isString }?.contentOrNull
+        ?.toIntOrNull()
+    requireNotNull(value) {
+        "Invalid $setting setting: $element. Expected a non-negative safe integer."
+    }
+    require(value >= 0) {
+        "Invalid $setting setting: $value. Expected a non-negative safe integer."
+    }
+    return value
+}
 
 private fun JsonObject.stringField(key: String): String? = (this[key] as? JsonPrimitive)?.content
 
@@ -289,8 +361,20 @@ class SettingsManager private constructor(
         save("enabledModels")
     }
 
-    fun getCompactionSettings(): CompactionSettings =
-        settings.compaction ?: DEFAULT_COMPACTION_SETTINGS
+    fun getCompactionSettings(model: Model? = null): ResolvedCompactionSettings {
+        val compaction = settings.compaction
+        val override =
+            model?.let { compaction?.modelOverrides?.get("${it.provider}/${it.id}") }
+        return ResolvedCompactionSettings(
+            enabled = compaction?.enabled ?: DEFAULT_COMPACTION_SETTINGS.enabled,
+            reserveTokens = override?.reserveTokens
+                ?: compaction?.reserveTokens
+                ?: DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+            keepRecentTokens = override?.keepRecentTokens
+                ?: compaction?.keepRecentTokens
+                ?: DEFAULT_COMPACTION_SETTINGS.keepRecentTokens
+        )
+    }
 
     suspend fun setCompactionSettings(compaction: CompactionSettings) {
         settings = settings.copy(compaction = compaction)
@@ -309,9 +393,10 @@ class SettingsManager private constructor(
      * added or edited fields are preserved and in-memory values win for the
      * modified fields. A field whose value is null is removed from storage.
      * Nested fields (compaction, retry) merge into the stored object so
-     * unknown nested keys survive, but unlike pi — which persists only the
-     * individually modified nested keys — the fully resolved objects are
-     * written, materializing defaults for absent known keys.
+     * unknown nested keys survive. Unlike pi — which persists only the
+     * individually modified nested keys — the stored objects are written as
+     * a whole: compaction keeps its absent-optionals absent, while retry
+     * materializes defaults for absent known keys.
      *
      * Like pi's `save()`, nothing is written while the last load failed, so
      * an unreadable settings file is never clobbered.
