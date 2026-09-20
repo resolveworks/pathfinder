@@ -193,12 +193,10 @@ fun findCutPoint(
         if (messageTokens == 0) continue
         accumulatedTokens += messageTokens
         if (accumulatedTokens >= keepRecentTokens) {
-            for (c in cutPoints.indices) {
-                if (cutPoints[c] >= i) {
-                    cutIndex = cutPoints[c]
-                    break
-                }
-            }
+            // Prefer the closest valid cut point at or after this entry. If trailing
+            // tool results exceed the budget by themselves, keep their preceding
+            // assistant tool call instead of falling back to the first message.
+            cutIndex = cutPoints.firstOrNull { it >= i } ?: cutPoints[cutPoints.size - 1]
             break
         }
     }
@@ -680,7 +678,7 @@ suspend fun compact(
     val summaryUsage: Usage
 
     if (isSplitTurn && turnPrefixMessages.isNotEmpty()) {
-        var historyText = "No prior history."
+        var historyText = previousSummary ?: "No prior history."
         var historyUsage: Usage? = null
         if (messagesToSummarize.isNotEmpty()) {
             val historyResult = generateSummaryWithUsage(

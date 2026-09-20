@@ -33,11 +33,14 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import works.resolve.pathfinder.agent.CompactionDetails
 import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
 import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.Cost
+import works.resolve.pathfinder.ai.GrammarFormat
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.StrictJsonSchemaMode
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
@@ -47,6 +50,7 @@ import works.resolve.pathfinder.ai.ToolReference
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.constrainedSamplingToJson
 import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
@@ -701,21 +705,53 @@ internal object JsonlCodec {
         put("name", tool.name)
         put("description", tool.description)
         put("parameters", tool.parameters)
-        check(tool.constrainedSampling == null) {
-            "Constrained-sampling tool declarations are not persistable"
-        }
+        tool.constrainedSampling?.let { put("constrainedSampling", constrainedSamplingToJson(it)) }
     }
 
     private fun decodeTools(element: kotlinx.serialization.json.JsonElement): List<Tool> {
         val array = element as? JsonArray ?: invalid()
         return array.map { item ->
             val obj = item as? JsonObject ?: invalid()
-            if ("constrainedSampling" in obj) invalid("constrained tool declarations unsupported")
             Tool(
                 name = obj.string("name") ?: invalid(),
                 description = obj.string("description") ?: invalid(),
-                parameters = obj["parameters"] ?: invalid()
+                parameters = obj["parameters"] ?: invalid(),
+                constrainedSampling = obj["constrainedSampling"]?.let(::decodeConstrainedSampling)
             )
+        }
+    }
+
+    private fun decodeConstrainedSampling(
+        element: kotlinx.serialization.json.JsonElement
+    ): ConstrainedSamplingConfig {
+        if (element is JsonPrimitive && !element.isString && element.content == "false") {
+            return ConstrainedSamplingConfig.Disabled
+        }
+        val obj = element as? JsonObject ?: invalid()
+        return when (obj.string("type")) {
+            "json_schema" -> ConstrainedSamplingConfig.JsonSchema(
+                when (obj.string("strict")) {
+                    "prefer" -> StrictJsonSchemaMode.PREFER
+                    "require" -> StrictJsonSchemaMode.REQUIRE
+                    else -> invalid()
+                }
+            )
+
+            "grammar" -> {
+                val variants = obj["variants"] as? JsonObject ?: invalid()
+                ConstrainedSamplingConfig.Grammar(
+                    variants.entries.associate { (format, definition) ->
+                        val key = when (format) {
+                            "openai_lark" -> GrammarFormat.OPENAI_LARK
+                            "openai_regex" -> GrammarFormat.OPENAI_REGEX
+                            else -> invalid()
+                        }
+                        key to (definition.stringOrNull() ?: invalid())
+                    }
+                )
+            }
+
+            else -> invalid()
         }
     }
 

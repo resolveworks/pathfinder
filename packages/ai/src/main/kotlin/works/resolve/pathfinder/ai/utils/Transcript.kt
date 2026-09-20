@@ -263,33 +263,33 @@ internal fun toolToJson(tool: Tool): JsonObject = buildJsonObject {
 internal fun toolReferenceToJson(reference: ToolReference): JsonObject =
     buildJsonObject { put("name", reference.name) }
 
-private fun constrainedSamplingToJson(config: ConstrainedSamplingConfig): JsonElement =
-    when (config) {
-        ConstrainedSamplingConfig.Disabled -> JsonPrimitive(false)
+/** The wire shape of `Tool.constrainedSampling`; shared by persistence so both write it identically. */
+fun constrainedSamplingToJson(config: ConstrainedSamplingConfig): JsonElement = when (config) {
+    ConstrainedSamplingConfig.Disabled -> JsonPrimitive(false)
 
-        is ConstrainedSamplingConfig.JsonSchema -> buildJsonObject {
-            put("type", "json_schema")
-            put("strict", if (config.strict == StrictJsonSchemaMode.PREFER) "prefer" else "require")
-        }
-
-        is ConstrainedSamplingConfig.Grammar -> buildJsonObject {
-            put("type", "grammar")
-            put(
-                "variants",
-                buildJsonObject {
-                    config.variants.forEach { (format, definition) ->
-                        put(
-                            if (format ==
-                                GrammarFormat.OPENAI_LARK
-                            ) {
-                                "openai_lark"
-                            } else {
-                                "openai_regex"
-                            },
-                            definition
-                        )
-                    }
-                }
-            )
-        }
+    is ConstrainedSamplingConfig.JsonSchema -> buildJsonObject {
+        put("type", "json_schema")
+        put("strict", if (config.strict == StrictJsonSchemaMode.PREFER) "prefer" else "require")
     }
+
+    is ConstrainedSamplingConfig.Grammar -> buildJsonObject {
+        put("type", "grammar")
+        put(
+            "variants",
+            buildJsonObject {
+                config.variants.forEach { (format, definition) ->
+                    put(
+                        if (format ==
+                            GrammarFormat.OPENAI_LARK
+                        ) {
+                            "openai_lark"
+                        } else {
+                            "openai_regex"
+                        },
+                        definition
+                    )
+                }
+            }
+        )
+    }
+}

@@ -7,6 +7,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.AgentToolResult
+import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
+import works.resolve.pathfinder.ai.StrictJsonSchemaMode
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.utils.str
@@ -55,7 +57,8 @@ class WriteTool internal constructor(
                 }
             )
             put("required", JsonArray(listOf(JsonPrimitive("path"), JsonPrimitive("content"))))
-        }
+        },
+        constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER)
     )
 
     override val label: String = NAME

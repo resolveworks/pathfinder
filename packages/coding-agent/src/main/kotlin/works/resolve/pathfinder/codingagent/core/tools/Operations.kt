@@ -65,8 +65,9 @@ interface EditOperations {
 
 interface BashOperations {
     /**
-     * Execute a command and stream output, returning the exit code (null when
-     * the process was killed without an exit status).
+     * Execute a command and stream output, returning the exit code. Report
+     * signal terminations as 128 + signal number; a null exit code is treated
+     * as a failed command.
      *
      * [onData] is the merge point for stdout and stderr: implementations
      * forward interleaved chunks in arrival order, and the shell just
