@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.flowOn
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.StreamFn
+import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.ResolvedAuth
@@ -132,7 +133,9 @@ class NativeAgentFactory(
                     // bounded buffer keeps memory bounded per token-snapshot rate
                     // mismatch without rendezvous-coupling SSE delivery to the
                     // downstream consumer's speed; default SUSPEND overflow applies.
-                    models.stream(requestedModel, context, options)
+                    // The loop already normalized the transcript; Models.stream takes
+                    // a raw Context and re-normalizes (a no-op here).
+                    models.stream(requestedModel, Context(messages = context.messages), options)
                         .buffer(STREAM_BUFFER_CAPACITY)
                         .flowOn(Dispatchers.Default)
                 },

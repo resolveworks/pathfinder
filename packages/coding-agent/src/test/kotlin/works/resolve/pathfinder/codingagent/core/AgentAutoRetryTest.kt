@@ -138,12 +138,12 @@ class AgentAutoRetryTest {
         )
 
         // pi drops the errored assistant message from agent state before the
-        // retry, so both runs see the same single-message context.
-        assertEquals(1, streams.seenContexts[0].size)
-        assertEquals(listOf(streams.seenContexts[0].single()), streams.seenContexts[1])
+        // retry, so both runs see the same leading-prompt + user context.
+        assertEquals(2, streams.seenContexts[0].size)
+        assertEquals(streams.seenContexts[0], streams.seenContexts[1])
 
         val state = agent.state.value
-        assertEquals(2, state.messages.size)
+        assertEquals(3, state.messages.size)
         val reply = state.messages.last() as AssistantMessage
         assertEquals("recovered", (reply.content.single() as TextContent).text)
         assertNull(state.errorMessage)
@@ -283,16 +283,17 @@ class AgentAutoRetryTest {
             )
 
             val state = agent.state.value.messages
-            assertEquals(4, state.size)
-            assertTrue(state[1] is AssistantMessage)
-            assertTrue(state[2] is works.resolve.pathfinder.ai.ToolResultMessage)
-            val recovered = state[3] as AssistantMessage
+            // prompt baseline, tool announcement, user, tool call, tool result, recovery
+            assertEquals(6, state.size)
+            assertTrue(state[3] is AssistantMessage)
+            assertTrue(state[4] is works.resolve.pathfinder.ai.ToolResultMessage)
+            val recovered = state[5] as AssistantMessage
             assertEquals("recovered", (recovered.content.single() as TextContent).text)
             assertNull(agent.state.value.errorMessage)
 
             val tree = agent.sessionManager.buildSessionContext().messages
-            assertEquals(5, tree.size)
-            val errored = tree[3] as AssistantMessage
+            assertEquals(6, tree.size)
+            val errored = tree[4] as AssistantMessage
             assertEquals(StopReason.ERROR, errored.stopReason)
         }
 
@@ -320,7 +321,7 @@ class AgentAutoRetryTest {
                 (it as AssistantMessage).stopReason
             }
         )
-        assertEquals(2, agent.state.value.messages.size)
+        assertEquals(3, agent.state.value.messages.size)
     }
 
     @Test
@@ -367,7 +368,7 @@ class AgentAutoRetryTest {
         // The error message was removed from agent state before the backoff;
         // it stays in the session layer.
         assertEquals(1, streams.seenContexts.size)
-        assertEquals(1, agent.state.value.messages.size)
+        assertEquals(2, agent.state.value.messages.size)
         assertFalse(agent.state.value.isStreaming)
     }
 }

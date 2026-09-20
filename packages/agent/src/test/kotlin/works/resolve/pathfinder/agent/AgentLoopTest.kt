@@ -19,18 +19,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.getCurrentSystemPrompt
+import works.resolve.pathfinder.ai.utils.getCurrentTools
 
 class AgentLoopTest {
 
@@ -68,7 +71,7 @@ class AgentLoopTest {
 
     private fun scriptedStream(
         vararg messages: AssistantMessage,
-        contexts: MutableList<Context> = mutableListOf()
+        contexts: MutableList<TranscriptContext> = mutableListOf()
     ): StreamFn {
         var call = 0
         return StreamFn { _, ctx, _ ->
@@ -79,6 +82,14 @@ class AgentLoopTest {
             flowOf(AssistantMessageEvent.Done(message.stopReason, message))
         }
     }
+
+    /** Context whose transcript already declares the tools, so the loop announces no delta. */
+    private fun toolContext(vararg tools: AgentTool): AgentContext = AgentContext(
+        messages = listOf(
+            SystemMessage(content = emptyList(), toolsAdded = tools.map { it.definition })
+        ),
+        tools = tools.toList()
+    )
 
     private class FakeTool(
         override val definition: Tool = Tool("my_tool", "test tool", buildJsonObject {}),
@@ -108,7 +119,7 @@ class AgentLoopTest {
     @Test
     fun `success path emits full lifecycle in order and returns new messages`() = runTest {
         val final = assistant("hi there")
-        var capturedContext: Context? = null
+        var capturedContext: TranscriptContext? = null
         var capturedOptions: SimpleStreamOptions? = null
         val streamFn = StreamFn { m, ctx, opts ->
             assertEquals(model, m)
@@ -122,8 +133,7 @@ class AgentLoopTest {
             )
         }
         val prompt = UserMessage.ofText("q")
-        val context =
-            AgentContext(systemPrompt = "sys", messages = listOf(UserMessage.ofText("earlier")))
+        val context = AgentContext(messages = listOf(UserMessage.ofText("earlier")))
 
         val events = mutableListOf<AgentEvent>()
         val result =
@@ -151,12 +161,11 @@ class AgentLoopTest {
         assertEquals(listOf<Message>(prompt, final), result)
         assertEquals(listOf<Message>(prompt, final), (events[9] as AgentEvent.AgentEnd).messages)
 
-        assertEquals("sys", capturedContext!!.systemPrompt)
         assertEquals(
             listOf<Message>(UserMessage.ofText("earlier"), prompt),
-            capturedContext.messages
+            capturedContext!!.messages
         )
-        assertTrue(capturedContext.tools.isEmpty())
+        assertTrue(getCurrentTools(capturedContext.messages).isEmpty())
         assertEquals(SimpleStreamOptions(), capturedOptions)
 
         assertEquals(1, context.messages.size)
@@ -165,7 +174,7 @@ class AgentLoopTest {
     @Test
     fun `multiple prompts each emit message pairs and reach the provider`() = runTest {
         val final = assistant()
-        var capturedContext: Context? = null
+        var capturedContext: TranscriptContext? = null
         val streamFn = StreamFn { _, ctx, _ ->
             capturedContext = ctx
             flowOf(AssistantMessageEvent.Done(StopReason.STOP, final))
@@ -277,7 +286,7 @@ class AgentLoopTest {
     fun `tool definitions reach the provider in first and follow-up contexts`() = runTest {
         val tool1 = FakeTool(Tool("t1", "one", buildJsonObject {}))
         val tool2 = FakeTool(Tool("t2", "two", buildJsonObject {}))
-        val contexts = mutableListOf<Context>()
+        val contexts = mutableListOf<TranscriptContext>()
         val streamFn = scriptedStream(
             toolCallAssistant(ToolCall("c1", "t1", """{"a":1}""")),
             assistant("done"),
@@ -292,9 +301,15 @@ class AgentLoopTest {
         ) { }
 
         assertEquals(2, contexts.size)
-        assertEquals(listOf(tool1.definition, tool2.definition), contexts[0].tools)
-        assertEquals(listOf(tool1.definition, tool2.definition), contexts[1].tools)
-        assertEquals("t1", ((contexts[1].messages[2]) as ToolResultMessage).toolName)
+        assertEquals(
+            listOf(tool1.definition, tool2.definition),
+            getCurrentTools(contexts[0].messages)
+        )
+        assertEquals(
+            listOf(tool1.definition, tool2.definition),
+            getCurrentTools(contexts[1].messages)
+        )
+        assertEquals("t1", ((contexts[1].messages[3]) as ToolResultMessage).toolName)
     }
 
     @Test
@@ -318,7 +333,7 @@ class AgentLoopTest {
             val events = mutableListOf<AgentEvent>()
             val result = runAgentLoop(
                 listOf(prompt),
-                AgentContext(messages = emptyList(), tools = listOf(tool)),
+                toolContext(tool),
                 AgentLoopConfig(model, streamFn = streamFn)
             ) { events.add(it) }
 
@@ -390,7 +405,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -425,7 +440,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -446,7 +461,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -475,7 +490,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -497,7 +512,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -520,7 +535,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -564,7 +579,7 @@ class AgentLoopTest {
         )
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -589,7 +604,7 @@ class AgentLoopTest {
         )
         runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -611,7 +626,7 @@ class AgentLoopTest {
         )
         runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -631,7 +646,7 @@ class AgentLoopTest {
         )
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -653,7 +668,7 @@ class AgentLoopTest {
         )
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -692,7 +707,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -739,7 +754,7 @@ class AgentLoopTest {
             val job = backgroundScope.launch {
                 runAgentLoop(
                     listOf(UserMessage.ofText("q")),
-                    AgentContext(messages = emptyList(), tools = listOf(tool1, tool2)),
+                    toolContext(tool1, tool2),
                     AgentLoopConfig(
                         model,
                         streamFn = streamFn,
@@ -800,7 +815,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(ok)),
+            toolContext(ok),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -843,7 +858,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool1, tool2)),
+            toolContext(tool1, tool2),
             AgentLoopConfig(model, streamFn = streamFn, toolExecution = ToolExecutionMode.PARALLEL)
         ) { events.add(it) }
 
@@ -891,7 +906,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -924,7 +939,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -954,7 +969,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            toolContext(tool),
             AgentLoopConfig(model, streamFn = streamFn)
         ) { events.add(it) }
 
@@ -976,13 +991,13 @@ class AgentLoopTest {
             }
         )
         var llmCalls = 0
-        var convertedSecondTurnSystemPrompt = ""
+        var secondTurnSystemPrompt = ""
         var prepareCalls = 0
         var prepared = false
         val streamFn = StreamFn { _, ctx, _ ->
             llmCalls++
             if (llmCalls == 2) {
-                convertedSecondTurnSystemPrompt = ctx.systemPrompt ?: ""
+                secondTurnSystemPrompt = getCurrentSystemPrompt(ctx.messages)
             }
             val message =
                 if (llmCalls == 1) {
@@ -1000,19 +1015,27 @@ class AgentLoopTest {
                 if (prepared) return@AgentLoopConfig null
                 prepared = true
                 AgentLoopTurnUpdate(
-                    context = turn.context.copy(systemPrompt = "second prompt")
+                    messages = listOf(
+                        SystemMessage(
+                            content = listOf(TextContent("second prompt")),
+                            timestamp = 1L
+                        )
+                    )
                 )
             }
         )
 
         runAgentLoop(
             listOf(UserMessage.ofText("echo something")),
-            AgentContext(systemPrompt = "first prompt", tools = listOf(tool)),
+            AgentContext(
+                messages = listOf(SystemMessage(content = listOf(TextContent("first prompt")))),
+                tools = listOf(tool)
+            ),
             config
         ) { }
 
         assertEquals(2, llmCalls)
         assertEquals(1, prepareCalls)
-        assertEquals("second prompt", convertedSecondTurnSystemPrompt)
+        assertEquals("first prompt\n\nsecond prompt", secondTurnSystemPrompt)
     }
 }

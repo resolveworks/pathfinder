@@ -28,6 +28,7 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
@@ -87,9 +88,7 @@ class AgentTest {
         val agent = Agent(model, streamFn = StreamFn { _, _, _ -> okStream() })
 
         val state = agent.state.value
-        // Divergence: pi defaults systemPrompt to ""; this port keeps it nullable
-        // to match Context.systemPrompt.
-        assertNull(state.systemPrompt)
+        assertEquals("", state.systemPrompt)
         assertEquals(model, state.model)
         assertEquals(ModelThinkingLevel.OFF, state.thinkingLevel)
         assertTrue(state.tools.isEmpty())
@@ -101,7 +100,7 @@ class AgentTest {
     }
 
     @Test
-    fun `constructor system prompt reaches state and setters update it`() {
+    fun `constructor system prompt seeds the leading system message`() {
         val agent =
             Agent(model, "You are a helpful assistant.", SimpleStreamOptions()) { _, _, _ ->
                 okStream()
@@ -110,11 +109,14 @@ class AgentTest {
         assertEquals("You are a helpful assistant.", agent.state.value.systemPrompt)
         assertEquals(model, agent.state.value.model)
         assertEquals(ModelThinkingLevel.OFF, agent.state.value.thinkingLevel)
+        val leading = agent.state.value.messages.single() as SystemMessage
+        assertEquals(
+            "You are a helpful assistant.",
+            (leading.content.single() as TextContent).text
+        )
 
         agent.setThinkingLevel(ModelThinkingLevel.LOW)
         assertEquals(ModelThinkingLevel.LOW, agent.state.value.thinkingLevel)
-        agent.setSystemPrompt("changed")
-        assertEquals("changed", agent.state.value.systemPrompt)
     }
 
     @Test
@@ -145,12 +147,12 @@ class AgentTest {
         )
 
         val final = agent.state.value
-        assertEquals(2, final.messages.size)
+        assertEquals(3, final.messages.size)
         assertEquals(
             "hi",
-            ((final.messages[0] as UserMessage).content.single() as TextContent).text
+            ((final.messages[1] as UserMessage).content.single() as TextContent).text
         )
-        val reply = final.messages[1] as AssistantMessage
+        val reply = final.messages[2] as AssistantMessage
         assertEquals("hello", (reply.content.single() as TextContent).text)
         assertEquals(StopReason.STOP, reply.stopReason)
         assertNull(final.streamingMessage)
@@ -158,13 +160,20 @@ class AgentTest {
         assertNull(final.errorMessage)
 
         fun textOf(msg: Message) = when (msg) {
+            is SystemMessage -> (msg.content.single() as TextContent).text
             is UserMessage -> (msg.content.single() as TextContent).text
             is AssistantMessage -> (msg.content.single() as TextContent).text
             else -> "tool-result"
         }
         agent.prompt(listOf(UserMessage.ofText("again")))
         val texts = contexts.map { ctx -> ctx.map(::textOf) }
-        assertEquals(listOf(listOf("hi"), listOf("hi", "hello", "again")), texts)
+        assertEquals(
+            listOf(
+                listOf("be brief", "hi"),
+                listOf("be brief", "hi", "hello", "again")
+            ),
+            texts
+        )
     }
 
     @Test
@@ -199,7 +208,6 @@ class AgentTest {
             assertTrue("no initial event on subscribe", received.isEmpty())
 
             // State mutators do not emit events.
-            agent.setSystemPrompt("mutated")
             agent.setTools(emptyList())
             assertTrue(received.isEmpty())
 
@@ -211,7 +219,7 @@ class AgentTest {
             agent.prompt(listOf(UserMessage.ofText("again")))
             assertEquals(countAfterFirstRun, received.size)
             // Unsubscribed observers do not affect reduction.
-            assertEquals(4, agent.state.value.messages.size)
+            assertEquals(5, agent.state.value.messages.size)
         }
 
     @Test
@@ -347,7 +355,8 @@ class AgentTest {
             assertEquals("No messages to continue from", e.message)
         }
         assertEquals(0, streams)
-        assertTrue(agent.state.value.messages.isEmpty())
+        // The seeded prompt-only system message is not continuable.
+        assertEquals(1, agent.state.value.messages.size)
         assertFalse(agent.state.value.isStreaming)
     }
 
@@ -444,8 +453,8 @@ class AgentTest {
 
         val final = agent.state.value
         assertFalse(final.isStreaming)
-        assertEquals(2, final.messages.size)
-        val error = final.messages[1] as AssistantMessage
+        assertEquals(3, final.messages.size)
+        val error = final.messages[2] as AssistantMessage
         assertEquals(StopReason.ERROR, error.stopReason)
         assertEquals("Unexpected error (RuntimeException)", error.errorMessage)
         assertFalse(error.errorMessage!!.contains("sk-supersecret"))
@@ -475,14 +484,14 @@ class AgentTest {
 
         agent.prompt(listOf(UserMessage.ofText("again")))
         assertNull(agent.state.value.errorMessage)
-        assertEquals(4, agent.state.value.messages.size)
+        assertEquals(5, agent.state.value.messages.size)
     }
 
     @Test
     fun `abort while idle is a no-op`() = runTest {
         val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
         agent.abort() // must not throw
-        assertTrue(agent.state.value.messages.isEmpty())
+        assertFalse(agent.state.value.isStreaming)
     }
 
     @Test
@@ -602,8 +611,8 @@ class AgentTest {
         assertEquals(result, agent.state.value.streamingMessage)
         agent.processEvent(AgentEvent.MessageEnd(result))
         val messages = agent.state.value.messages
-        assertEquals(1, messages.size)
-        assertEquals(result, messages.single())
+        assertEquals(2, messages.size)
+        assertEquals(result, messages.last())
         assertNull(agent.state.value.streamingMessage)
     }
 
@@ -677,15 +686,16 @@ class AgentTest {
             collector.cancelAndJoin()
 
             val final = agent.state.value
-            assertEquals(4, final.messages.size)
-            assertTrue(final.messages[0] is UserMessage)
-            val toolCallMessage = final.messages[1] as AssistantMessage
+            assertEquals(5, final.messages.size)
+            assertTrue(final.messages[0] is SystemMessage)
+            assertTrue(final.messages[1] is UserMessage)
+            val toolCallMessage = final.messages[2] as AssistantMessage
             assertEquals(StopReason.TOOL_USE, toolCallMessage.stopReason)
             assertEquals("call-1", (toolCallMessage.content.single() as ToolCall).id)
-            val toolResult = final.messages[2] as ToolResultMessage
+            val toolResult = final.messages[3] as ToolResultMessage
             assertEquals("call-1", toolResult.toolCallId)
             assertEquals("get_weather", toolResult.toolName)
-            val followUp = final.messages[3] as AssistantMessage
+            val followUp = final.messages[4] as AssistantMessage
             assertEquals("It is sunny", (followUp.content.single() as TextContent).text)
             assertNull(final.streamingMessage)
             assertFalse(final.isStreaming)

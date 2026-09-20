@@ -173,10 +173,11 @@ class NativeAgentFactoryTest {
             .create(manager)
         val agent = result.session
         val messages = agent.state.value.messages
-        assertEquals(2, messages.size)
+        // The restored transcript is preceded by the session prompt baseline.
+        assertEquals(3, messages.size)
         assertEquals(
             "hello",
-            (messages[0] as UserMessage).content.single().let {
+            (messages[1] as UserMessage).content.single().let {
                 (it as TextContent).text
             }
         )
@@ -581,7 +582,8 @@ class NativeAgentFactoryTest {
             assertEquals("gpt-4.1", body["model"]!!.jsonPrimitive.content)
 
             val state = agent.state.value
-            assertEquals(4, state.messages.size)
+            // prompt baseline, ping, Hi, pong, reply
+            assertEquals(5, state.messages.size)
             val entries = agent.sessionManager.getEntries()
             // The factory seeds model_change/thinking entries for the new
             // session, so the switch's entry is the fifth.
@@ -590,7 +592,7 @@ class NativeAgentFactoryTest {
             )
             assertEquals(
                 "Hi",
-                ((state.messages[1] as AssistantMessage).content.single() as TextContent).text
+                ((state.messages[2] as AssistantMessage).content.single() as TextContent).text
             )
         }
     }

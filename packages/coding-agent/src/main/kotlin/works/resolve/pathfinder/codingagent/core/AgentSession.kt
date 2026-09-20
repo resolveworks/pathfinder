@@ -32,6 +32,7 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.clampThinkingLevel
@@ -185,8 +186,28 @@ class AgentSession(
         if (tools.isNotEmpty()) {
             agent.setTools(resolveTools(tools.map { it.definition.name }))
         }
-        agent.setSystemPrompt(buildSystemPrompt(agent.state.value.tools.toList(), cwd))
+        setAgentSystemPrompt(buildSystemPrompt(agent.state.value.tools.toList(), cwd))
         installAgentNextTurnRefresh()
+    }
+
+    /**
+     * Mechanical bridge for this sync wave: upstream's session now patches
+     * the prompt with system messages at prompt time (a later wave); until
+     * then the transcript's leading system message is rewritten with the
+     * built prompt. Tool declarations are left to the agent loop, which
+     * announces the delta before the next request.
+     */
+    private fun setAgentSystemPrompt(prompt: String) {
+        val messages = agent.state.value.messages
+        val rest = if (messages.firstOrNull() is SystemMessage) messages.drop(1) else messages
+        agent.replaceTranscript(
+            listOf(
+                SystemMessage(
+                    content = listOf(TextContent(prompt)),
+                    timestamp = clock.now().toEpochMilliseconds()
+                )
+            ) + rest
+        )
     }
 
     /**
@@ -200,10 +221,7 @@ class AgentSession(
         agent.prepareNextTurnWithContext = { turn ->
             val context = compactBeforeNextAssistantResponse(turn.context)
             AgentLoopTurnUpdate(
-                context = context.copy(
-                    systemPrompt = agent.state.value.systemPrompt,
-                    tools = agent.state.value.tools.toList()
-                ),
+                context = context.copy(tools = agent.state.value.tools.toList()),
                 model = agent.state.value.model,
                 thinkingLevel = agent.state.value.thinkingLevel
             )
@@ -248,7 +266,7 @@ class AgentSession(
     fun setActiveToolsByName(toolNames: List<String>) {
         val validTools = toolNames.mapNotNull(toolRegistry::get)
         agent.setTools(validTools)
-        agent.setSystemPrompt(buildSystemPrompt(validTools, cwd))
+        setAgentSystemPrompt(buildSystemPrompt(validTools, cwd))
     }
 
     private fun resolveTools(toolNames: List<String>): List<AgentTool> =

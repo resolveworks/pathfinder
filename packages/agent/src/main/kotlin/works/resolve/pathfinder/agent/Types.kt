@@ -15,6 +15,7 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
+import works.resolve.pathfinder.ai.utils.getCurrentSystemPrompt
 
 /**
  * How tool calls from a single assistant message are executed.
@@ -42,7 +43,8 @@ data class AgentLoopConfig(
      * Invoked after `turn_end` when the loop will continue, immediately
      * before the next turn starts (pi's same-named config callback, wired
      * from the Agent's `prepareNextTurnWithContext`). May return replacement
-     * context/model/thinkingLevel for the next provider request.
+     * context/model/thinkingLevel, or messages to append, for the next
+     * provider request.
      */
     val prepareNextTurn: (suspend (PrepareNextTurnContext) -> AgentLoopTurnUpdate?)? = null
 )
@@ -65,13 +67,22 @@ data class AgentState(
     val model: Model,
     val messages: List<Message> = emptyList(),
     val tools: List<AgentTool> = emptyList(),
-    val systemPrompt: String? = null,
     val streamingMessage: Message? = null,
     val pendingToolCalls: Set<String> = emptySet(),
     val isStreaming: Boolean = false,
     val errorMessage: String? = null,
     val thinkingLevel: ModelThinkingLevel = ModelThinkingLevel.OFF
-)
+) {
+    /**
+     * Current system prompt, replayed from the transcript's system messages.
+     *
+     * Read-only: to change the prompt, append a system message with `content`
+     * or `sections`. In the Agent's initial state, the constructor prompt
+     * seeds the leading system message.
+     */
+    val systemPrompt: String
+        get() = getCurrentSystemPrompt(messages)
+}
 
 /**
  * Final or partial result produced by a tool.
@@ -152,14 +163,11 @@ interface AgentTool {
     ): AgentToolResult
 }
 
-/**
- * Context snapshot passed into the low-level agent loop. Divergence: pi's
- * `systemPrompt` is required; this port keeps it nullable to match
- * [works.resolve.pathfinder.ai.Context.systemPrompt].
- */
+/** Context snapshot passed into the low-level agent loop. */
 data class AgentContext(
-    val systemPrompt: String? = null,
+    /** Transcript visible to the model. */
     val messages: List<Message> = emptyList(),
+    /** Tools available for execution in this run. */
     val tools: List<AgentTool> = emptyList()
 )
 
@@ -177,6 +185,8 @@ data class PrepareNextTurnContext(
  */
 data class AgentLoopTurnUpdate(
     val context: AgentContext? = null,
+    /** Messages to append before the next provider request, with normal lifecycle events. */
+    val messages: List<Message>? = null,
     val model: Model? = null,
     val thinkingLevel: ModelThinkingLevel? = null
 )
@@ -196,6 +206,7 @@ sealed class AgentEvent {
         val toolResults: List<ToolResultMessage> = emptyList()
     ) : AgentEvent()
 
+    /** Emitted for system, user, assistant, and tool-result messages. */
     data class MessageStart(val message: Message) : AgentEvent()
 
     /**

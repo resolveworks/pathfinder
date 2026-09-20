@@ -79,7 +79,7 @@ class AgentSessionCompactionTest {
                     model = model,
                     systemPrompt = "You are a test assistant.",
                     tools = listOf(largeTool),
-                    streamFn = StreamFn(faux.models::stream)
+                    streamFn = modelsStreamFn(faux.models)
                 ),
                 manager = SessionManager.create(
                     createTempDirectory("compaction-test").toFile(),
@@ -161,7 +161,7 @@ class AgentSessionCompactionTest {
             assistant("SUMMARY")
         )
         val session = AgentSession(
-            agent = Agent(faux.model, streamFn = StreamFn(faux.models::stream)),
+            agent = Agent(faux.model, streamFn = modelsStreamFn(faux.models)),
             manager = SessionManager.create(
                 createTempDirectory("compaction-test").toFile(),
                 ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
@@ -196,7 +196,7 @@ class AgentSessionCompactionTest {
         val faux = FauxProvider()
         faux.setResponses(assistant("hello"), assistant("SUMMARY"))
         val session = AgentSession(
-            agent = Agent(faux.model, streamFn = StreamFn(faux.models::stream)),
+            agent = Agent(faux.model, streamFn = modelsStreamFn(faux.models)),
             manager = SessionManager.create(
                 createTempDirectory("compaction-test").toFile(),
                 ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined

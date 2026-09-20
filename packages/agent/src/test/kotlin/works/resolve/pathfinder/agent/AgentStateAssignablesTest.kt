@@ -12,12 +12,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.getCurrentTools
 
 class AgentStateAssignablesTest {
 
@@ -57,24 +58,24 @@ class AgentStateAssignablesTest {
 
     @Test
     fun `setTools between runs reaches the next run's provider context`() = runTest {
-        val captured = CopyOnWriteArrayList<Context>()
+        val captured = CopyOnWriteArrayList<TranscriptContext>()
         val agent = Agent(model = model, streamFn = { _, context, _ ->
             captured.add(context)
             okStream()
         })
 
         agent.prompt(listOf(UserMessage.ofText("hi")))
-        assertEquals(0, captured[0].tools.size)
+        assertTrue(getCurrentTools(captured[0].messages).isEmpty())
 
         agent.setTools(listOf(fakeTool("a"), fakeTool("b")))
         agent.prompt(listOf(UserMessage.ofText("again")))
 
-        assertEquals(listOf("a", "b"), captured[1].tools.map { it.name })
+        assertEquals(listOf("a", "b"), getCurrentTools(captured[1].messages).map { it.name })
     }
 
     @Test
     fun `setTools during a run affects only later runs`() = runTest {
-        val captured = CopyOnWriteArrayList<Context>()
+        val captured = CopyOnWriteArrayList<TranscriptContext>()
         lateinit var agent: Agent
         agent = Agent(model = model, streamFn = { _, context, _ ->
             captured.add(context)
@@ -83,10 +84,10 @@ class AgentStateAssignablesTest {
         })
 
         agent.prompt(listOf(UserMessage.ofText("hi")))
-        assertEquals(0, captured[0].tools.size)
+        assertTrue(getCurrentTools(captured[0].messages).isEmpty())
 
         agent.prompt(listOf(UserMessage.ofText("again")))
-        assertEquals(listOf("late"), captured[1].tools.map { it.name })
+        assertEquals(listOf("late"), getCurrentTools(captured[1].messages).map { it.name })
     }
 
     @Test
@@ -99,54 +100,8 @@ class AgentStateAssignablesTest {
     }
 
     @Test
-    fun `setSystemPrompt between runs reaches the next run's provider context`() = runTest {
-        val captured = CopyOnWriteArrayList<Context>()
-        val agent = Agent(
-            model = model,
-            systemPrompt = "first",
-            streamFn = { _, context, _ ->
-                captured.add(context)
-                okStream()
-            }
-        )
-
-        agent.prompt(listOf(UserMessage.ofText("hi")))
-        assertEquals("first", captured[0].systemPrompt)
-
-        agent.setSystemPrompt("second")
-        assertEquals("second", agent.systemPrompt)
-        agent.prompt(listOf(UserMessage.ofText("again")))
-        assertEquals("second", captured[1].systemPrompt)
-
-        agent.setSystemPrompt(null)
-        agent.prompt(listOf(UserMessage.ofText("third")))
-        assertNull(captured[2].systemPrompt)
-    }
-
-    @Test
-    fun `setSystemPrompt during a run affects only later runs`() = runTest {
-        val captured = CopyOnWriteArrayList<Context>()
-        lateinit var agent: Agent
-        agent = Agent(
-            model = model,
-            systemPrompt = "first",
-            streamFn = { _, context, _ ->
-                captured.add(context)
-                agent.setSystemPrompt("mid-run")
-                okStream()
-            }
-        )
-
-        agent.prompt(listOf(UserMessage.ofText("hi")))
-        assertEquals("first", captured[0].systemPrompt)
-
-        agent.prompt(listOf(UserMessage.ofText("again")))
-        assertEquals("mid-run", captured[1].systemPrompt)
-    }
-
-    @Test
     fun `prompt snapshots messages and tools together from state`() = runTest {
-        val captured = CopyOnWriteArrayList<Context>()
+        val captured = CopyOnWriteArrayList<TranscriptContext>()
         val agent =
             Agent(model = model, tools = listOf(fakeTool("initial")), streamFn = { _, context, _ ->
                 captured.add(context)
@@ -154,8 +109,8 @@ class AgentStateAssignablesTest {
             })
 
         agent.prompt(listOf(UserMessage.ofText("hi")))
-        assertEquals(listOf("initial"), captured[0].tools.map { it.name })
-        assertEquals(1, captured[0].messages.size)
+        assertEquals(listOf("initial"), getCurrentTools(captured[0].messages).map { it.name })
+        assertEquals(2, captured[0].messages.size)
         assertTrue(agent.state.value.messages.size > 1)
     }
 }

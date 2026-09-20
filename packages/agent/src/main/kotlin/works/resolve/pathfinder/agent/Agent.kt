@@ -23,9 +23,14 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.toThinkingLevelOrNull
+import works.resolve.pathfinder.ai.utils.createInitialSystemMessage
+import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
+import works.resolve.pathfinder.ai.utils.getCurrentSystemPrompt
+import works.resolve.pathfinder.ai.utils.toToolDeclaration
 
 /**
  * Stateful wrapper around the low-level agent loop: owns the agent
@@ -39,6 +44,11 @@ import works.resolve.pathfinder.ai.toThinkingLevelOrNull
  */
 class Agent(
     model: Model,
+    /**
+     * Initial system prompt: seeds the transcript's leading system message
+     * (together with the initial tools). Read-only afterwards — change the
+     * prompt by appending a system message.
+     */
     systemPrompt: String? = null,
     val streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
     tools: List<AgentTool> = emptyList(),
@@ -75,7 +85,15 @@ class Agent(
     }
 
     private val _state = MutableStateFlow(
-        AgentState(model = model, tools = tools.toList(), systemPrompt = systemPrompt)
+        AgentState(
+            model = model,
+            messages =
+                createInitialSystemMessage(
+                    systemPrompt,
+                    tools.map { toToolDeclaration(it.definition) }
+                )?.let(::listOf) ?: emptyList(),
+            tools = tools.toList()
+        )
     )
     val state: StateFlow<AgentState> = _state.asStateFlow()
 
@@ -83,7 +101,8 @@ class Agent(
 
     val thinkingLevel: ModelThinkingLevel get() = _state.value.thinkingLevel
 
-    val systemPrompt: String? get() = _state.value.systemPrompt
+    /** Current system prompt, replayed from the transcript's system messages. */
+    val systemPrompt: String get() = _state.value.systemPrompt
 
     /**
      * Select the model for subsequent runs. Safe during an in-flight run:
@@ -100,9 +119,10 @@ class Agent(
     /**
      * Session-installed between-turns hook (pi's same-named Agent callback).
      * Consulted after `turn_end` when the loop will continue, before the next
-     * provider request; may return refreshed context/model/thinkingLevel. A
-     * session that installs it (returning the live `state` values, like pi's
-     * AgentSession) makes mid-run setter calls take effect on the next turn.
+     * provider request; may return refreshed context/model/thinkingLevel, or
+     * messages to append. A session that installs it (returning the live
+     * `state` values, like pi's AgentSession) makes mid-run setter calls take
+     * effect on the next turn.
      */
     var prepareNextTurnWithContext: (suspend (PrepareNextTurnContext) -> AgentLoopTurnUpdate?)? =
         null
@@ -122,18 +142,11 @@ class Agent(
      * Assign the tools for subsequent runs. Safe during an in-flight run:
      * like [setModel], the change reaches the next provider request only
      * through [prepareNextTurnWithContext] when a session installs it.
+     * Differences from the tools declared in the transcript are announced
+     * to the model with a system message before the next request.
      */
     fun setTools(tools: List<AgentTool>) {
         reduce { it.copy(tools = tools.toList()) }
-    }
-
-    /**
-     * Assign the system prompt for subsequent runs. Safe during an in-flight
-     * run: like [setModel], the change reaches the next provider request only
-     * through [prepareNextTurnWithContext] when a session installs it.
-     */
-    fun setSystemPrompt(value: String?) {
-        reduce { it.copy(systemPrompt = value) }
     }
 
     /**
@@ -197,7 +210,6 @@ class Agent(
                 reasoning = _state.value.thinkingLevel.toThinkingLevelOrNull()
             )
             val contextSnapshot = AgentContext(
-                systemPrompt = _state.value.systemPrompt,
                 messages = _state.value.messages.toList(),
                 tools = _state.value.tools.toList()
             )
@@ -248,27 +260,29 @@ class Agent(
      * committed message must be a user or tool-result message.
      *
      * Mirrors pi's `continue()` guards, in upstream order: reject an
-     * in-flight run, then an empty transcript, then an assistant tail.
-     * Upstream's assistant-tail branch first drains the steering and
-     * follow-up queues and continues from whichever has items; those queues
-     * are deliberately unported (no `steer()`/`followUp()` here), so an
-     * assistant tail is never continuable in this port. Upstream repeats the
-     * tail guards in `runAgentLoopContinue`; this port continues via
-     * `prompt(emptyList())`, so the guards live here only.
+     * in-flight run, then an empty or system-only transcript, then an
+     * assistant tail. Upstream's assistant-tail branch first drains the
+     * steering and follow-up queues and continues from whichever has items;
+     * those queues are deliberately unported (no `steer()`/`followUp()`
+     * here), so an assistant tail is never continuable in this port.
+     * Upstream repeats the tail guards in `runAgentLoopContinue`; this port
+     * continues via `prompt(emptyList())`, so the guards live here only.
      *
      * @throws IllegalStateException when a run is already active, the
-     *   transcript is empty, or its last message is an assistant message.
+     *   transcript is empty or system-only, or its last message is an
+     *   assistant message.
      */
     suspend fun continueRun() {
-        val lastMessage = synchronized(lock) {
+        val messages: List<Message> = synchronized(lock) {
             if (active) {
                 throw IllegalStateException(
                     "Agent is already processing. Wait for completion before continuing."
                 )
             }
-            _state.value.messages.lastOrNull()
+            _state.value.messages
         }
-        if (lastMessage == null) {
+        val lastMessage = messages.lastOrNull()
+        if (lastMessage == null || messages.all { it is SystemMessage }) {
             throw IllegalStateException("No messages to continue from")
         }
         if (lastMessage is AssistantMessage) {
@@ -309,13 +323,22 @@ class Agent(
         reduce { it.copy(messages = messages.toList()) }
     }
 
-    /** Clear the committed transcript and any error; only valid while idle. */
+    /**
+     * Clear the committed transcript and any error while retaining the
+     * replayed prompt/tool baseline; only valid while idle.
+     */
     fun resetTranscript() {
         synchronized(lock) {
             if (active) {
                 throw IllegalStateException("Cannot reset the transcript while a prompt is running")
             }
-            reduce { it.copy(messages = emptyList(), errorMessage = null) }
+            val baseline = getCurrentSystemMessage(_state.value.messages)
+            reduce {
+                it.copy(
+                    messages = if (baseline != null) listOf(baseline) else emptyList(),
+                    errorMessage = null
+                )
+            }
         }
     }
 
