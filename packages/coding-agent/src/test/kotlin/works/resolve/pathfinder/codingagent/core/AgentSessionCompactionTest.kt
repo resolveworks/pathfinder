@@ -95,7 +95,8 @@ class AgentSessionCompactionTest {
                         )
                     )
                 ),
-                models = faux.models
+                models = faux.models,
+                tools = listOf(largeTool)
             )
             var resumedRequest = emptyList<Message>()
             val order = CopyOnWriteArrayList<String>()
@@ -194,7 +195,7 @@ class AgentSessionCompactionTest {
     @Test
     fun `should emit compaction events during manual compaction`() = runTest {
         val faux = FauxProvider()
-        faux.setResponses(assistant("hello"), assistant("SUMMARY"))
+        faux.setResponses(assistant("hello"), assistant("SUMMARY"), assistant("SUMMARY"))
         val session = AgentSession(
             agent = Agent(faux.model, streamFn = modelsStreamFn(faux.models)),
             manager = SessionManager.create(
