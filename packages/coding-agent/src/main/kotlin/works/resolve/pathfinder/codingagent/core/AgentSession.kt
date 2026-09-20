@@ -186,24 +186,28 @@ class AgentSession(
         if (tools.isNotEmpty()) {
             agent.setTools(resolveTools(tools.map { it.definition.name }))
         }
-        setAgentSystemPrompt(buildSystemPrompt(agent.state.value.tools.toList(), cwd))
+        setAgentSystemPrompt(buildSystemPromptSections(agent.state.value.tools.toList(), cwd))
         installAgentNextTurnRefresh()
     }
 
     /**
-     * Mechanical bridge for this sync wave: upstream's session now patches
-     * the prompt with system messages at prompt time (a later wave); until
+     * Mechanical bridge for this sync wave: upstream's session declares the
+     * prompt as a leading system message's sections and patches it with
+     * mid-conversation system messages at prompt time (a later wave); until
      * then the transcript's leading system message is rewritten with the
-     * built prompt. Tool declarations are left to the agent loop, which
-     * announces the delta before the next request.
+     * built sections (content empty, preamble among the sections — the
+     * upstream leading-message shape, rendered by getSystemMessageText).
+     * Tool declarations are left to the agent loop, which announces the
+     * delta before the next request.
      */
-    private fun setAgentSystemPrompt(prompt: String) {
+    private fun setAgentSystemPrompt(sections: SystemPromptSections) {
         val messages = agent.state.value.messages
         val rest = if (messages.firstOrNull() is SystemMessage) messages.drop(1) else messages
         agent.replaceTranscript(
             listOf(
                 SystemMessage(
-                    content = listOf(TextContent(prompt)),
+                    content = emptyList(),
+                    sections = sections,
                     timestamp = clock.now().toEpochMilliseconds()
                 )
             ) + rest
@@ -266,7 +270,7 @@ class AgentSession(
     fun setActiveToolsByName(toolNames: List<String>) {
         val validTools = toolNames.mapNotNull(toolRegistry::get)
         agent.setTools(validTools)
-        setAgentSystemPrompt(buildSystemPrompt(validTools, cwd))
+        setAgentSystemPrompt(buildSystemPromptSections(validTools, cwd))
     }
 
     private fun resolveTools(toolNames: List<String>): List<AgentTool> =

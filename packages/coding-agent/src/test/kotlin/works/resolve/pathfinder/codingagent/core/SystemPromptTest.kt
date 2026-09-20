@@ -2,7 +2,6 @@ package works.resolve.pathfinder.codingagent.core
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import works.resolve.pathfinder.agent.AgentTool
@@ -31,19 +30,21 @@ class SystemPromptTest {
     }
 
     @Test
-    fun `empty active tools still yield the persona header`() {
+    fun `empty active tools still yield the preamble`() {
         val persona =
             "You are an expert coding assistant operating inside pathfinder, " +
                 "a coding agent harness. You help users by reading files, " +
                 "executing commands, editing code, and writing new files."
         assertEquals(
             persona + "\n\n" +
-                "Available tools:\n" +
+                "<tools>\n" +
                 "(none)\n" +
+                "</tools>\n" +
                 "\n" +
-                "Guidelines:\n" +
+                "<rules>\n" +
                 "- Be concise in your responses\n" +
-                "- Show file paths clearly when working with files",
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
             buildSystemPrompt(emptyList())
         )
     }
@@ -56,12 +57,14 @@ class SystemPromptTest {
                 "a coding agent harness. " +
                 "You help users by reading files, executing commands, editing code, " +
                 "and writing new files.\n\n" +
-                "Available tools:\n" +
+                "<tools>\n" +
                 "(none)\n" +
+                "</tools>\n" +
                 "\n" +
-                "Guidelines:\n" +
+                "<rules>\n" +
                 "- Be concise in your responses\n" +
-                "- Show file paths clearly when working with files",
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
             prompt
         )
     }
@@ -80,14 +83,16 @@ class SystemPromptTest {
                 "a coding agent harness. " +
                 "You help users by reading files, executing commands, editing code, " +
                 "and writing new files.\n\n" +
-                "Available tools:\n" +
+                "<tools>\n" +
                 "- bash: Run shell commands\n" +
                 "- read: Read file contents\n" +
+                "</tools>\n" +
                 "\n" +
-                "Guidelines:\n" +
+                "<rules>\n" +
                 "- Use bash for file operations like ls, rg, find\n" +
                 "- Be concise in your responses\n" +
-                "- Show file paths clearly when working with files",
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
             prompt
         )
     }
@@ -113,15 +118,17 @@ class SystemPromptTest {
                 "a coding agent harness. " +
                 "You help users by reading files, executing commands, editing code, " +
                 "and writing new files.\n\n" +
-                "Available tools:\n" +
+                "<tools>\n" +
                 "- web_search: Search the web\n" +
                 "- web_fetch: Fetch a URL\n" +
+                "</tools>\n" +
                 "\n" +
-                "Guidelines:\n" +
+                "<rules>\n" +
                 "- Cite sources\n" +
                 "- Prefer web_fetch over guessing URLs\n" +
                 "- Be concise in your responses\n" +
-                "- Show file paths clearly when working with files",
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
             prompt
         )
     }
@@ -136,12 +143,14 @@ class SystemPromptTest {
                 "a coding agent harness. " +
                 "You help users by reading files, executing commands, editing code, " +
                 "and writing new files.\n\n" +
-                "Available tools:\n" +
+                "<tools>\n" +
                 "(none)\n" +
+                "</tools>\n" +
                 "\n" +
-                "Guidelines:\n" +
+                "<rules>\n" +
                 "- Be concise in your responses\n" +
-                "- Show file paths clearly when working with files",
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
             prompt
         )
     }
@@ -159,13 +168,15 @@ class SystemPromptTest {
                 "a coding agent harness. " +
                 "You help users by reading files, executing commands, editing code, " +
                 "and writing new files.\n\n" +
-                "Available tools:\n" +
+                "<tools>\n" +
                 "- read: Read file contents\n" +
+                "</tools>\n" +
                 "\n" +
-                "Guidelines:\n" +
+                "<rules>\n" +
                 "- Use bash for file operations like ls, rg, find\n" +
                 "- Be concise in your responses\n" +
-                "- Show file paths clearly when working with files",
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
             prompt
         )
     }
@@ -180,12 +191,14 @@ class SystemPromptTest {
                 "a coding agent harness. " +
                 "You help users by reading files, executing commands, editing code, " +
                 "and writing new files.\n\n" +
-                "Available tools:\n" +
+                "<tools>\n" +
                 "- web_search: Search the web for facts\n" +
+                "</tools>\n" +
                 "\n" +
-                "Guidelines:\n" +
+                "<rules>\n" +
                 "- Be concise in your responses\n" +
-                "- Show file paths clearly when working with files",
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
             prompt
         )
     }
