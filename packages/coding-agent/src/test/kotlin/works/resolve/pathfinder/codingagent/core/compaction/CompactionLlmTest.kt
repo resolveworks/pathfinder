@@ -23,6 +23,7 @@ import works.resolve.pathfinder.ai.Provider
 import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ToolCall
@@ -316,6 +317,47 @@ class CompactionLlmTest {
         assertTrue("old-read.ts" in preparation.fileOps.read)
         assertTrue("old-edit.ts" in preparation.fileOps.edited)
         assertTrue("written.ts" in preparation.fileOps.edited)
+    }
+
+    @Test
+    fun `tokensBefore counts system entries as zero`() {
+        val system = createMessageEntry(
+            SystemMessage(content = listOf(TextContent("x".repeat(4000))))
+        )
+        val user = createMessageEntry(createUserMessage("old"), system.id)
+        // All-zero usage is not a valid usage source, forcing full estimation.
+        val assistant =
+            createMessageEntry(createAssistantMessage("a", createMockUsage(0, 0)), user.id)
+
+        val preparation = preparationValue(
+            prepareCompaction(
+                listOf<SessionEntry>(system, user, assistant),
+                CompactionSettings(enabled = true, reserveTokens = 2000, keepRecentTokens = 1)
+            )
+        )!!
+
+        // 1 token for the user text and 1 for the assistant text; the system
+        // message estimates 0 under pi's compaction-local estimator.
+        assertEquals(2, preparation.tokensBefore)
+    }
+
+    @Test
+    fun `tokensBefore estimates compaction summaries at summary length`() {
+        val summary = "x".repeat(400) // 100 tokens at summary/4
+        val kept = createMessageEntry(createUserMessage("old"))
+        val compaction = createCompactionEntry(summary, kept.id, firstKeptEntryId = kept.id)
+        val tail = createMessageEntry(createUserMessage("new"), compaction.id)
+
+        val preparation = preparationValue(
+            prepareCompaction(
+                listOf<SessionEntry>(kept, compaction, tail),
+                CompactionSettings(enabled = true, reserveTokens = 2000, keepRecentTokens = 1)
+            )
+        )!!
+
+        // Context entries are [compaction, kept, tail]: the summary counts
+        // summary.length/4 (100), not its wrapped user-message projection.
+        assertEquals(102, preparation.tokensBefore)
     }
 
     @Test

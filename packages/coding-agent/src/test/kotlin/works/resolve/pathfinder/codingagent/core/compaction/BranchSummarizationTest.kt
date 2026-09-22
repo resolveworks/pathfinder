@@ -145,6 +145,19 @@ class BranchSummarizationTest {
     }
 
     @Test
+    fun `dangling parent ids truncate the branch walk instead of failing`() {
+        val root = messageEntry(user("root"))
+        val orphan = messageEntry(user("orphan"), parentId = "missing")
+        val session = sessionOf(listOf(root, orphan), root.id)
+
+        val result =
+            collectEntriesForBranchSummary(session, oldLeafId = orphan.id, targetId = root.id)
+
+        assertNull(result.commonAncestorId)
+        assertEquals(listOf<SessionEntry>(orphan), result.entries)
+    }
+
+    @Test
     fun `preparation projects message branch_summary and compaction entries`() {
         val root = messageEntry(user("root"))
         val summary = branchSummaryEntry("explored elsewhere", root.id, fromId = "elsewhere")
@@ -191,7 +204,9 @@ class BranchSummarizationTest {
                 COMPACTION_SUMMARY_PREFIX.trimStart().substringBefore("<")
             )
         )
-        assertEquals(preparation.messages.map(::estimateTokens).sum(), preparation.totalTokens)
+        // Entry-level estimates (pi's summary roles): root 1 + branch summary 5
+        // + answer 2 + compaction 3, each ceil(summary.length / 4).
+        assertEquals(11, preparation.totalTokens)
     }
 
     @Test
@@ -234,9 +249,9 @@ class BranchSummarizationTest {
         val userEntry = messageEntry(user(big))
         val summary = branchSummaryEntry(big.padEnd(500, 'y'), userEntry.id, fromId = "x")
 
-        // Budget 60: the branch summary (~125 tokens) exceeds it, but the
-        // running total is 0 < 54 (90%), so it is kept and the walk stops —
-        // the older user message is dropped.
+        // Budget 60: the branch summary (125 tokens at summary/4) exceeds it,
+        // but the running total is 0 < 54 (90%), so it is kept and the walk
+        // stops — the older user message is dropped.
         val preparation = prepareBranchEntries(listOf(userEntry, summary), tokenBudget = 60)
 
         assertEquals(1, preparation.messages.size)
