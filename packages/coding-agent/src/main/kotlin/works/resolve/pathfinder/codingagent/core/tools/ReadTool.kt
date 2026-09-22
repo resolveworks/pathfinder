@@ -15,6 +15,7 @@ import works.resolve.pathfinder.ai.StrictJsonSchemaMode
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.utils.double
+import works.resolve.pathfinder.ai.utils.jsNumber
 import works.resolve.pathfinder.ai.utils.str
 
 class ReadToolOptions(
@@ -109,17 +110,6 @@ class ReadTool internal constructor(private val cwd: String, private val options
 
     override val promptGuidelines: List<String> =
         listOf("Use read to examine files instead of cat or sed.")
-
-    override fun validateArguments(arguments: JsonObject): JsonObject {
-        requireString(arguments, "path")
-        arguments.double("offset")?.let { offset ->
-            require(offset.isFinite()) { "read: 'offset' must be a number" }
-        }
-        arguments.double("limit")?.let { limit ->
-            require(limit.isFinite()) { "read: 'limit' must be a number" }
-        }
-        return arguments
-    }
 
     override suspend fun execute(
         toolCallId: String,
@@ -258,21 +248,3 @@ class ReadTool internal constructor(private val cwd: String, private val options
 }
 
 fun createReadTool(cwd: String, options: ReadToolOptions): AgentTool = ReadTool(cwd, options)
-
-internal fun requireString(arguments: JsonObject, key: String) {
-    val value = arguments[key]
-    if (value == null) {
-        throw IllegalArgumentException("missing required argument '$key'")
-    }
-    val primitive = value as? JsonPrimitive
-    if (primitive == null || !primitive.isString) {
-        throw IllegalArgumentException("'$key' must be a string")
-    }
-}
-
-/** Renders a number the way JavaScript template literals do (5, not 5.0). */
-internal fun jsNumber(value: Double?): String = when {
-    value == null -> "null"
-    value == value.toLong().toDouble() -> value.toLong().toString()
-    else -> value.toString()
-}

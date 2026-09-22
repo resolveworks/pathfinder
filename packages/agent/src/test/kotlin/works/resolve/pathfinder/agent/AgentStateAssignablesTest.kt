@@ -5,7 +5,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -31,9 +32,9 @@ class AgentStateAssignablesTest {
     )
 
     private fun fakeTool(name: String): AgentTool = object : AgentTool {
-        override val definition = Tool(name, "fake $name", JsonPrimitive("object"))
+        override val definition =
+            Tool(name, "fake $name", buildJsonObject { put("type", "object") })
         override val label = name
-        override fun validateArguments(arguments: JsonObject) = arguments
         override suspend fun execute(
             toolCallId: String,
             arguments: JsonObject,

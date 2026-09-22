@@ -71,12 +71,17 @@ interface BashOperations {
      *
      * [onData] is the merge point for stdout and stderr: implementations
      * forward interleaved chunks in arrival order, and the shell just
-     * accumulates. [timeout] is in seconds and may be fractional, reaching the
-     * operation raw as in pi. Implementations must
-     * propagate coroutine cancellation, and may fail with message "aborted" or
-     * "timeout:<seconds>" to preserve pi's local-shell error contract. Pi's
-     * `env` member is deliberately absent: its only producers/consumers are
-     * the unported session-environment feature and local shell machinery.
+     * accumulates. [timeout] is in seconds and may be fractional, received
+     * raw like in pi — implementations own its validation and enforcement
+     * the way pi's local shell operations do: a non-finite, non-positive, or
+     * oversized value fails with pi's "Invalid timeout…" messages, and an
+     * expired timeout fails with message "timeout:<seconds>" so the shell
+     * renders pi's "Command timed out after N seconds" status. A null
+     * timeout means no deadline. Implementations must propagate coroutine
+     * cancellation, and may fail with message "aborted" to preserve pi's
+     * local-shell error contract. Pi's `env` member is deliberately absent:
+     * its only producers/consumers are the unported session-environment
+     * feature and local shell machinery.
      */
     suspend fun exec(
         command: String,

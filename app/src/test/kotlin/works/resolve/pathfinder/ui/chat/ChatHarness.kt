@@ -34,6 +34,8 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.After
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
@@ -177,9 +179,14 @@ internal class ChatHarness(
 
     private val fakeWebSearchTool: AgentTool = object : AgentTool {
         override val definition =
-            Tool(BraveWebSearchTool.NAME, "fake web search", JsonPrimitive("object"))
+            Tool(
+                BraveWebSearchTool.NAME,
+                "fake web search",
+                buildJsonObject {
+                    put("type", "object")
+                }
+            )
         override val label = "Web Search"
-        override fun validateArguments(arguments: JsonObject) = arguments
         override suspend fun execute(
             toolCallId: String,
             arguments: JsonObject,

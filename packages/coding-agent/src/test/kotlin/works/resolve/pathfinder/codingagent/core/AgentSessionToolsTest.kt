@@ -46,7 +46,6 @@ class AgentSessionToolsTest {
         override val promptGuidelines: List<String> = emptyList()
     ) : AgentTool {
         override val label: String = definition.name
-        override fun validateArguments(arguments: JsonObject) = arguments
         override suspend fun execute(
             toolCallId: String,
             arguments: JsonObject,

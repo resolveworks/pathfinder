@@ -12,9 +12,10 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
 import works.resolve.pathfinder.agent.AgentTool
@@ -190,11 +191,9 @@ class NativeAgentFactoryTest {
             override val definition = works.resolve.pathfinder.ai.Tool(
                 "t",
                 "test",
-                JsonPrimitive("object")
+                buildJsonObject { put("type", "object") }
             )
             override val label = "t"
-            override fun validateArguments(arguments: kotlinx.serialization.json.JsonObject) =
-                arguments
             override suspend fun execute(
                 toolCallId: String,
                 arguments: kotlinx.serialization.json.JsonObject,
@@ -224,12 +223,11 @@ class NativeAgentFactoryTest {
         override val definition: Tool = Tool(
             "web_search",
             "search",
-            JsonPrimitive("object")
+            buildJsonObject { put("type", "object") }
         ),
         override val label: String = "web_search",
         override val promptSnippet: String? = "does web_search"
     ) : AgentTool {
-        override fun validateArguments(arguments: kotlinx.serialization.json.JsonObject) = arguments
         override suspend fun execute(
             toolCallId: String,
             arguments: kotlinx.serialization.json.JsonObject,

@@ -3,7 +3,6 @@ package works.resolve.pathfinder.agent
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -97,9 +96,8 @@ class AgentToolTest {
     @Test
     fun `optional interface members default to run-level mode and no prompt contributions`() {
         val tool = object : AgentTool {
-            override val definition = Tool("t", "d", JsonPrimitive("object"))
+            override val definition = Tool("t", "d", buildJsonObject { put("type", "object") })
             override val label = "t"
-            override fun validateArguments(arguments: JsonObject) = arguments
             override suspend fun execute(
                 toolCallId: String,
                 arguments: JsonObject,
@@ -126,9 +124,14 @@ class AgentToolTest {
             lateinit var captured: AgentToolUpdateCallback
             val tool = object : AgentTool {
                 override val definition =
-                    Tool("progress_tool", "reports progress", JsonPrimitive("object"))
+                    Tool(
+                        "progress_tool",
+                        "reports progress",
+                        buildJsonObject {
+                            put("type", "object")
+                        }
+                    )
                 override val label = "progress_tool"
-                override fun validateArguments(arguments: JsonObject) = arguments
                 override suspend fun execute(
                     toolCallId: String,
                     arguments: JsonObject,
@@ -175,9 +178,9 @@ class AgentToolTest {
     @Test
     fun `thrown failure is the error channel and carries pi's empty details object`() = runTest {
         val tool = object : AgentTool {
-            override val definition = Tool("shell", "runs a command", JsonPrimitive("object"))
+            override val definition =
+                Tool("shell", "runs a command", buildJsonObject { put("type", "object") })
             override val label = "shell"
-            override fun validateArguments(arguments: JsonObject) = arguments
             override suspend fun execute(
                 toolCallId: String,
                 arguments: JsonObject,

@@ -68,12 +68,6 @@ class WriteTool internal constructor(
     override val promptGuidelines: List<String> =
         listOf("Use write only for new files or complete rewrites.")
 
-    override fun validateArguments(arguments: JsonObject): JsonObject {
-        requireString(arguments, "path")
-        requireString(arguments, "content")
-        return arguments
-    }
-
     override suspend fun execute(
         toolCallId: String,
         arguments: JsonObject,

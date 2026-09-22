@@ -3,7 +3,8 @@ package works.resolve.pathfinder.codingagent.core
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.agent.AgentToolUpdateCallback
@@ -17,10 +18,9 @@ class SystemPromptTest {
         override val promptSnippet: String? = null,
         override val promptGuidelines: List<String> = emptyList()
     ) : AgentTool {
-        override val definition = Tool(name, "$name tool", JsonPrimitive("object"))
+        override val definition =
+            Tool(name, "$name tool", buildJsonObject { put("type", "object") })
         override val label = name
-
-        override fun validateArguments(arguments: JsonObject) = arguments
 
         override suspend fun execute(
             toolCallId: String,

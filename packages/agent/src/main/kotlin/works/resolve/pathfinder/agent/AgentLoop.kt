@@ -34,6 +34,7 @@ import works.resolve.pathfinder.ai.utils.getToolStateChanges
 import works.resolve.pathfinder.ai.utils.normalizeContext
 import works.resolve.pathfinder.ai.utils.parseStreamingJson
 import works.resolve.pathfinder.ai.utils.toToolDeclaration
+import works.resolve.pathfinder.ai.utils.validateToolArguments
 
 /**
  * Runs the agent loop: streams assistant turns and executes each response's
@@ -818,12 +819,13 @@ private fun shouldTerminateToolBatch(finalizedCalls: List<FinalizedToolCallOutco
     finalizedCalls.isNotEmpty() && finalizedCalls.all { it.result.terminate == true }
 
 /**
- * Finds the tool by exact name and validates [ToolCall.arguments]. Any
- * failure — missing tool, or a throw from `validateArguments` — becomes an
- * immediate error result.
+ * Finds the tool by exact name, applies its optional `prepareArguments`
+ * shim, and validates the arguments against the tool's schema — the port of
+ * pi's `validateToolArguments` (agent-loop.ts parity). Any failure — missing
+ * tool, or a throw from either hook — becomes an immediate error result.
  *
- * The validated map is copied so a tool cannot mutate transcript-owned
- * values.
+ * The validated map is a fresh object, so a tool cannot mutate
+ * transcript-owned values.
  */
 private fun prepareToolCall(context: AgentContext, toolCall: ToolCall): ToolCallPreparation {
     val tool = context.tools.firstOrNull { it.definition.name == toolCall.name }
@@ -833,11 +835,16 @@ private fun prepareToolCall(context: AgentContext, toolCall: ToolCall): ToolCall
         )
 
     return try {
-        val validated = tool.validateArguments(toolCall.arguments)
+        val preparedArguments =
+            tool.prepareArguments?.invoke(toolCall.arguments) ?: toolCall.arguments
+        val validated = validateToolArguments(
+            tool.definition,
+            toolCall.copy(arguments = preparedArguments)
+        )
         PreparedToolCall(
             toolCall = toolCall,
             tool = tool,
-            arguments = JsonObject(validated)
+            arguments = validated
         )
     } catch (error: Throwable) {
         ImmediateToolCallOutcome(
@@ -872,9 +879,7 @@ private suspend fun executeAndFinalizePreparedToolCall(
                 AgentEvent.ToolExecutionUpdate(
                     toolCallId = prepared.toolCall.id,
                     toolName = prepared.toolCall.name,
-                    // Pi passes the call's original arguments; this port passes
-                    // the validated object.
-                    arguments = prepared.arguments,
+                    arguments = prepared.toolCall.arguments,
                     partialResult = partialResult
                 )
             )

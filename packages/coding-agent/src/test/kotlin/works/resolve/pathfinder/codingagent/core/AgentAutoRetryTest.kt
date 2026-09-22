@@ -15,7 +15,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -230,9 +231,8 @@ class AgentAutoRetryTest {
             )
             val fakeTool = object : AgentTool {
                 override val definition =
-                    Tool("get_weather", "fake weather", JsonPrimitive("object"))
+                    Tool("get_weather", "fake weather", buildJsonObject { put("type", "object") })
                 override val label = "get_weather"
-                override fun validateArguments(arguments: JsonObject) = arguments
                 override suspend fun execute(
                     toolCallId: String,
                     arguments: JsonObject,
