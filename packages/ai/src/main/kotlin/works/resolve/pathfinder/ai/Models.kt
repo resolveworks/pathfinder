@@ -2,9 +2,9 @@ package works.resolve.pathfinder.ai
 
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.last
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ChatApi
@@ -15,8 +15,11 @@ import works.resolve.pathfinder.ai.ModelCostRates
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.auth.Credential
+import works.resolve.pathfinder.ai.auth.ModelsError
+import works.resolve.pathfinder.ai.auth.ModelsErrorCode
 import works.resolve.pathfinder.ai.auth.ProviderAuth
 import works.resolve.pathfinder.ai.mergeHeaders
 import works.resolve.pathfinder.ai.providers.CatalogProvider
@@ -122,19 +125,15 @@ class Models(providers: List<Provider>, private val clock: Clock = Clock.System)
 
     /**
      * Whether auth is configured for a provider. Reads the stored credential
-     * lazily per call, so a rotated key is observed on the next check; a
-     * resolver failure counts as unconfigured (false), not an exception.
+     * lazily per call, so a rotated key is observed on the next check; an
+     * unknown or resolver-less provider counts as unconfigured. Resolution
+     * failures propagate as [ModelsError] (`auth`), like pi's checkAuth on
+     * credential-store read and API-key check failures.
      */
     suspend fun checkAuth(providerId: String): Boolean {
         val provider = byId[providerId] ?: return false
         val resolver = provider.authResolver ?: return false
-        return try {
-            resolver(null, emptyMap()) != null
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            false
-        }
+        return resolver(null, emptyMap()) != null
     }
 
     /** pi's `isUsingOAuth`: whether the provider authenticates via OAuth. */
@@ -146,123 +145,120 @@ class Models(providers: List<Provider>, private val clock: Clock = Clock.System)
     }
 
     private fun requireProvider(model: Model): Provider = byId[model.provider]
-        ?: throw IllegalArgumentException("Unknown provider: ${model.provider}")
+        ?: throw ModelsError(ModelsErrorCode.PROVIDER, "Unknown provider: ${model.provider}")
+
+    /**
+     * pi's lazyStream setup: provider lookup, auth resolution, and adapter
+     * dispatch. Throws [ModelsError] (or the adapter's own setup exception)
+     * for [stream] to convert into a terminal error event.
+     */
+    private suspend fun resolveApiStream(
+        model: Model,
+        transcript: TranscriptContext,
+        options: SimpleStreamOptions
+    ): Flow<AssistantMessageEvent> {
+        val provider = requireProvider(model)
+        // Resolve the credential inside setup so stored-credential lookups can
+        // suspend without making stream() a suspend call.
+        val auth = provider.authResolver?.invoke(options.apiKey, options.env)
+        // A provider with an auth resolver owns auth semantics: a null
+        // resolution always means unconfigured, even with an explicit
+        // request key (never fall back to a raw Authorization). Only a
+        // resolver-less provider may use a raw explicit apiKey directly.
+        if (auth == null && (provider.authResolver != null || options.apiKey == null)) {
+            throw ModelsError(
+                ModelsErrorCode.AUTH,
+                "Provider is not configured: ${model.provider}"
+            )
+        }
+        val api = provider.apis[model.api]
+            ?: throw ModelsError(
+                ModelsErrorCode.STREAM,
+                "Provider ${provider.id} has no API implementation for \"${model.api}\""
+            )
+        val requestModel = auth?.baseUrl?.let { model.copy(baseUrl = it) } ?: model
+        val merged = options.copy(
+            apiKey = options.apiKey ?: auth?.apiKey,
+            env = if (auth == null || auth.env.isEmpty()) {
+                options.env
+            } else {
+                auth.env + options.env
+            },
+            headers = mergeHeaders(auth?.headers ?: emptyMap(), options.headers)
+        )
+        return api.streamSimple(requestModel, transcript, merged)
+    }
 
     /**
      * Starts a chat stream for [model]: the model's provider must be
-     * registered; unknown providers throw immediately. Auth is resolved
-     * lazily inside the flow and merged with [options]; the explicit
-     * [options] apiKey/env still pass through the provider's auth resolver so
-     * custom auth shaping (Cloudflare's header auth) applies to them, without
-     * reading stored credentials. Explicit request fields win: env values
-     * merge per field with the request on top, and resolved auth headers
-     * merge under explicit request headers case-insensitively. An absent or
-     * failing credential resolution surfaces as a single safe terminal
-     * [AssistantMessageEvent.Error] event, not a mid-stream exception.
+     * registered and implement the model's API. Auth is resolved lazily
+     * inside the flow and merged with [options]; the explicit [options]
+     * apiKey/env still pass through the provider's auth resolver so custom
+     * auth shaping (Cloudflare's header auth) applies to them, without
+     * reading stored credentials. Explicit request fields win: an explicit
+     * apiKey overrides the resolved one, env values merge per field with the
+     * request on top, and resolved auth headers merge under explicit request
+     * headers case-insensitively.
+     *
+     * pi's lazyStream contract: setup failures — unknown provider, absent or
+     * failing credential resolution, a missing API implementation, or a
+     * synchronous setup throw from the API adapter (streamSimple may throw
+     * for missing request auth) — surface as a single terminal
+     * [AssistantMessageEvent.Error] event carrying the ModelsError message,
+     * never as an exception from this method or the returned flow.
      */
     fun stream(
         model: Model,
         context: Context,
         options: SimpleStreamOptions = SimpleStreamOptions()
     ): Flow<AssistantMessageEvent> {
-        val provider = requireProvider(model)
-        val api = provider.apis[model.api]
-            ?: throw IllegalArgumentException(
-                "Provider '${provider.id}' has no API implementation for '${model.api}'" +
-                    " (model '${model.id}')"
-            )
         val transcript = normalizeContext(context)
         return flow {
-            // Resolve the credential lazily inside the flow so stored-credential
-            // lookups can suspend without making stream() a suspend call.
-            val auth = try {
-                provider.authResolver?.invoke(options.apiKey, options.env)
+            val apiStream = try {
+                resolveApiStream(model, transcript, options)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                emitAuthError(
-                    model,
-                    provider,
-                    "Failed to resolve stored credential for provider '${provider.id}'"
-                )
+                emit(AssistantMessageEvent.Error(StopReason.ERROR, setupError(model, error)))
                 return@flow
             }
-            // A provider with an auth resolver owns auth semantics: a null
-            // resolution always means unconfigured, even with an explicit
-            // request key (never fall back to a raw Authorization). Only a
-            // resolver-less provider may use a raw explicit apiKey directly.
-            if (auth == null && (provider.authResolver != null || options.apiKey == null)) {
-                emitAuthError(model, provider, "Provider '${provider.id}' is not configured")
-                return@flow
-            }
-            val authHeaders = auth?.headers ?: emptyMap()
-            // An explicit or resolved key normally wins per-field, but a
-            // header-shaped resolution (auth.apiKey == null with headers, e.g.
-            // Cloudflare) consumed the key into those headers; there is no
-            // default apiKey/Authorization path left to fill.
-            val mergedApiKey = when {
-                auth != null && auth.apiKey == null && authHeaders.isNotEmpty() -> null
-                else -> options.apiKey ?: auth?.apiKey
-            }
-            val requestModel = auth?.baseUrl?.let { model.copy(baseUrl = it) } ?: model
-            val merged = options.copy(
-                apiKey = mergedApiKey,
-                env = if (auth == null || auth.env.isEmpty()) {
-                    options.env
-                } else {
-                    auth.env + options.env
-                },
-                headers = mergeHeaders(authHeaders, options.headers)
-            )
-            api.streamSimple(requestModel, transcript, merged).collect { emit(it) }
+            apiStream.collect { emit(it) }
         }
     }
 
     /**
      * Collects [stream] to its terminal AssistantMessage. A terminal `Error`
      * event is returned as the error AssistantMessage, so callers inspect
-     * [AssistantMessage.stopReason] to distinguish failure from success; a
-     * stream that ends without a terminal event throws.
+     * [AssistantMessage.stopReason] to distinguish failure from success;
+     * like pi's `result()` promise, a stream that ends without a terminal
+     * event never resolves.
      */
     suspend fun completeSimple(
         model: Model,
         context: Context,
         options: SimpleStreamOptions = SimpleStreamOptions()
     ): AssistantMessage {
-        var terminal: AssistantMessage? = null
+        val terminal = CompletableDeferred<AssistantMessage>()
         stream(model, context, options).collect { event ->
             when (event) {
-                is AssistantMessageEvent.Done -> terminal = event.message
-                is AssistantMessageEvent.Error -> terminal = event.error
+                is AssistantMessageEvent.Done -> terminal.complete(event.message)
+                is AssistantMessageEvent.Error -> terminal.complete(event.error)
                 else -> {}
             }
         }
-        return checkNotNull(terminal) {
-            "Stream for model '${model.id}' ended without a terminal Done/Error event"
-        }
+        return terminal.await()
     }
 
-    private suspend fun kotlinx.coroutines.flow.FlowCollector<AssistantMessageEvent>.emitAuthError(
-        model: Model,
-        provider: Provider,
-        message: String
-    ) {
-        emit(
-            AssistantMessageEvent.Error(
-                StopReason.ERROR,
-                AssistantMessage(
-                    content = emptyList(),
-                    api = model.api,
-                    provider = provider.id,
-                    model = model.id,
-                    stopReason = StopReason.ERROR,
-                    // Safe generic message: no exception or credential text.
-                    errorMessage = message,
-                    timestamp = clock.now().toEpochMilliseconds()
-                )
-            )
-        )
-    }
+    /** pi's lazyStream createSetupErrorMessage: zeroed usage, error stop. */
+    private fun setupError(model: Model, error: Exception): AssistantMessage = AssistantMessage(
+        content = emptyList(),
+        api = model.api,
+        provider = model.provider,
+        model = model.id,
+        stopReason = StopReason.ERROR,
+        errorMessage = error.message,
+        timestamp = clock.now().toEpochMilliseconds()
+    )
 }
 
 /**

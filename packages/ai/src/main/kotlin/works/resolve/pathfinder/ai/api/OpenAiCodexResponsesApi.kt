@@ -535,8 +535,9 @@ class OpenAICodexResponsesApi(
         context: TranscriptContext,
         options: works.resolve.pathfinder.ai.SimpleStreamOptions
     ): Flow<AssistantMessageEvent> {
-        val apiKey = options.apiKey
-            ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
+        // pi wraps every API in lazyStream, so streamSimple setup failures
+        // (including missing auth) become terminal error events in-stream;
+        // the stream() body's own key check provides that here.
         val clamped = options.reasoning?.let {
             works.resolve.pathfinder.ai.clampThinkingLevel(model, it.toModelThinkingLevel())
         }

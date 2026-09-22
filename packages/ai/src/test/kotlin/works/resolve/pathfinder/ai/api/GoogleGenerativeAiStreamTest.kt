@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ai.api
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -22,6 +23,7 @@ import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.ProviderAuthException
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
@@ -244,6 +246,16 @@ class GoogleGenerativeAiStreamTest {
             .toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.single())
         assertEquals("No API key for provider: google", error.error.errorMessage)
+        assertTrue(transport.requests.isEmpty())
+    }
+
+    @Test
+    fun `streamSimple without an api key throws synchronously`() {
+        val transport = FakeTransport()
+        val error = assertFailsWith<ProviderAuthException> {
+            api(transport).streamSimple(model, context, SimpleStreamOptions())
+        }
+        assertEquals("No API key for provider: google", error.message)
         assertTrue(transport.requests.isEmpty())
     }
 
