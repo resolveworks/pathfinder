@@ -82,12 +82,13 @@ class XaiOAuthAuth(private val http: OAuthHttpClient, private val clock: Clock =
     }
 
     /**
-     * RFC 8628 allows interval 0 (no minimum wait); non-positive or
-     * malformed values fall back to `null` so the poller applies its
-     * default instead of failing.
+     * RFC 8628 allows interval 0 (no minimum wait); non-positive, malformed,
+     * or non-finite values (`1e999`) fall back to `null` so the poller applies
+     * its default instead of failing — pi's `Number.isFinite` gate.
      */
     private fun parseDeviceCode(body: JsonObject): XaiDeviceCode {
-        val intervalSeconds = body.strictDouble("interval")?.takeIf { it > 0 }
+        val intervalSeconds = body.strictDouble("interval")
+            ?.takeIf { it.isFinite() && it > 0 }
         val verificationUriComplete =
             body.string("verification_uri_complete")
                 ?.takeIf { it.isNotEmpty() }
@@ -209,8 +210,8 @@ class XaiOAuthAuth(private val http: OAuthHttpClient, private val clock: Clock =
     }
 
     private fun positiveNumber(body: JsonObject, field: String): Long {
-        val value = body.strictDouble(field) ?: throw invalidField(field)
-        if (value <= 0) throw invalidField(field)
+        val value = body.strictDouble(field)
+        if (value == null || !value.isFinite() || value <= 0) throw invalidField(field)
         return value.toLong()
     }
 

@@ -1,12 +1,12 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
-import java.net.URLDecoder
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -22,7 +22,11 @@ internal data class LoopbackCallbackRequest(
     val query: Map<String, String>
 )
 
-internal data class LoopbackCallbackResponse(val status: Int, val html: String)
+internal data class LoopbackCallbackResponse(
+    val status: Int,
+    val body: String,
+    val contentType: String = "text/html; charset=utf-8"
+)
 
 /** Handle over a running loopback OAuth callback server. */
 internal interface LoopbackCallbackHandle<R> {
@@ -49,6 +53,10 @@ internal interface LoopbackCallbackHandle<R> {
  * Divergences from pi:
  * - Responses always carry `Cache-Control: no-store`; upstream sets it only
  *   in OpenRouter's `sendHtml`.
+ * - Handler errors are answered with each flow's upstream 500 shape via
+ *   [handlerError]; upstream OpenRouter serves nothing on a handler throw
+ *   (the error escapes its async wrapper), so its default here is the
+ *   shared error page.
  * - Android apps share the device network namespace, so a socket bound on
  *   `127.0.0.1` is reachable from the on-device browser, which allows
  *   cleartext `http://localhost`.
@@ -68,6 +76,15 @@ internal class LoopbackOAuthServer<R>(
     val host: String = "127.0.0.1",
     /** Optional Android foreground gate for `waitForResult`; `null` = pi parity. */
     val gate: OAuthForegroundGate? = null,
+    /**
+     * Served when [handler] throws — each flow's upstream 500 shape:
+     * Anthropic answers `text/plain` "Internal error", Codex and OpenRouter
+     * the shared error page.
+     */
+    val handlerError: LoopbackCallbackResponse = LoopbackCallbackResponse(
+        500,
+        oauthErrorHtml("Internal error while processing OAuth callback.")
+    ),
     /**
      * Invoked per request. May call [settle] at most once, from any coroutine
      * (OpenRouter settles only after an in-handler token exchange completes);
@@ -162,10 +179,7 @@ internal class LoopbackOAuthServer<R>(
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                LoopbackCallbackResponse(
-                    500,
-                    oauthErrorHtml("Internal error while processing OAuth callback.")
-                )
+                handlerError
             }
             writeResponse(s, response)
         }
@@ -198,14 +212,14 @@ internal class LoopbackOAuthServer<R>(
     }
 
     private fun writeResponse(socket: Socket, response: LoopbackCallbackResponse) {
-        val body = response.html.toByteArray(Charsets.UTF_8)
+        val body = response.body.toByteArray(Charsets.UTF_8)
         val head = buildString {
             append(
                 "HTTP/1.1 "
             ).append(
                 response.status
             ).append(' ').append(reasonPhrase(response.status)).append("\r\n")
-            append("Content-Type: text/html; charset=utf-8\r\n")
+            append("Content-Type: ").append(response.contentType).append("\r\n")
             append("Content-Length: ").append(body.size).append("\r\n")
             append("Cache-Control: no-store\r\n")
             append("Connection: close\r\n")
@@ -255,19 +269,53 @@ internal fun parseQuery(rawQuery: String): Map<String, String> {
         val eq = pair.indexOf('=')
         val key = if (eq >= 0) pair.substring(0, eq) else pair
         val value = if (eq >= 0) pair.substring(eq + 1) else ""
-        val decodedKey = urlDecode(key) ?: continue
+        val decodedKey = urlDecode(key)
         if (!map.containsKey(decodedKey)) {
-            map[decodedKey] = urlDecode(value) ?: ""
+            map[decodedKey] = urlDecode(value)
         }
     }
     return map
 }
 
-/** `URLSearchParams` percent + form decoding; `null` when the input is malformed. */
-private fun urlDecode(value: String): String? = try {
-    URLDecoder.decode(value, Charsets.UTF_8)
-} catch (_: IllegalArgumentException) {
-    null
+/**
+ * WHATWG `application/x-www-form-urlencoded` decoding, matching
+ * `URLSearchParams`: `+` becomes a space, valid escapes decode as UTF-8
+ * (malformed sequences become U+FFFD), and anything else — an invalid escape
+ * like `%zz` or a trailing `%` — passes through unchanged.
+ */
+private fun urlDecode(value: String): String {
+    val out = ByteArrayOutputStream()
+    var index = 0
+    while (index < value.length) {
+        val c = value[index]
+        when {
+            c == '+' -> {
+                out.write(' '.code)
+                index++
+            }
+
+            c == '%' && index + 2 < value.length &&
+                isHex(value[index + 1]) &&
+                isHex(value[index + 2]) -> {
+                out.write(hexDigit(value[index + 1]) * 16 + hexDigit(value[index + 2]))
+                index += 3
+            }
+
+            else -> {
+                out.write(c.toString().toByteArray(Charsets.UTF_8))
+                index++
+            }
+        }
+    }
+    return out.toString(Charsets.UTF_8)
+}
+
+private fun isHex(c: Char): Boolean = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
+
+private fun hexDigit(c: Char): Int = when (c) {
+    in '0'..'9' -> c - '0'
+    in 'a'..'f' -> c - 'a' + 10
+    else -> c - 'A' + 10
 }
 
 /** Minimal status-line reason phrases (HTTP/1.1 allows any token; clients ignore it). */

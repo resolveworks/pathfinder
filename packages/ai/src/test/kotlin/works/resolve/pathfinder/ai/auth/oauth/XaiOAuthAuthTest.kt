@@ -191,6 +191,32 @@ class XaiOAuthAuthTest {
     }
 
     @Test
+    fun `non-finite numbers fail field parsing like pi Number-isFinite`() {
+        val auth = XaiOAuthAuth(FakeHttpClient())
+        // JSON `1e999` parses to +Infinity; pi's Number.isFinite gate rejects it.
+        val error = assertFailsWith<IllegalStateException> {
+            auth.parseDeviceCodeForTest(
+                """{"device_code":"d","user_code":"u","verification_uri":"https://x.ai","expires_in":1e999}"""
+            )
+        }
+        assertEquals("Invalid xAI OAuth response field: expires_in", error.message)
+
+        val device = auth.parseDeviceCodeForTest(
+            """{"device_code":"d","user_code":"u","verification_uri":"https://x.ai","interval":1e999,"expires_in":900}"""
+        )
+        assertNull(device.intervalSeconds)
+
+        val tokenError = assertFailsWith<IllegalStateException> {
+            auth.credentialsFromTokenResponse(
+                Json.parseToJsonElement(
+                    """{"access_token":"a","refresh_token":"r","expires_in":1e999}"""
+                ) as JsonObject
+            )
+        }
+        assertEquals("Invalid xAI OAuth response field: expires_in", tokenError.message)
+    }
+
+    @Test
     fun `expiry uses lifetime minus 5-minute skew`() {
         val auth = XaiOAuthAuth(FakeHttpClient(), clock = FakeClock(100_000L))
         val credential = auth.credentialsFromTokenResponse(

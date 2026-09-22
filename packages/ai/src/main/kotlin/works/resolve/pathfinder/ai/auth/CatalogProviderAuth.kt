@@ -6,9 +6,10 @@ import works.resolve.pathfinder.ai.providers.CatalogProvider
  * Bridge from the generated provider catalog to the ported auth contracts,
  * following pi's per-field merge (e.g. `cloudflare-auth.ts`): the first
  * prompt fills the API key, every later prompt its env slot, and resolution
- * succeeds only when every field resolves. Divergence from pi: pi treats
- * `undefined` as missing and short-circuits; the catalog's blank-is-missing
- * rule makes blank values fall through to ambient instead.
+ * succeeds only when every field resolves. A stored field wins even when
+ * blank (pi's `!== undefined`), and a present-but-empty value — stored or
+ * ambient — resolves unconfigured (JS falsiness) instead of falling through
+ * to a later source.
  */
 class CatalogApiKeyAuth(private val entry: CatalogProvider) : ApiKeyAuth {
     override val name: String = entry.auth.label ?: "${entry.name} API key"
@@ -21,19 +22,11 @@ class CatalogApiKeyAuth(private val entry: CatalogProvider) : ApiKeyAuth {
             entry.auth.prompts.forEachIndexed { index, prompt ->
                 val value = interaction.prompt(
                     if (prompt.secret) {
-                        AuthPrompt.Secret(
-                            prompt.message
-                        )
+                        AuthPrompt.Secret(prompt.message)
                     } else {
                         AuthPrompt.Text(prompt.message)
                     }
                 )
-                if (value.isBlank()) {
-                    throw ModelsError(
-                        ModelsErrorCode.AUTH,
-                        "${entry.name} requires a value for ${prompt.envKey}"
-                    )
-                }
                 if (index == 0) key = value else env[prompt.envKey] = value
             }
             ApiKeyCredential(key = key, env = env)
@@ -45,10 +38,8 @@ class CatalogApiKeyAuth(private val entry: CatalogProvider) : ApiKeyAuth {
         var apiKey: String? = null
         prompts.forEachIndexed { index, prompt ->
             val stored = if (index == 0) credential?.key else credential?.env?.get(prompt.envKey)
-            val value =
-                stored?.takeIf { it.isNotBlank() }
-                    ?: ctx.env(prompt.envKey)?.takeIf { it.isNotBlank() }
-            if (value == null) return null
+            val value = stored ?: ctx.env(prompt.envKey)
+            if (value.isNullOrEmpty()) return null
             if (index == 0) apiKey = value else env[prompt.envKey] = value
         }
         val key = apiKey ?: return null

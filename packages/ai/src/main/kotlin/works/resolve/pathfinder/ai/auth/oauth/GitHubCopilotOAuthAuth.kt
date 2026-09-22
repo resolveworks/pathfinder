@@ -1,6 +1,13 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
+import java.time.DateTimeException
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import java.time.temporal.ChronoField
 import java.util.Base64
 import java.util.Locale
@@ -69,7 +76,10 @@ class GitHubCopilotOAuthAuth(
         try {
             currentCoroutineContext().ensureActive()
         } catch (error: CancellationException) {
-            throw CancellationException("Login cancelled", error)
+            // pi throws a plain Error("Login cancelled") here, surfacing as a
+            // login failure; a CancellationException would be swallowed as
+            // user-cancel instead.
+            throw IllegalStateException("Login cancelled", error)
         }
 
         val trimmed = input.trim()
@@ -274,18 +284,20 @@ class GitHubCopilotOAuthAuth(
 
             val retryAfter = response.headers["retry-after"]?.firstOrNull()
             var delayMs: Double = 500.0 * 2.0.pow(retry)
-            if (retryAfter != null) {
+            // pi's truthiness check: an empty Retry-After value skips header
+            // handling entirely, keeping the exponential backoff.
+            if (!retryAfter.isNullOrEmpty()) {
                 val seconds = parseFloatPrefix(retryAfter)
                 delayMs =
-                    if (seconds != null && seconds.isFinite()) {
-                        seconds * 1000
-                    } else {
+                    if (seconds == null) {
                         parseHttpDateMs(retryAfter)?.let {
                             (it - clock.now().toEpochMilliseconds()).toDouble()
                         }
                             ?: Double.NaN
+                    } else {
+                        seconds * 1000
                     }
-                if (delayMs.isNaN()) return response
+                if (!delayMs.isFinite()) return response
             }
             delayMs = max(0.0, delayMs)
             if (retryDeadline != null &&
@@ -298,12 +310,43 @@ class GitHubCopilotOAuthAuth(
         }
     }
 
-    internal fun parseHttpDateMs(value: String): Long? = try {
-        DateTimeFormatter.RFC_1123_DATE_TIME
-            .parse(value.trim())
-            .getLong(ChronoField.INSTANT_SECONDS) * 1000
-    } catch (_: Exception) {
-        null
+    /**
+     * JS `Date.parse` stand-in for a non-numeric `Retry-After` value: RFC
+     * 1123 IMF-fixdate plus the ISO 8601 forms `Date.parse` accepts (offset
+     * date-times, zoneless date-times as local time, date-only forms as
+     * UTC). V8's remaining legacy formats (RFC 1036/850 two-digit years,
+     * asctime) stay unparsed: like any unparseable value they yield null,
+     * taking pi's NaN path (the 429 is returned without a retry).
+     */
+    internal fun parseHttpDateMs(value: String): Long? {
+        val text = value.trim()
+        parseIsoDateMs(text)?.let { return it }
+        return try {
+            DateTimeFormatter.RFC_1123_DATE_TIME
+                .parse(text)
+                .getLong(ChronoField.INSTANT_SECONDS) * 1000
+        } catch (_: DateTimeParseException) {
+            null
+        } catch (_: DateTimeException) {
+            null
+        }
+    }
+
+    private fun parseIsoDateMs(text: String): Long? = try {
+        OffsetDateTime.parse(text).toInstant().toEpochMilli()
+    } catch (_: DateTimeParseException) {
+        try {
+            LocalDateTime.parse(text)
+                .atZone(ZoneId.systemDefault())
+                .toInstant()
+                .toEpochMilli()
+        } catch (_: DateTimeParseException) {
+            try {
+                LocalDate.parse(text).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+            } catch (_: DateTimeParseException) {
+                null
+            }
+        }
     }
 
     private suspend fun fetchGitHubCopilotModels(

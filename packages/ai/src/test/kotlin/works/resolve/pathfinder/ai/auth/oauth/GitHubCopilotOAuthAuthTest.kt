@@ -5,11 +5,15 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -516,6 +520,42 @@ class GitHubCopilotOAuthAuthTest {
     }
 
     @Test
+    fun `empty retry-after keeps the exponential backoff retry`() = runTest {
+        val http = FakeHttpClient()
+        http.happyPath()
+        http.script.removeAt(3)
+        // pi's truthiness check: an empty header value is skipped, so the
+        // backoff retry still happens.
+        http.script += { json(429, "x", mapOf("retry-after" to listOf(""))) }
+        http.script += { ok(modelsJson(modelEntry("gpt-4.1"))) }
+
+        auth(http, clock = virtualClock).login(RecordingInteraction())
+
+        assertEquals(
+            2,
+            http.requests.count {
+                it.url ==
+                    "https://api.individual.githubcopilot.com/models"
+            }
+        )
+    }
+
+    @Test
+    fun `iso date retry-after is parsed like js Date-parse`() {
+        val a = auth(FakeHttpClient())
+        assertEquals(1445412480000L, a.parseHttpDateMs("2015-10-21T07:28:00Z"))
+        assertEquals(1445412480000L, a.parseHttpDateMs("2015-10-21T08:28:00+01:00"))
+        // Date-only forms resolve as UTC per ECMA-262.
+        assertEquals(1445385600000L, a.parseHttpDateMs("2015-10-21"))
+        // Zoneless date-times are local time; only presence is asserted
+        // because the JVM default zone varies.
+        assertTrue(a.parseHttpDateMs("2015-10-21T07:28:00") != null)
+        assertNull(a.parseHttpDateMs("2015-10-21T07:28:00+25:00"))
+        assertNull(a.parseHttpDateMs("soon"))
+        assertNull(a.parseHttpDateMs(""))
+    }
+
+    @Test
     fun `unparseable retry-after returns the 429 response without retrying`() = runTest {
         val http = FakeHttpClient()
         http.happyPath()
@@ -678,6 +718,37 @@ class GitHubCopilotOAuthAuthTest {
         assertFailsWith<CancellationException> {
             auth(http).login(RecordingInteraction())
         }
+    }
+
+    @Test
+    fun `cancellation after the enterprise prompt resolves fails with Login cancelled`() = runTest {
+        val http = FakeHttpClient()
+        val outcome = CompletableDeferred<Throwable?>()
+        lateinit var loginJob: Job
+        val interaction = object : AuthInteraction {
+            override suspend fun prompt(prompt: AuthPrompt): String {
+                // The prompt resolved first; the login signal aborts after,
+                // exactly pi's `interaction.signal.aborted` ordering.
+                loginJob.cancel()
+                return "  "
+            }
+
+            override suspend fun notify(event: AuthEvent) {}
+        }
+        loginJob = launch {
+            try {
+                auth(http).login(interaction)
+                outcome.complete(null)
+            } catch (e: Throwable) {
+                outcome.complete(e)
+            }
+        }
+
+        val error = assertNotNull(outcome.await())
+        // pi throws a plain Error, so the abort surfaces as a login
+        // failure, not as swallowed user-cancel.
+        assertIs<IllegalStateException>(error)
+        assertEquals("Login cancelled", error.message)
     }
 
     @Test
