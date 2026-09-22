@@ -2,20 +2,22 @@ package works.resolve.pathfinder.codingagent.core
 
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
@@ -44,7 +46,6 @@ import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
 import works.resolve.pathfinder.ai.utils.calculateContextTokens
-import works.resolve.pathfinder.ai.utils.estimateMessageTokens
 import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
 import works.resolve.pathfinder.ai.utils.isContextOverflow
 import works.resolve.pathfinder.ai.utils.isRecoverableLength
@@ -59,6 +60,7 @@ import works.resolve.pathfinder.codingagent.core.compaction.GenerateBranchSummar
 import works.resolve.pathfinder.codingagent.core.compaction.collectEntriesForBranchSummary
 import works.resolve.pathfinder.codingagent.core.compaction.compact
 import works.resolve.pathfinder.codingagent.core.compaction.estimateContextTokens
+import works.resolve.pathfinder.codingagent.core.compaction.estimateTokens
 import works.resolve.pathfinder.codingagent.core.compaction.generateBranchSummary
 import works.resolve.pathfinder.codingagent.core.compaction.prepareCompaction
 import works.resolve.pathfinder.codingagent.core.compaction.shouldCompact
@@ -125,14 +127,37 @@ class AgentSession(
 
     val state: StateFlow<AgentState> get() = agent.state
 
-    /** Guards [active]; all critical sections are brief and non-suspending. */
+    /** Guards the busy flags and controller slots; all critical sections are brief and non-suspending. */
     private val lock = Any()
 
-    /** True while this session's prompt loop is running; guarded by [lock]. */
-    private var active = false
+    private val _isStreaming = MutableStateFlow(false)
 
     /**
-     * Job of the current prompt loop (agent runs plus backoff sleeps),
+     * pi's isStreaming: true while the prompt cycle is active — the agent
+     * run plus every post-run continuation (retry backoff, inter-run
+     * compaction) — false once the cycle settles ([AgentEvent.AgentSettled]).
+     * Unlike [AgentState.isStreaming], which covers a single agent run, this
+     * stays true across retry backoff and inter-continuation compaction.
+     */
+    val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
+
+    /** pi's _isAgentRunActive; mirrored into [isStreaming]. */
+    @Volatile
+    private var agentRunActive = false
+
+    /**
+     * pi's _agentRunAbortRequested: set by [abort] while a run is active,
+     * consumed by the post-run abort-window checks and cleared when the
+     * next cycle starts. The agent loop's post-abort tail runs under
+     * [NonCancellable], so the [prepareNextTurnWithContext][Agent] hook and
+     * the continuation checks must consult this flag rather than coroutine
+     * cancellation.
+     */
+    @Volatile
+    private var agentRunAbortRequested = false
+
+    /**
+     * Job of the current prompt cycle (agent runs plus backoff sleeps),
      * cancelled by [abort]; volatile: abort may come from any coroutine.
      */
     @Volatile
@@ -159,11 +184,25 @@ class AgentSession(
     private var overflowRecoveryAttempted = false
 
     /**
-     * True while compaction or branch summarization (tree navigation) runs —
-     * pi's isCompacting; guards prompt submission and navigation.
+     * pi's three compaction-state controllers. Manual compaction and branch
+     * summarization (tree navigation) run in their caller's coroutine under
+     * a tracked child job so [abort] can cancel them (pi's AbortControllers);
+     * automatic compaction runs inside the prompt cycle (preflight or the
+     * post-run continuation) and is cancelled through it, so only its marker
+     * is tracked here.
      */
     @Volatile
-    private var compactionInProgress = false
+    private var manualCompactionJob: Job? = null
+
+    @Volatile
+    private var autoCompactionInProgress = false
+
+    @Volatile
+    private var branchSummaryJob: Job? = null
+
+    /** pi's isCompacting: manual compaction, automatic compaction, or branch summarization is running. */
+    val isCompacting: Boolean
+        get() = manualCompactionJob != null || autoCompactionInProgress || branchSummaryJob != null
 
     /** Name→tool registry over the constructor list. */
     private val toolRegistry: Map<String, AgentTool> = tools.associateBy { it.definition.name }
@@ -211,6 +250,13 @@ class AgentSession(
      * section-patch system message carried by [AgentLoopTurnUpdate.messages]
      * (pi's run-options refresh), so mid-run loadout changes reach the
      * model — and the transcript — like any other prompt update.
+     *
+     * The hook is also invoked once more inside the loop's post-abort
+     * [NonCancellable] tail, where coroutine cancellation is invisible: the
+     * compaction checkpoint then consults [agentRunAbortRequested] — the
+     * session-level abort state — so an aborted run never kicks off a
+     * mid-run summarization request (pi's hook receives the run's aborted
+     * signal for exactly this purpose).
      */
     private fun installAgentNextTurnRefresh() {
         agent.prepareNextTurnWithContext = { turn ->
@@ -228,9 +274,13 @@ class AgentSession(
     /**
      * pi's _compactBeforeNextAssistantResponse: when the turn's context
      * crosses the compaction threshold, run auto compaction ("threshold"
-     * reason) and rebuild the context from the agent transcript.
+     * reason) and rebuild the context from the agent transcript. Skipped
+     * entirely when the run was aborted — see
+     * [installAgentNextTurnRefresh] for why this consults the session's
+     * abort flag instead of coroutine cancellation.
      */
     private suspend fun compactBeforeNextAssistantResponse(context: AgentContext): AgentContext {
+        if (agentRunAbortRequested) return context
         val settings = settingsManager.getCompactionSettings(model)
         if (
             model.contextWindow <= 0 ||
@@ -331,21 +381,31 @@ class AgentSession(
      * continuation loop execute in a single job so [abort] cancels runs and
      * backoff alike.
      *
-     * @throws IllegalStateException when a prompt is already running.
+     * Guards, in pi's order: manual compaction in progress, then an active
+     * prompt cycle. Automatic compaction and tree navigation are NOT guard
+     * inputs — pi's prompt only checks the manual-compaction controller and
+     * its own run state, leaving a latent race against pre-prompt
+     * auto-compaction and navigation that is ported as-is (a navigation's
+     * tree mutations stay serialized by the manager's mutex, but a prompt
+     * racing one can append to a moving leaf). A prompt racing another
+     * prompt's preflight — before its run is active — likewise proceeds and
+     * fails at the agent's own single-run guard, exactly like pi.
+     *
+     * @throws IllegalStateException when manual compaction is running or a
+     *   prompt cycle is already active.
      * @throws CancellationException when aborted or the caller is cancelled;
      *   the agent has committed its terminal state either way.
      */
     suspend fun prompt(text: String) {
         synchronized(lock) {
-            if (compactionInProgress) {
+            if (manualCompactionJob != null) {
                 throw IllegalStateException(COMPACTION_IN_PROGRESS)
             }
-            if (active) {
+            if (agentRunActive) {
                 throw IllegalStateException(
                     "Agent is already processing a prompt. Wait for completion or abort it."
                 )
             }
-            active = true
         }
 
         try {
@@ -396,18 +456,7 @@ class AgentSession(
                     // Lazily started so promptJob is published before the job
                     // can run anything (abort guarantee).
                     val job = launch(start = CoroutineStart.LAZY) {
-                        try {
-                            agent.prompt(promptMessages)
-                            while (handlePostAgentRun()) {
-                                agent.continueRun()
-                            }
-                        } catch (e: CancellationException) {
-                            // pi's _runAgentPrompt finally: an aborted run
-                            // finalizes an outstanding retry attempt (an
-                            // abort during the backoff sleep already did).
-                            finishCancelledRetry()
-                            throw e
-                        }
+                        runAgentPrompt(promptMessages)
                     }
                     promptJob = job
                     job.start()
@@ -420,13 +469,66 @@ class AgentSession(
             }
         } finally {
             promptJob = null
-            synchronized(lock) { active = false }
         }
     }
 
-    /** Abort the active prompt, if any. May be called from any coroutine. */
-    fun abort() {
-        promptJob?.cancel()
+    /**
+     * pi's _runAgentPrompt: the prompt cycle — one agent run plus the
+     * post-run continuation loop (retries, auto-compaction). Run-active
+     * state spans the whole cycle, so [isStreaming] stays busy across retry
+     * backoff and inter-continuation compaction, and the cycle settles
+     * ([AgentEvent.AgentSettled]) in the finally even when aborted.
+     */
+    private suspend fun runAgentPrompt(messages: List<Message>) {
+        synchronized(lock) {
+            agentRunAbortRequested = false
+            agentRunActive = true
+        }
+        _isStreaming.value = true
+        try {
+            agent.prompt(messages)
+            while (handlePostAgentRun()) {
+                if (agentRunAbortRequested) break
+                agent.continueRun()
+            }
+        } catch (e: CancellationException) {
+            // pi's _runAgentPrompt finally: an aborted run finalizes an
+            // outstanding retry attempt (an abort during the backoff sleep
+            // already did).
+            finishCancelledRetry()
+            throw e
+        } finally {
+            withContext(NonCancellable) {
+                agentRunActive = false
+                _isStreaming.value = false
+                _events.emit(AgentEvent.AgentSettled)
+            }
+        }
+    }
+
+    /**
+     * pi's abort: request abortion of the active prompt cycle, cancel
+     * in-flight retry backoff (through the prompt job), manual compaction,
+     * and branch summarization, and await their completion. A prompt cycle's
+     * pre-prompt auto-compaction runs in the prompt caller's own coroutine
+     * and has no job here; its abort surfaces through that caller, unlike
+     * pi's, which awaits it through the auto-compaction controller. May be
+     * called from any coroutine outside the cycle it aborts.
+     */
+    suspend fun abort() {
+        if (agentRunActive) {
+            agentRunAbortRequested = true
+        }
+        // pi's abortRetry: the backoff sleep lives inside the prompt job.
+        val prompt = promptJob
+        val manualCompaction = manualCompactionJob
+        val branchSummary = branchSummaryJob
+        prompt?.cancel()
+        manualCompaction?.cancel()
+        branchSummary?.cancel()
+        prompt?.join()
+        manualCompaction?.join()
+        branchSummary?.join()
     }
 
     /**
@@ -512,6 +614,7 @@ class AgentSession(
         }
         if (effective != previous) {
             manager.appendThinkingLevelChange(effective.wire)
+            _events.emit(AgentEvent.ThinkingLevelChanged(effective))
         }
     }
 
@@ -572,10 +675,11 @@ class AgentSession(
 
     /**
      * Navigate to a different node in the session tree, staying in the same
-     * session (unlike fork). Idle-only; abort is coroutine cancellation.
-     * Rejected while compaction or another navigation runs (pi's isCompacting
-     * guard — unlike pi's prompt(), a prompt submitted mid-navigation is
-     * rejected too, since the marker is shared).
+     * session (unlike fork). Idle-only; a session [abort] (or caller
+     * cancellation) aborts an in-flight navigation — pi's branch-summary
+     * AbortController — surfacing as the aborted result. Rejected while a
+     * prompt cycle, compaction, or another navigation runs (pi's isStreaming
+     * and isCompacting guards).
      *
      * A user-message target re-edits instead of moving the leaf onto it:
      * the leaf moves to the target's parent (or root) and the text is
@@ -588,128 +692,153 @@ class AgentSession(
      * recorded as its fromId inside the manager), and the rebuilt context
      * projects branch summaries via [buildSessionContext].
      *
-     * @throws IllegalStateException when a prompt, compaction, or another
-     *   navigation is running, or summarization was requested without a
-     *   provider stack.
+     * @throws IllegalStateException when a prompt cycle, compaction, or
+     *   another navigation is running, or summarization was requested
+     *   without a provider stack.
      * @throws IllegalArgumentException when [targetId] does not exist.
      */
     suspend fun navigateTree(
         targetId: String,
         options: NavigateTreeOptions = NavigateTreeOptions()
     ): NavigationResult {
-        synchronized(lock) {
-            if (active) {
+        val parentJob = currentCoroutineContext()[Job]
+        val controller: CompletableJob = synchronized(lock) {
+            if (agentRunActive) {
                 throw IllegalStateException(
                     "Wait for the current response to finish before navigating the session tree."
                 )
             }
-            if (compactionInProgress) {
+            if (isCompacting) {
                 throw IllegalStateException(
                     "Wait for the current compaction or tree navigation to finish before " +
                         "navigating the session tree."
                 )
             }
-            compactionInProgress = true
+            Job(parentJob).also { branchSummaryJob = it }
         }
 
         try {
-            val oldLeafId = manager.getLeafId()
-            val targetEntry = manager.getEntry(targetId)
-                ?: throw IllegalArgumentException("Entry $targetId not found")
-            if (targetId == oldLeafId) {
-                return NavigationResult(outcome = NavigationOutcome.NO_OP, cancelled = false)
-            }
-            val userMessage = (targetEntry as? MessageEntry)?.message as? UserMessage
-
-            val summarizationModels = models
-            if (options.summarize && summarizationModels == null) {
-                throw IllegalStateException("No model available for summarization")
-            }
-
-            // Entries to summarize: from the old leaf to the common ancestor.
-            val collected = collectEntriesForBranchSummary(manager, oldLeafId, targetId)
-
-            var summary: BranchSummaryResult? = null
-            if (options.summarize && collected.entries.isNotEmpty()) {
-                when (
-                    val outcome = generateBranchSummary(
-                        collected.entries,
-                        GenerateBranchSummaryOptions(
-                            models = summarizationModels!!,
-                            model = model,
-                            customInstructions = options.customInstructions,
-                            replaceInstructions = options.replaceInstructions,
-                            retry = retryPolicy(),
-                            callbacks = summarizationRetryCallbacks(
-                                AgentEvent.SummarizationSource.BranchSummary
-                            ),
-                            clock = clock
-                        )
-                    )
-                ) {
-                    is BranchSummaryCallResult.Err -> {
-                        if (outcome.error.code == BranchSummaryErrorCode.ABORTED) {
-                            return NavigationResult(cancelled = true, aborted = true)
-                        }
-                        throw outcome.error
-                    }
-
-                    is BranchSummaryCallResult.Ok -> summary = outcome.value
-                }
-            }
-
-            // Summary is attached at the navigation target position, not the
-            // old branch.
-            val newLeafId: String? = if (userMessage != null) targetEntry.parentId else targetId
-            val editorText = userMessage
-                ?.content
-                ?.filterIsInstance<TextContent>()
-                ?.joinToString("") { it.text }
-
-            var summaryEntry: BranchSummaryEntry? = null
-            if (summary != null) {
-                val entryId = manager.branchWithSummary(
-                    branchFromId = newLeafId,
-                    summary = summary.summary,
-                    details = buildJsonObject {
-                        put("readFiles", JsonArray(summary.readFiles.map(::JsonPrimitive)))
-                        put("modifiedFiles", JsonArray(summary.modifiedFiles.map(::JsonPrimitive)))
-                    },
-                    usage = summary.usage
-                )
-                summaryEntry = manager.getEntry(entryId) as BranchSummaryEntry
-            } else if (newLeafId == null) {
-                manager.resetLeaf()
-            } else {
-                manager.branch(newLeafId)
-            }
-
-            agent.replaceTranscript(manager.buildSessionContext().messages)
-            // pi's _restoreToolsFromTranscript: the target's transcript
-            // declares the loadout at that point in the tree.
-            restoreToolsFromTranscript()
-
-            return NavigationResult(
-                outcome = if (userMessage != null) {
-                    NavigationOutcome.RE_EDIT
-                } else {
-                    NavigationOutcome.NAVIGATED
-                },
-                editorText = editorText,
-                cancelled = false,
-                summaryEntry = summaryEntry
-            )
+            return withContext(controller) { navigateTreeBody(targetId, options) }
         } catch (e: CancellationException) {
-            throw e
+            // Caller cancellation propagates; only the tracked controller
+            // was aborted (pi's abortBranchSummary), which lands as the
+            // aborted navigation result.
+            currentCoroutineContext().ensureActive()
+            return NavigationResult(cancelled = true, aborted = true)
         } finally {
-            compactionInProgress = false
+            branchSummaryJob = null
+            // withContext treats the controller as the block's parent job;
+            // complete it so it does not outlive the caller.
+            controller.complete()
         }
     }
 
+    private suspend fun navigateTreeBody(
+        targetId: String,
+        options: NavigateTreeOptions
+    ): NavigationResult {
+        val oldLeafId = manager.getLeafId()
+        val targetEntry = manager.getEntry(targetId)
+            ?: throw IllegalArgumentException("Entry $targetId not found")
+        if (targetId == oldLeafId) {
+            return NavigationResult(outcome = NavigationOutcome.NO_OP, cancelled = false)
+        }
+        val userMessage = (targetEntry as? MessageEntry)?.message as? UserMessage
+
+        val summarizationModels = models
+        if (options.summarize && summarizationModels == null) {
+            throw IllegalStateException("No model available for summarization")
+        }
+
+        // Entries to summarize: from the old leaf to the common ancestor.
+        val collected = collectEntriesForBranchSummary(manager, oldLeafId, targetId)
+
+        var summary: BranchSummaryResult? = null
+        if (options.summarize && collected.entries.isNotEmpty()) {
+            val branchSummarySettings = settingsManager.getBranchSummarySettings()
+            val reserveTokens = branchSummarySettings.reserveTokens
+            check(reserveTokens <= Int.MAX_VALUE) {
+                "branchSummary.reserveTokens setting $reserveTokens exceeds the Int range of the " +
+                    "branch-summary budget."
+            }
+            when (
+                val outcome = generateBranchSummary(
+                    collected.entries,
+                    GenerateBranchSummaryOptions(
+                        models = summarizationModels!!,
+                        model = model,
+                        customInstructions = options.customInstructions,
+                        replaceInstructions = options.replaceInstructions,
+                        reserveTokens = reserveTokens.toInt(),
+                        retry = retryPolicy(),
+                        callbacks = summarizationRetryCallbacks(
+                            AgentEvent.SummarizationSource.BranchSummary
+                        ),
+                        clock = clock
+                    )
+                )
+            ) {
+                is BranchSummaryCallResult.Err -> {
+                    if (outcome.error.code == BranchSummaryErrorCode.ABORTED) {
+                        return NavigationResult(cancelled = true, aborted = true)
+                    }
+                    throw outcome.error
+                }
+
+                is BranchSummaryCallResult.Ok -> summary = outcome.value
+            }
+        }
+
+        // Summary is attached at the navigation target position, not the
+        // old branch.
+        val newLeafId: String? = if (userMessage != null) targetEntry.parentId else targetId
+        val editorText = userMessage
+            ?.content
+            ?.filterIsInstance<TextContent>()
+            ?.joinToString("") { it.text }
+
+        var summaryEntry: BranchSummaryEntry? = null
+        if (summary != null) {
+            val entryId = manager.branchWithSummary(
+                branchFromId = newLeafId,
+                summary = summary.summary,
+                details = buildJsonObject {
+                    put("readFiles", JsonArray(summary.readFiles.map(::JsonPrimitive)))
+                    put("modifiedFiles", JsonArray(summary.modifiedFiles.map(::JsonPrimitive)))
+                },
+                usage = summary.usage
+            )
+            summaryEntry = manager.getEntry(entryId) as BranchSummaryEntry
+        } else if (newLeafId == null) {
+            manager.resetLeaf()
+        } else {
+            manager.branch(newLeafId)
+        }
+
+        agent.replaceTranscript(manager.buildSessionContext().messages)
+        // pi's _restoreToolsFromTranscript: the target's transcript
+        // declares the loadout at that point in the tree.
+        restoreToolsFromTranscript()
+
+        return NavigationResult(
+            outcome = if (userMessage != null) {
+                NavigationOutcome.RE_EDIT
+            } else {
+                NavigationOutcome.NAVIGATED
+            },
+            editorText = editorText,
+            cancelled = false,
+            summaryEntry = summaryEntry
+        )
+    }
+
     /**
-     * Reduce a loop event into session state, re-emit it to [events], and run
-     * session-level tracking: message persistence, last-assistant-message
-     * capture for post-run handling, and the mid-run retry success reset.
+     * pi's _handleAgentEvent: re-emit the loop event to [events] first —
+     * computing [AgentEvent.AgentEnd.willRetry] on the re-emission — then
+     * run session-level tracking: message persistence and
+     * last-assistant-message capture for post-run handling. Listeners thus
+     * hear `message_end` even when the subsequent append fails, and the
+     * success `auto_retry_end` follows the triggering `message_end`.
      */
     private suspend fun processEvent(event: AgentEvent) {
         when (event) {
@@ -719,51 +848,84 @@ class AgentSession(
                 if (event.message is UserMessage) overflowRecoveryAttempted = false
             }
 
-            is AgentEvent.MessageEnd -> {
-                // The tree is the persistence unit and is append-only, so
-                // messages later removed from agent state (auto-retry,
-                // overflow recovery) stay in history. A storage failure here
-                // fails the run (pi parity).
-                manager.appendMessage(event.message)
-                val assistant = event.message as? AssistantMessage
-                if (assistant != null) {
-                    lastAssistantMessage = assistant
-                    if (assistant.stopReason != StopReason.ERROR &&
-                        assistant.stopReason != StopReason.LENGTH
-                    ) {
-                        overflowRecoveryAttempted = false
-                    }
-                    // Reset the retry counter at the successful message's
-                    // completion, not at post-run.
-                    if (assistant.stopReason != StopReason.ERROR && retryAttempt > 0) {
-                        val attempt = retryAttempt
-                        retryAttempt = 0
-                        _events.emit(AgentEvent.AutoRetryEnd(success = true, attempt = attempt))
-                    }
-                }
-            }
-
             else -> Unit
         }
-        _events.emit(event)
+        _events.emit(
+            if (event is AgentEvent.AgentEnd) {
+                event.copy(willRetry = willRetryAfterAgentEnd(event))
+            } else {
+                event
+            }
+        )
+        if (event is AgentEvent.MessageEnd) {
+            // The tree is the persistence unit and is append-only, so
+            // messages later removed from agent state (auto-retry,
+            // overflow recovery) stay in history. A storage failure here
+            // fails the run (pi parity).
+            manager.appendMessage(event.message)
+            val assistant = event.message as? AssistantMessage ?: return
+            lastAssistantMessage = assistant
+            if (assistant.stopReason != StopReason.ERROR &&
+                assistant.stopReason != StopReason.LENGTH
+            ) {
+                overflowRecoveryAttempted = false
+            }
+            // Reset the retry counter at the successful message's
+            // completion, not at post-run.
+            if (assistant.stopReason != StopReason.ERROR && retryAttempt > 0) {
+                _events.emit(AgentEvent.AutoRetryEnd(success = true, attempt = retryAttempt))
+                retryAttempt = 0
+            }
+        }
+    }
+
+    /**
+     * pi's _willRetryAfterAgentEnd: abort-aware, retry-budget-aware, and
+     * last-assistant-retryability-aware prediction of whether the session
+     * will continue the run after this `agent_end`.
+     */
+    private fun willRetryAfterAgentEnd(event: AgentEvent.AgentEnd): Boolean {
+        if (agentRunAbortRequested) return false
+        val settings = settingsManager.getRetrySettings()
+        if (!settings.enabled || retryAttempt >= settings.maxRetries) {
+            return false
+        }
+        val lastAssistant = event.messages.lastOrNull {
+            it is AssistantMessage
+        } as AssistantMessage?
+        return lastAssistant != null && isRetryableError(lastAssistant)
     }
 
     // ---- post-run handling ----
 
     /**
-     * Post-run handling: consumes [lastAssistantMessage]; when the final
-     * assistant message is a retryable error and the retry can be prepared,
-     * returns true so the caller continues the agent. Otherwise, when the
-     * run still errored after retries, emits `auto_retry_end{success:false}`
+     * pi's _handlePostAgentRun: consumes [lastAssistantMessage]; when the
+     * final assistant message is a retryable error and the retry can be
+     * prepared, returns true so the caller continues the agent. Otherwise,
+     * when the run still errored after retries, emits `auto_retry_end{success:false}`
      * with the final error and resets the counter, then dispatches automatic
-     * compaction.
+     * compaction. Every phase consults [agentRunAbortRequested] at pi's
+     * checkpoints, so an abort landing after `agent_end` skips retry and
+     * compaction entirely.
      */
     private suspend fun handlePostAgentRun(): Boolean {
         val msg = lastAssistantMessage
         lastAssistantMessage = null
+
+        if (agentRunAbortRequested) {
+            finishCancelledRetry()
+            return false
+        }
         if (msg == null) return false
 
-        if (isRetryableError(msg) && prepareRetry(msg)) return true
+        if (isRetryableError(msg) && prepareRetry(msg)) {
+            if (agentRunAbortRequested) finishCancelledRetry()
+            return !agentRunAbortRequested
+        }
+        if (agentRunAbortRequested) {
+            finishCancelledRetry()
+            return false
+        }
 
         if (msg.stopReason == StopReason.ERROR && retryAttempt > 0) {
             _events.emit(
@@ -777,11 +939,12 @@ class AgentSession(
         }
 
         if (checkCompaction(msg)) {
-            return true
+            return !agentRunAbortRequested
         }
 
-        // pi continues for queued steer/follow-up messages; there are no
-        // queues here.
+        // pi continues for queued steer/follow-up messages
+        // (!abortRequested && hasQueuedMessages()); there are no queues
+        // here, so the cycle ends.
         return false
     }
 
@@ -901,10 +1064,11 @@ class AgentSession(
     /**
      * Execute threshold or overflow compaction (pi's _runAutoCompaction).
      *
-     * Divergence: pi signals abort through AbortControllers; here compaction
-     * runs inside the prompt coroutine, so abort is plain cancellation and
-     * the aborted `compaction_end` is emitted under [NonCancellable] before
-     * rethrowing.
+     * Divergence: pi signals abort through a dedicated auto-compaction
+     * AbortController; here the automatic path runs inside the prompt cycle
+     * (or the prompt caller's preflight), so abort is plain cancellation
+     * and the aborted `compaction_end` is emitted under [NonCancellable]
+     * before rethrowing.
      *
      * @return Whether the post-run loop should continue the agent.
      */
@@ -924,23 +1088,29 @@ class AgentSession(
             is CompactionOutcome.Ok -> outcome.value ?: return false
         }
         // pi registers its abort controller before emitting compaction_start
-        // so a concurrent prompt/navigation observes the in-progress marker;
-        // the marker is cleared by [runCompactionCore]'s finally.
-        compactionInProgress = true
-        _events.emit(AgentEvent.CompactionStart(reason))
-        val run = runCompactionCore(reason, willRetry, customInstructions = null, preparation)
-        if (run !is CompactionRunResult.Success) {
-            if (run is CompactionRunResult.Failure && !run.aborted) {
-                _events.emit(
-                    AgentEvent.CompactionEnd(
-                        reason = reason,
-                        aborted = false,
-                        willRetry = false,
-                        errorMessage = compactionFailureMessage(reason, run.error)
+        // so a concurrent navigation observes the in-progress marker; like
+        // pi, the marker is cleared only after the `compaction_end`
+        // emission (in the finally).
+        autoCompactionInProgress = true
+        try {
+            _events.emit(AgentEvent.CompactionStart(reason))
+            val run =
+                runCompactionCore(reason, willRetry, customInstructions = null, preparation) {}
+            if (run !is CompactionRunResult.Success) {
+                if (run is CompactionRunResult.Failure && !run.aborted) {
+                    _events.emit(
+                        AgentEvent.CompactionEnd(
+                            reason = reason,
+                            aborted = false,
+                            willRetry = false,
+                            errorMessage = compactionFailureMessage(reason, run.error)
+                        )
                     )
-                )
+                }
+                return false
             }
-            return false
+        } finally {
+            autoCompactionInProgress = false
         }
 
         if (willRetry) {
@@ -978,17 +1148,20 @@ class AgentSession(
      * Shared compaction machinery for the automatic and manual paths (pi's
      * `_runDefaultCompaction` callers): streams the summary, appends the
      * compaction entry, rebuilds the transcript, and emits the success
-     * `compaction_end`. Callers register [compactionInProgress] before the
-     * first await; the finally here clears it. Synchronous failures are
-     * returned unemitted so each caller formats its own failure event;
-     * cancellation emits the aborted `compaction_end` under [NonCancellable]
-     * and rethrows.
+     * `compaction_end`. [clearInProgress] runs immediately before every
+     * emitted `compaction_end` — pi's manual path exposes idle state before
+     * notifying `compaction_end` listeners, while the automatic path clears
+     * only afterwards; the no-op/auto split lives with the callers.
+     * Synchronous failures are returned unemitted so each caller formats its
+     * own failure event; cancellation emits the aborted `compaction_end`
+     * under [NonCancellable] and rethrows.
      */
     private suspend fun runCompactionCore(
         reason: AgentEvent.CompactionReason,
         willRetry: Boolean,
         customInstructions: String?,
-        preparation: CompactionPreparation
+        preparation: CompactionPreparation,
+        clearInProgress: () -> Unit
     ): CompactionRunResult {
         val summarizationModels = models!!
         try {
@@ -1011,6 +1184,7 @@ class AgentSession(
                 is CompactionOutcome.Err -> {
                     val raw = outcome.error.message ?: "compaction failed"
                     if (outcome.error.code == CompactionErrorCode.ABORTED) {
+                        clearInProgress()
                         _events.emit(
                             AgentEvent.CompactionEnd(
                                 reason = reason,
@@ -1040,7 +1214,7 @@ class AgentSession(
             )
             val sessionContext = manager.buildSessionContext()
             agent.setMessages(sessionContext.messages)
-            val estimatedTokensAfter = sessionContext.messages.sumOf { estimateMessageTokens(it) }
+            val estimatedTokensAfter = sessionContext.messages.sumOf { estimateTokens(it) }
 
             val result = AgentEvent.CompactionResult(
                 summary = compactResult.summary,
@@ -1049,6 +1223,7 @@ class AgentSession(
                 usage = compactResult.usage,
                 details = compactResult.details
             )
+            clearInProgress()
             _events.emit(
                 AgentEvent.CompactionEnd(
                     reason = reason,
@@ -1060,6 +1235,7 @@ class AgentSession(
             return CompactionRunResult.Success(result)
         } catch (e: CancellationException) {
             withContext(NonCancellable) {
+                clearInProgress()
                 _events.emit(
                     AgentEvent.CompactionEnd(reason = reason, aborted = true, willRetry = false)
                 )
@@ -1071,23 +1247,44 @@ class AgentSession(
                 error =
                     e.message ?: "compaction failed"
             )
-        } finally {
-            compactionInProgress = false
         }
     }
 
     /**
      * Manually compact the session context (pi's compact: the `/compact`
-     * entry point). Aborts a running prompt first; manual compaction never
-     * retries or continues the interrupted agent turn.
+     * entry point). Aborts the current agent operation first — including an
+     * in-flight navigation, whose branch summary pi's abort cancels through
+     * the branch-summary controller — and awaits idle; manual compaction
+     * never retries or continues the interrupted agent turn.
+     *
+     * Divergence: pi signals manual-compaction abort through an
+     * AbortController; here the body runs under a tracked child job so a
+     * session [abort] (or a second compact) cancels it, with cancellation
+     * rethrown as in the rest of the port.
      *
      * @throws IllegalStateException when no provider stack is configured, the
      *   branch is already compacted or too small to compact, or compaction
      *   fails — after the failure `compaction_end` is emitted.
      */
     suspend fun compact(customInstructions: String? = null): AgentEvent.CompactionResult {
-        promptJob?.cancelAndJoin()
-        compactionInProgress = true
+        abort()
+        val controller = Job(currentCoroutineContext()[Job]).also { job ->
+            manualCompactionJob = job
+        }
+        try {
+            return withContext(controller) { compactBody(customInstructions) }
+        } finally {
+            manualCompactionJob = null
+            // withContext treats the controller as the block's parent job;
+            // complete it so it does not outlive the caller.
+            controller.complete()
+        }
+    }
+
+    private suspend fun compactBody(customInstructions: String?): AgentEvent.CompactionResult {
+        // pi's _clearManualCompactionState: compaction_end listeners may
+        // submit prompts, so expose idle state before notifying them.
+        val clearInProgress = { manualCompactionJob = null }
         try {
             _events.emit(AgentEvent.CompactionStart(AgentEvent.CompactionReason.MANUAL))
 
@@ -1114,6 +1311,7 @@ class AgentSession(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                clearInProgress()
                 _events.emit(
                     AgentEvent.CompactionEnd(
                         reason = AgentEvent.CompactionReason.MANUAL,
@@ -1130,13 +1328,15 @@ class AgentSession(
                     AgentEvent.CompactionReason.MANUAL,
                     willRetry = false,
                     customInstructions,
-                    preparation
+                    preparation,
+                    clearInProgress
                 )
             ) {
                 is CompactionRunResult.Success -> run.result
 
                 is CompactionRunResult.Failure -> {
                     if (!run.aborted) {
+                        clearInProgress()
                         _events.emit(
                             AgentEvent.CompactionEnd(
                                 reason = AgentEvent.CompactionReason.MANUAL,
@@ -1150,7 +1350,7 @@ class AgentSession(
                 }
             }
         } finally {
-            compactionInProgress = false
+            clearInProgress()
         }
     }
 

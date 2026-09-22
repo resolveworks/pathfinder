@@ -56,6 +56,14 @@ suspend fun createAgentSession(
     manager: SessionManager,
     settingsManager: SettingsManager,
     models: Models,
+    /**
+     * pi's ModelRuntime.hasConfiguredAuth seam: cheap configured-provider
+     * presence, consulted on the session-restore path where pi does not
+     * re-run auth resolution (which can refresh OAuth tokens). The app wires
+     * its credential-presence projection (ProviderAuthService.isConfigured);
+     * tests wire fakes.
+     */
+    hasConfiguredAuth: suspend (providerId: String) -> Boolean,
     streamFn: StreamFn,
     tools: List<AgentTool> = emptyList(),
     /** Working directory threaded to the session's system-prompt cwd line. */
@@ -82,7 +90,7 @@ suspend fun createAgentSession(
     if (hasExistingSession && existingSession.model != null) {
         val restored =
             models.getModel(existingSession.model.provider, existingSession.model.modelId)
-        if (restored != null && models.checkAuth(restored.provider)) {
+        if (restored != null && hasConfiguredAuth(restored.provider)) {
             model = restored
         }
         if (model == null) {

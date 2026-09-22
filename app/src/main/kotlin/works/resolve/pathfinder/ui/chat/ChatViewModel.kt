@@ -214,6 +214,7 @@ class ChatViewModel(
     private var agent: AgentSession? = null
     private var agentStateJob: Job? = null
     private var agentEventsJob: Job? = null
+    private var agentRunStateJob: Job? = null
 
     /** Read view over the bound session's tree (pi's ReadonlySessionManager); null while none is bound. */
     private val activeSession: ReadonlySessionManager?
@@ -473,7 +474,7 @@ class ChatViewModel(
     }
 
     fun stop() {
-        agent?.abort()
+        viewModelScope.launch { agent?.abort() }
     }
 
     /**
@@ -856,12 +857,26 @@ class ChatViewModel(
     private fun bindAgent(newAgent: AgentSession) {
         agentStateJob?.cancel()
         agentEventsJob?.cancel()
+        agentRunStateJob?.cancel()
         agent = newAgent
         observedAgentMessages = null
         observedAgentModel = null
         streamingFold = null
         agentStateJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
             newAgent.state.collect { state -> onAgentState(state) }
+        }
+        // Session run-active state (pi's session isStreaming) spans the
+        // whole prompt cycle — retry backoff and inter-run compaction
+        // included, where the agent's own per-run flag reports idle — so the
+        // busy projection is driven from here rather than
+        // [AgentState.isStreaming]. StateFlow replay also lands a binding
+        // made mid-run in the busy state.
+        agentRunStateJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            newAgent.isStreaming.collect { runActive ->
+                _uiState.update { it.copy(isStreaming = runActive) }
+                if (agentRunActive && !runActive) scheduleSummaryPatch()
+                agentRunActive = runActive
+            }
         }
         // Events are zero-replay flow: the subscriber must be bound before
         // any prompt starts. MessageUpdate is the per-chunk hot path: it
@@ -969,7 +984,7 @@ class ChatViewModel(
             is AgentEvent.MessageEnd -> {
                 _uiState.update {
                     it.copy(
-                        messages = projectCommittedAfterSessionMessageEnd(),
+                        messages = projectCommittedFromLiveState(),
                         treeRows = treeRows(it.treeFilter)
                     )
                 }
@@ -980,6 +995,18 @@ class ChatViewModel(
                 streamingFold = null
                 _streamingState.update { it.copy(streaming = null) }
                 scheduleSummaryPatch()
+            }
+
+            // The session emits message_end before appending to the tree
+            // (pi's order), so a message_end projection may still see the
+            // branch without its newest message (rendered live-keyed in the
+            // meantime); turn_end follows with the append settled, which
+            // re-keys the row onto its entry id.
+            is AgentEvent.TurnEnd -> _uiState.update {
+                it.copy(
+                    messages = projectCommittedFromLiveState(),
+                    treeRows = treeRows(it.treeFilter)
+                )
             }
 
             else -> Unit
@@ -1000,11 +1027,13 @@ class ChatViewModel(
      * Re-projects from the same state/tree intersection as [onAgentState], so
      * observing both paths is idempotent rather than append-incremental.
      * Ordering: the agent reduces `message_end` into state before the
-     * session appends it to the conversation and re-emits the session event,
-     * so the first projection sees the old tree — with no follow-up state
-     * emission it would otherwise never see the committed message.
+     * session re-emits the session event, but the session appends to the
+     * conversation only after that re-emission (pi's order), so a
+     * message_end projection can see a tree without the newest message —
+     * projected live-keyed — and the follow-up turn_end projection re-keys
+     * it once the append has settled.
      */
-    private fun projectCommittedAfterSessionMessageEnd(): List<TranscriptRow> = projectCommitted(
+    private fun projectCommittedFromLiveState(): List<TranscriptRow> = projectCommitted(
         agent?.state?.value?.messages.orEmpty(),
         activeSession?.getBranch().orEmpty(),
         transcriptMarkdown::parse
@@ -1036,16 +1065,10 @@ class ChatViewModel(
             it.copy(
                 messages = committedProjection ?: it.messages,
                 selectedModel = modelProjection ?: it.selectedModel,
-                isStreaming = state.isStreaming,
                 thinkingLevel = state.thinkingLevel,
                 availableThinkingLevels = thinkingLevels ?: it.availableThinkingLevels
             )
         }
-        // The run-idle transition patches the active session's drawer row:
-        // mid-run MessageEnds are skipped while streaming (see
-        // [scheduleSummaryPatch]).
-        if (agentStreaming && !state.isStreaming) scheduleSummaryPatch()
-        agentStreaming = state.isStreaming
     }
 
     /** Publishes the streaming fold's current projection, boundaries and deltas alike. */
@@ -1178,8 +1201,8 @@ class ChatViewModel(
         }
     }
 
-    /** True while the bound agent is streaming; run-idle transitions trigger a patch. */
-    private var agentStreaming = false
+    /** True while the bound session's prompt cycle is active; the settle transition triggers a patch. */
+    private var agentRunActive = false
 
     /**
      * Patches the active session's drawer row with one single-file read.

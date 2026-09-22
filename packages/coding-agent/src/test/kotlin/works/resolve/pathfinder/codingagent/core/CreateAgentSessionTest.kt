@@ -90,11 +90,15 @@ class CreateAgentSessionTest {
         manager: SessionManager,
         settings: Settings = Settings(),
         models: Models = Models(listOf(provider(model.provider, listOf(model, otherModel)))),
-        streamFn: StreamFn = idleStream
+        streamFn: StreamFn = idleStream,
+        hasConfiguredAuth: suspend (
+            String
+        ) -> Boolean = { providerId -> models.checkAuth(providerId) }
     ): CreateAgentSessionResult = createAgentSession(
         manager = manager,
         settingsManager = SettingsManager.inMemory(settings),
         models = models,
+        hasConfiguredAuth = hasConfiguredAuth,
         streamFn = streamFn
     )
 
@@ -239,6 +243,43 @@ class CreateAgentSessionTest {
         }.exceptionOrNull()
         assertTrue(error is IllegalStateException)
         assertEquals("No models available.", error!!.message)
+    }
+
+    @Test
+    fun `restore consults configured-provider presence without resolving credentials`() = runTest {
+        val manager = newManager()
+        manager.appendMessage(UserMessage.ofText("hello", 1L))
+        manager.appendMessage(assistant(model, "world"))
+
+        var resolverCalls = 0
+        val models = Models(
+            listOf(
+                Provider(
+                    id = model.provider,
+                    name = model.provider,
+                    baseUrl = "https://${model.provider}.example.invalid",
+                    authResolver = { _, _ ->
+                        resolverCalls++
+                        ResolvedAuth(apiKey = "k")
+                    },
+                    models = listOf(model),
+                    apis = emptyMap()
+                )
+            )
+        )
+
+        val result = create(
+            manager,
+            settings = Settings(defaultProvider = model.provider, defaultModel = model.id),
+            models = models,
+            hasConfiguredAuth = { providerId -> providerId == model.provider }
+        )
+
+        // The saved model restores; the restore check is the cheap
+        // presence seam, not a credential resolution (pi's hasConfiguredAuth).
+        assertEquals(model, result.session.model)
+        assertEquals(0, resolverCalls)
+        assertNull(result.modelFallback)
     }
 
     // ---- thinking clamping to model capabilities (sdk.ts clampThinkingLevel step) ----

@@ -48,11 +48,18 @@ class AgentNavigationTest {
 
     private class FauxApi : ChatApi {
         val responses = ArrayDeque<AssistantMessage>()
+        val seenPrompts = java.util.concurrent.CopyOnWriteArrayList<String>()
         override fun streamSimple(
             model: Model,
             context: TranscriptContext,
             options: SimpleStreamOptions
         ): Flow<AssistantMessageEvent> = flow {
+            seenPrompts.add(
+                context.messages.mapNotNull { message ->
+                    (message as? UserMessage)?.content?.singleOrNull()
+                        ?.let { (it as? TextContent)?.text }
+                }.joinToString("\n")
+            )
             val response = responses.removeFirstOrNull() ?: error("No faux summary response queued")
             emit(AssistantMessageEvent.Done(response.stopReason, response))
         }
@@ -105,6 +112,77 @@ class AgentNavigationTest {
         model = model.id,
         stopReason = StopReason.STOP
     )
+
+    /**
+     * user("hello") ← assistant(huge "branch A") ← assistant("branch B"),
+     * leaf on B; the huge middle entry makes the branch-summary token
+     * budget observable.
+     */
+    private suspend fun heavyForkedSession(): Pair<SessionManager, String> {
+        val manager = newManager()
+        manager.appendMessage(UserMessage.ofText("hello"))
+        val user = manager.getLeafId()!!
+        clock.advanceMillis(1)
+        manager.appendMessage(assistant("branch A:" + "a".repeat(400_000)))
+        clock.advanceMillis(1)
+        manager.appendMessage(assistant("branch B"))
+        return manager to user
+    }
+
+    @Test
+    fun `branch summary reserveTokens comes from the branchSummary settings`() = runTest {
+        // The summarized range is [huge A, small B]; the default reserve
+        // (16384 of the 128000 fallback window) fits it, while a reserve
+        // leaving a ~10-token budget keeps only the trailing entry.
+        val wide = model.copy(contextWindow = 128_000)
+        val sessions = mutableListOf<String>()
+        for (reserveTokens in listOf<Long?>(null, 127_990L)) {
+            val api = FauxApi().apply { responses.add(summaryResponse("## Goal\nexplore")) }
+            val models = Models(
+                listOf(
+                    Provider(
+                        wide.provider,
+                        wide.provider,
+                        "https://faux.test",
+                        authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
+                        models = listOf(wide),
+                        apis = mapOf(wide.api to api)
+                    )
+                )
+            )
+            val (manager, userEntryId) = heavyForkedSession()
+            val session = AgentSession(
+                agent = Agent(model = wide, streamFn = StreamFn { _, _, _ -> flow { } }).apply {
+                    replaceTranscript(manager.buildSessionContext().messages)
+                },
+                manager = manager,
+                models = models,
+                settingsManager = SettingsManager.inMemory(
+                    Settings(
+                        retry = RetrySettings(enabled = false),
+                        branchSummary = reserveTokens?.let {
+                            BranchSummarySettings(reserveTokens = it)
+                        }
+                    )
+                )
+            )
+
+            val result = session.navigateTree(
+                userEntryId,
+                AgentSession.NavigateTreeOptions(summarize = true)
+            )
+            assertNotNull(result.summaryEntry)
+            sessions.add(api.seenPrompts.single())
+        }
+
+        assertTrue("branch A" in sessions[0])
+        assertTrue("branch B" in sessions[0])
+        assertTrue("branch B" in sessions[1])
+        assertTrue(
+            "the settings-derived reserve truncates the summarized range",
+            "branch A" !in sessions[1]
+        )
+    }
 
     @Test
     fun `navigation with summarize appends a branch summary on the target`() = runTest {

@@ -154,6 +154,50 @@ class AgentSessionCompactionTest {
         }
 
     @Test
+    fun `estimatedTokensAfter uses the compaction-local estimator`() = runTest {
+        // pi's compaction-local estimator counts system messages as prompt
+        // state (0 tokens): the replayed prompt and mid-conversation
+        // patches do not inflate the post-compaction estimate.
+        val faux = FauxProvider()
+        faux.setResponses(assistant("4"), assistant("SUMMARY"), assistant("SUMMARY"))
+        val manager = SessionManager.create(
+            createTempDirectory("compaction-test").toFile(),
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        val session = AgentSession(
+            agent = Agent(faux.model, streamFn = modelsStreamFn(faux.models)),
+            manager = manager,
+            settingsManager = SettingsManager.inMemory(
+                Settings(
+                    retry = RetrySettings(enabled = false),
+                    compaction = CompactionSettings(
+                        enabled = true,
+                        reserveTokens = 16_384,
+                        keepRecentTokens = 1
+                    )
+                )
+            ),
+            models = faux.models
+        )
+
+        session.prompt("What is 2+2? Reply with just the number.")
+        manager.appendMessage(
+            SystemMessage(
+                content = listOf(TextContent("patch:".repeat(2_000))),
+                timestamp = 3L
+            )
+        )
+        val result = session.compact()
+
+        val context = manager.buildSessionContext().messages
+        assertTrue(context.any { it is SystemMessage })
+        val expected = context
+            .filterNot { it is SystemMessage }
+            .sumOf { works.resolve.pathfinder.ai.utils.estimateMessageTokens(it) }
+        assertEquals(expected, result.estimatedTokensAfter)
+    }
+
+    @Test
     fun `should trigger manual compaction via compact()`() = runTest {
         val faux = FauxProvider()
         faux.setResponses(
