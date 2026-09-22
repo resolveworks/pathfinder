@@ -846,9 +846,9 @@ enum class SessionAffinityFormat { OPENAI, OPENAI_NOSESSION, OPENROUTER }
  * pi's contract allows direct `streamSimple()` calls to throw synchronously
  * when request auth is missing; once a stream is returned, request/model/
  * runtime failures are encoded in the stream itself rather than thrown.
- * Divergence: this port has no sync-throw case — every failure, including
- * missing auth, is encoded as a terminal [AssistantMessageEvent.Error] in
- * the returned flow.
+ * Divergence: only the Anthropic adapter sync-throws for missing auth so
+ * far; the remaining adapters encode it as a terminal
+ * [AssistantMessageEvent.Error] in the returned flow.
  */
 interface ChatApi {
     fun streamSimple(
