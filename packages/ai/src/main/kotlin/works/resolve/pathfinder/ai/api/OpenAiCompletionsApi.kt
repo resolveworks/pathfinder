@@ -63,6 +63,7 @@ import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.getDeclaredTools
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.int
@@ -339,10 +340,15 @@ class OpenAiCompletionsApi(
                     )
                 }
 
+            val grammarToolInputProperties = createGrammarToolInputProperties(
+                getDeclaredTools(normalizedContext.messages),
+                model.compat.supportsOpenAIGrammarTools
+            )
             var params = OpenAiCompletionsPayload.buildRequestBody(
                 model,
                 normalizedContext,
-                options
+                options,
+                grammarToolInputProperties = grammarToolInputProperties
             )
             options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
             val body = params
@@ -362,7 +368,7 @@ class OpenAiCompletionsApi(
                     mergeHeaders(
                         mergeHeaders(
                             mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), model.headers),
-                            copilotDynamicHeadersFor(model, context)
+                            copilotDynamicHeadersFor(model, normalizedContext)
                         ),
                         sessionAffinityHeaders(model, cacheSessionId)
                     ),
@@ -400,7 +406,8 @@ class OpenAiCompletionsApi(
 
             try {
                 response.events.collect { event ->
-                    processSseEvent(event, model, state)?.let { emitAll(it) }
+                    processSseEvent(event, model, state, grammarToolInputProperties)
+                        ?.let { emitAll(it) }
                     if (state.done) throw DoneSentinel()
                 }
             } catch (_: DoneSentinel) {
@@ -442,7 +449,8 @@ class OpenAiCompletionsApi(
     private fun processSseEvent(
         event: SseEvent,
         model: Model,
-        state: StreamingState
+        state: StreamingState,
+        grammarToolInputProperties: Map<String, String>
     ): List<AssistantMessageEvent>? {
         if (event.data.trim() == DONE) {
             state.markDone()
@@ -460,11 +468,6 @@ class OpenAiCompletionsApi(
             // providers send `data: null` keep-alives); only unparseable
             // payloads above are protocol errors.
             return emptyList()
-        }
-
-        // Some providers deliver errors as JSON events mid-stream.
-        chunk.obj("error")?.let { error ->
-            throw ProviderStreamException(formatJsonError(error))
         }
 
         chunk.str("id")
@@ -525,7 +528,9 @@ class OpenAiCompletionsApi(
         }
 
         delta.arr("tool_calls")?.forEach { element ->
-            (element as? JsonObject)?.let { events += state.appendToolCallDelta(it) }
+            (element as? JsonObject)?.let {
+                events += state.appendToolCallDelta(it, grammarToolInputProperties)
+            }
         }
 
         // reasoning_details deltas keep the provider replay data in the
@@ -590,17 +595,6 @@ class OpenAiCompletionsApi(
         else -> error.message ?: error::class.simpleName ?: "Unknown error"
     }
 
-    private fun formatJsonError(error: JsonObject): String {
-        val message = error["message"].strOrNull()
-        val type = error["type"].strOrNull()
-        val code = error["code"].strOrNull()
-        return listOfNotNull(
-            type,
-            message ?: error.toString().take(500).ifEmpty { null },
-            code?.let { "code: $it" }
-        ).joinToString(" — ")
-    }
-
     private fun openRouterRawMetadata(body: String): String? {
         val parsed = try {
             lenientJson.parseToJsonElement(body)
@@ -644,7 +638,10 @@ private suspend fun kotlinx.coroutines.flow.FlowCollector<AssistantMessageEvent>
  * boundary snapshot re-renders only the blocks a delta landed in.
  * Streamed `tool_calls[].function.arguments` fragments accumulate as a
  * string and are parsed into the arguments object at every fragment and
- * again at finish, exactly like upstream.
+ * again at finish, exactly like upstream. `custom` tool-call input
+ * accumulates raw fragments through [GrammarToolInputJsonBuffer], which
+ * yields the JSON-encoded delta view while the accumulated input is stored
+ * as the arguments object's sole property.
  */
 internal class StreamingState(private val model: Model, private val timestampMs: Long) {
     private sealed interface Block {
@@ -658,6 +655,37 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         var name: String = ""
         val partialArgs = StringBuilder()
         var arguments: JsonObject = JsonObject(emptyMap())
+
+        /** Grammar input buffer for `custom` tool calls; null for function calls. */
+        var customInput: CustomToolInput? = null
+    }
+
+    /** Grammar input property and JSON buffer for `custom` tool calls. */
+    internal class CustomToolInput(
+        val property: String,
+        val jsonBuffer: GrammarToolInputJsonBuffer = GrammarToolInputJsonBuffer()
+    )
+
+    /** Last accepted custom-tool input, stored as the sole arguments property. */
+    private fun getCustomToolCallInput(accumulator: ToolCallAccumulator): String {
+        val customInput = accumulator.customInput ?: return ""
+        return accumulator.arguments[customInput.property].stringOrNull() ?: ""
+    }
+
+    private fun appendCustomToolCallInput(
+        accumulator: ToolCallAccumulator,
+        nextInput: String,
+        close: Boolean
+    ): String? {
+        val customInput = accumulator.customInput ?: return null
+        val delta = appendGrammarToolInputJsonDelta(
+            customInput.jsonBuffer,
+            customInput.property,
+            nextInput,
+            close
+        )
+        accumulator.arguments = buildJsonObject { put(customInput.property, nextInput) }
+        return delta
     }
 
     private val blocks = mutableListOf<Block>()
@@ -761,12 +789,16 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         }
     }
 
-    fun appendToolCallDelta(delta: JsonObject): List<AssistantMessageEvent> {
+    fun appendToolCallDelta(
+        delta: JsonObject,
+        grammarToolInputProperties: Map<String, String>
+    ): List<AssistantMessageEvent> {
         val events = mutableListOf<AssistantMessageEvent>()
         val streamIndex = delta.long("index")?.toInt()
         val id = delta.str("id")
         val function = delta.obj("function")
-        val name = function?.get("name").strOrNull()
+        val custom = delta.obj("custom")
+        val name = function?.get("name").strOrNull() ?: custom?.get("name").strOrNull() ?: ""
 
         var blockIndex = streamIndex?.let { toolByIndex[it] }
         if (blockIndex == null && id != null && id.isNotEmpty()) blockIndex = toolById[id]
@@ -776,7 +808,14 @@ internal class StreamingState(private val model: Model, private val timestampMs:
             // The start snapshot is emitted with the scaffold (id/name) in
             // place, like pi's block creation.
             accumulator.id = id.orEmpty()
-            accumulator.name = name.orEmpty()
+            accumulator.name = name
+            // The "input" fallback should not be taken for declared tools;
+            // for a made-up tool it at least keeps the input stashable.
+            if (custom != null && function == null) {
+                val customInputProperty = grammarToolInputProperties[name] ?: "input"
+                accumulator.arguments = buildJsonObject { put(customInputProperty, "") }
+                accumulator.customInput = CustomToolInput(customInputProperty)
+            }
             addBlock(Block.Tool(accumulator))
             events.add(AssistantMessageEvent.ToolCallStart(blockIndex, snapshot()))
         }
@@ -785,11 +824,28 @@ internal class StreamingState(private val model: Model, private val timestampMs:
 
         val accumulator = (blocks[blockIndex] as Block.Tool).accumulator
         if (id != null && id.isNotEmpty() && accumulator.id.isEmpty()) accumulator.id = id
-        if (!name.isNullOrEmpty() && accumulator.name.isEmpty()) accumulator.name = name
-        val argDelta = function?.get("arguments").strOrNull() ?: ""
-        if (argDelta.isNotEmpty()) {
-            accumulator.partialArgs.append(argDelta)
+        if (name.isNotEmpty() && accumulator.name.isEmpty()) accumulator.name = name
+        if (custom != null && function == null && accumulator.customInput == null) {
+            val customInputProperty = grammarToolInputProperties[accumulator.name] ?: "input"
+            accumulator.arguments = buildJsonObject { put(customInputProperty, "") }
+            accumulator.customInput = CustomToolInput(customInputProperty)
+        }
+
+        var argDelta = ""
+        val arguments = function?.get("arguments").strOrNull()
+        if (!arguments.isNullOrEmpty()) {
+            argDelta = arguments
+            accumulator.partialArgs.append(arguments)
             accumulator.arguments = parseStreamingJson(accumulator.partialArgs.toString())
+        } else {
+            val input = custom?.get("input").strOrNull()
+            if (!input.isNullOrEmpty()) {
+                argDelta = appendCustomToolCallInput(
+                    accumulator,
+                    getCustomToolCallInput(accumulator) + input,
+                    close = false
+                ) ?: ""
+            }
         }
         invalidate(blockIndex)
 
@@ -801,24 +857,43 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     fun finish(): List<AssistantMessageEvent> {
         // Serialized reasoning details must be applied before thinking_end.
         applyStreamedReasoningDetails()
-        return blocks.mapIndexed { index, block ->
+        val events = mutableListOf<AssistantMessageEvent>()
+        blocks.forEachIndexed { index, block ->
             when (block) {
-                Block.Text -> AssistantMessageEvent.TextEnd(index, text.toString(), snapshot())
+                Block.Text -> events.add(
+                    AssistantMessageEvent.TextEnd(index, text.toString(), snapshot())
+                )
 
-                Block.Thinking ->
+                Block.Thinking -> events.add(
                     AssistantMessageEvent.ThinkingEnd(index, thinking.toString(), snapshot())
+                )
 
                 is Block.Tool -> {
-                    block.accumulator.arguments =
-                        parseStreamingJson(block.accumulator.partialArgs.toString())
-                    AssistantMessageEvent.ToolCallEnd(
-                        index,
-                        toolCallOf(block.accumulator),
-                        snapshot()
+                    val accumulator = block.accumulator
+                    if (accumulator.customInput != null) {
+                        appendCustomToolCallInput(
+                            accumulator,
+                            getCustomToolCallInput(accumulator),
+                            close = true
+                        )?.let { delta ->
+                            events.add(AssistantMessageEvent.ToolCallDelta(index, delta))
+                        }
+                    } else {
+                        accumulator.arguments =
+                            parseStreamingJson(accumulator.partialArgs.toString())
+                    }
+                    invalidate(index)
+                    events.add(
+                        AssistantMessageEvent.ToolCallEnd(
+                            index,
+                            toolCallOf(accumulator),
+                            snapshot()
+                        )
                     )
                 }
             }
         }
+        return events
     }
 
     private fun toolCallOf(accumulator: ToolCallAccumulator): ToolCall = ToolCall(
@@ -861,11 +936,16 @@ object OpenAiCompletionsPayload {
         cacheRetention: CacheRetention = OpenAiResponsesApi.resolveCacheRetention(
             options.cacheRetention,
             options.env
+        ),
+        grammarToolInputProperties: Map<String, String> = createGrammarToolInputProperties(
+            getDeclaredTools(context.messages),
+            compat.supportsOpenAIGrammarTools
         )
     ): JsonObject {
         val body = mutableMapOf<String, JsonElement>()
         body["model"] = JsonPrimitive(model.id)
-        val messages = convertMessages(model, context, compat).toMutableList()
+        val messages =
+            convertMessages(model, context, compat, grammarToolInputProperties).toMutableList()
         val cacheControl = getCompatCacheControl(compat, cacheRetention)
         body["stream"] = JsonPrimitive(true)
 
@@ -1261,7 +1341,8 @@ object OpenAiCompletionsPayload {
     fun convertMessages(
         model: Model,
         context: TranscriptContext,
-        compat: OpenAiCompletionsCompat = model.compat
+        compat: OpenAiCompletionsCompat = model.compat,
+        grammarToolInputProperties: Map<String, String> = emptyMap()
     ): List<JsonObject> {
         val normalizedContext = resolveTranscript(context, compat.supportsMidConvoSystemMessages)
         val params = mutableListOf<JsonObject>()
@@ -1328,7 +1409,8 @@ object OpenAiCompletionsPayload {
                     convertAssistantMessage(
                         model,
                         msg as works.resolve.pathfinder.ai.AssistantMessage,
-                        compat
+                        compat,
+                        grammarToolInputProperties
                     )
                         ?.let { params.add(it) }
 
@@ -1417,35 +1499,28 @@ object OpenAiCompletionsPayload {
         return id
     }
 
+    /** Each block keeps its wire slot; text and images interleave like pi's part mapping. */
     private fun convertUserMessage(msg: works.resolve.pathfinder.ai.UserMessage): JsonObject? {
         if (msg.content.isEmpty()) return null
         return buildJsonObject {
             put("role", "user")
-            val text = sanitizeSurrogates(
-                msg.content.filter { it.type == ContentType.TEXT }
-                    .joinToString("") { (it as works.resolve.pathfinder.ai.TextContent).text }
-            )
-            val images = msg.content.filter { it.type == ContentType.IMAGE }
-            if (images.isEmpty()) {
-                put("content", text)
-            } else {
-                put(
-                    "content",
-                    buildJsonArray {
-                        if (text.isNotEmpty()) {
+            put(
+                "content",
+                buildJsonArray {
+                    msg.content.forEach { item ->
+                        if (item is works.resolve.pathfinder.ai.TextContent) {
                             add(
                                 buildJsonObject {
                                     put("type", "text")
-                                    put("text", text)
+                                    put("text", sanitizeSurrogates(item.text))
                                 }
                             )
-                        }
-                        images.forEach {
-                            add(imagePart(it as works.resolve.pathfinder.ai.ImageContent))
+                        } else {
+                            add(imagePart(item as works.resolve.pathfinder.ai.ImageContent))
                         }
                     }
-                )
-            }
+                }
+            )
         }
     }
 
@@ -1464,7 +1539,8 @@ object OpenAiCompletionsPayload {
     private fun convertAssistantMessage(
         model: Model,
         msg: works.resolve.pathfinder.ai.AssistantMessage,
-        compat: OpenAiCompletionsCompat
+        compat: OpenAiCompletionsCompat,
+        grammarToolInputProperties: Map<String, String>
     ): JsonObject? {
         val assistant = mutableMapOf<String, JsonElement>()
 
@@ -1542,16 +1618,40 @@ object OpenAiCompletionsPayload {
         if (toolCalls.isNotEmpty()) {
             assistant["tool_calls"] = JsonArray(
                 toolCalls.map { call ->
-                    buildJsonObject {
-                        put("id", call.id)
-                        put("type", "function")
-                        put(
-                            "function",
-                            buildJsonObject {
-                                put("name", call.name)
-                                put("arguments", JsonPrimitive(call.arguments.toString()))
-                            }
-                        )
+                    val customInputProperty = grammarToolInputProperties[call.name]
+                    if (customInputProperty != null) {
+                        buildJsonObject {
+                            put("id", call.id)
+                            put("type", "custom")
+                            put(
+                                "custom",
+                                buildJsonObject {
+                                    put("name", call.name)
+                                    put(
+                                        "input",
+                                        sanitizeSurrogates(
+                                            getGrammarToolInput(
+                                                call.name,
+                                                call.arguments,
+                                                customInputProperty
+                                            )
+                                        )
+                                    )
+                                }
+                            )
+                        }
+                    } else {
+                        buildJsonObject {
+                            put("id", call.id)
+                            put("type", "function")
+                            put(
+                                "function",
+                                buildJsonObject {
+                                    put("name", call.name)
+                                    put("arguments", JsonPrimitive(call.arguments.toString()))
+                                }
+                            )
+                        }
                     }
                 }
             )
@@ -1584,6 +1684,39 @@ object OpenAiCompletionsPayload {
      * Boolean defaulting to true, so it is passed through directly.
      */
     private fun convertTool(tool: Tool, compat: OpenAiCompletionsCompat): JsonObject {
+        val grammar = resolveGrammarConstrainedSampling(tool, compat.supportsOpenAIGrammarTools)
+        if (grammar != null) {
+            return buildJsonObject {
+                put("type", "custom")
+                put(
+                    "custom",
+                    buildJsonObject {
+                        put("name", tool.name)
+                        put("description", tool.description)
+                        put(
+                            "format",
+                            buildJsonObject {
+                                put("type", "grammar")
+                                put(
+                                    "grammar",
+                                    buildJsonObject {
+                                        put(
+                                            "syntax",
+                                            if (grammar.format == GrammarConstrainedFormat.LARK) {
+                                                "lark"
+                                            } else {
+                                                "regex"
+                                            }
+                                        )
+                                        put("definition", grammar.definition)
+                                    }
+                                )
+                            }
+                        )
+                    }
+                )
+            }
+        }
         val strict = resolveJsonSchemaStrictSampling(tool, compat.supportsStrictMode)
         return buildJsonObject {
             put("type", "function")
