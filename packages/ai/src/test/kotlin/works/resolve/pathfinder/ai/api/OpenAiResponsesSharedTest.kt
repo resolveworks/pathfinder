@@ -306,6 +306,33 @@ class OpenAiResponsesSharedTest {
     }
 
     @Test
+    fun `multi-pipe replay ids keep only the second segment`() {
+        // pi's destructured `split("|")` takes element 1; a further "|"
+        // belongs to neither id (unlike substringAfter, which keeps the tail).
+        val assistant = AssistantMessage(
+            content = listOf(
+                ToolCall(
+                    id = "call_1|fc_2|residue",
+                    name = "edit",
+                    arguments = JsonObject(emptyMap())
+                )
+            ),
+            api = "openai-responses",
+            provider = "openai",
+            model = "gpt-5-mini",
+            stopReason = StopReason.TOOL_USE
+        )
+        val input = OpenAiResponsesShared.convertResponsesMessages(
+            model(),
+            normalizeContext(Context(messages = listOf(assistant))),
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
+        )
+        val item = input.first()
+        assertEquals("call_1", item["call_id"]!!.jsonPrimitive.content)
+        assertEquals("fc_2", item["id"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun `non-fc item ids are dropped to avoid pairing validation`() {
         val assistant = AssistantMessage(
             content = listOf(
@@ -359,6 +386,32 @@ class OpenAiResponsesSharedTest {
         assertTrue(item["id"]!!.jsonPrimitive.content.length <= 64)
         assertTrue(Regex("^fc_[A-Za-z0-9]+$").matches(item["id"]!!.jsonPrimitive.content))
         assertEquals("fc_f5wk3t1myarzx", item["id"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `foreign multi-pipe item ids hash only the second segment`() {
+        val assistant = AssistantMessage(
+            content = listOf(
+                ToolCall(
+                    id = "call_1|copilot-item|residue",
+                    name = "edit",
+                    arguments = JsonObject(emptyMap())
+                )
+            ),
+            api = "openai-responses",
+            provider = "github-copilot",
+            model = "gpt-5.5",
+            stopReason = StopReason.TOOL_USE
+        )
+        val input = OpenAiResponsesShared.convertResponsesMessages(
+            model(provider = "openai-codex", id = "gpt-5.5", api = "openai-codex-responses"),
+            normalizeContext(Context(messages = listOf(assistant))),
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
+        )
+        assertEquals(
+            "fc_${shortHash("copilot-item")}",
+            input.first()["id"]!!.jsonPrimitive.content
+        )
     }
 
     @Test

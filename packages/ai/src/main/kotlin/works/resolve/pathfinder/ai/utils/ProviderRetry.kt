@@ -99,26 +99,27 @@ private inline fun parseDateMsOrNull(value: String, parse: (String) -> java.time
         null
     }
 
+/**
+ * JS `Date.parse` stand-in for a non-numeric `Retry-After` value: RFC 1123
+ * IMF-fixdate plus the ISO 8601 forms `Date.parse` accepts (offset
+ * date-times, zoneless date-times as local time, date-only forms as UTC).
+ * V8's remaining legacy formats (RFC 1036/850 two-digit years, asctime) stay
+ * unparsed: like any unparseable value they yield null, taking pi's NaN path
+ * (provider-retry sleeps zero; the Copilot flow returns the 429 unretried).
+ */
 internal fun parseHttpDateMsOrNull(value: String): Long? {
-    val trimmed = value.trim()
-    // Date.parse accepts RFC 1123 and ISO 8601 dates; ISO values without an
-    // offset are read as UTC.
-    return parseDateMsOrNull(trimmed) {
+    val text = value.trim()
+    return parseDateMsOrNull(text) {
+        java.time.OffsetDateTime.parse(it).toInstant()
+    } ?: parseDateMsOrNull(text) {
+        java.time.LocalDateTime.parse(it).atZone(java.time.ZoneId.systemDefault()).toInstant()
+    } ?: parseDateMsOrNull(text) {
+        java.time.LocalDate.parse(it).atStartOfDay(java.time.ZoneOffset.UTC).toInstant()
+    } ?: parseDateMsOrNull(text) {
         java.time.ZonedDateTime.parse(
             it,
             java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME
         ).toInstant()
-    } ?: parseDateMsOrNull(trimmed) {
-        java.time.OffsetDateTime.parse(
-            it,
-            java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME
-        ).toInstant()
-    } ?: parseDateMsOrNull(trimmed) {
-        java.time.LocalDateTime.parse(it, java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME)
-            .atZone(java.time.ZoneOffset.UTC).toInstant()
-    } ?: parseDateMsOrNull(trimmed) {
-        java.time.LocalDate.parse(it, java.time.format.DateTimeFormatter.ISO_LOCAL_DATE)
-            .atStartOfDay(java.time.ZoneOffset.UTC).toInstant()
     }
 }
 

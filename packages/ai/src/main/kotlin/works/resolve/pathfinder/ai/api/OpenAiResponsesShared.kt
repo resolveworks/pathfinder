@@ -128,8 +128,9 @@ object OpenAiResponsesShared {
             if (model.provider !in allowedToolCallProviders || !id.contains("|")) {
                 normalizeIdPart(id)
             } else {
-                val callId = id.substringBefore("|")
-                val itemId = id.substringAfter("|")
+                // Destructuring mirrors pi's `const [callId, itemId] = id.split("|")`:
+                // only the second segment is the item id, never the whole tail.
+                val (callId, itemId) = id.split("|")
                 val normalizedCallId = normalizeIdPart(callId)
                 val isForeignToolCall = source.provider != model.provider || source.api != model.api
                 var normalizedItemId =
@@ -329,9 +330,12 @@ object OpenAiResponsesShared {
                             }
 
                             is ToolCall -> {
-                                val callId = block.id.substringBefore("|")
-                                val itemIdRaw = block.id.substringAfter("|", "")
-                                var itemId: String? = itemIdRaw.takeIf { block.id.contains("|") }
+                                // `getOrNull(1)` mirrors pi's destructured
+                                // `split("|")`, where a missing segment is
+                                // undefined rather than a string.
+                                val idParts = block.id.split("|")
+                                val callId = idParts[0]
+                                var itemId: String? = idParts.getOrNull(1)
                                 val customInputProperty =
                                     options.grammarToolInputProperties[block.name]
                                 // For different-model messages drop fc_ ids to avoid

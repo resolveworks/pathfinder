@@ -1,14 +1,5 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
-import java.time.DateTimeException
-import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.OffsetDateTime
-import java.time.ZoneId
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeParseException
-import java.time.temporal.ChronoField
 import java.util.Base64
 import java.util.Locale
 import kotlin.math.max
@@ -33,6 +24,7 @@ import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.parseHttpDateMsOrNull
 import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
@@ -290,7 +282,7 @@ class GitHubCopilotOAuthAuth(
                 val seconds = parseFloatPrefix(retryAfter)
                 delayMs =
                     if (seconds == null) {
-                        parseHttpDateMs(retryAfter)?.let {
+                        parseHttpDateMsOrNull(retryAfter)?.let {
                             (it - clock.now().toEpochMilliseconds()).toDouble()
                         }
                             ?: Double.NaN
@@ -307,45 +299,6 @@ class GitHubCopilotOAuthAuth(
             }
             delay(delayMs.toLong())
             retry++
-        }
-    }
-
-    /**
-     * JS `Date.parse` stand-in for a non-numeric `Retry-After` value: RFC
-     * 1123 IMF-fixdate plus the ISO 8601 forms `Date.parse` accepts (offset
-     * date-times, zoneless date-times as local time, date-only forms as
-     * UTC). V8's remaining legacy formats (RFC 1036/850 two-digit years,
-     * asctime) stay unparsed: like any unparseable value they yield null,
-     * taking pi's NaN path (the 429 is returned without a retry).
-     */
-    internal fun parseHttpDateMs(value: String): Long? {
-        val text = value.trim()
-        parseIsoDateMs(text)?.let { return it }
-        return try {
-            DateTimeFormatter.RFC_1123_DATE_TIME
-                .parse(text)
-                .getLong(ChronoField.INSTANT_SECONDS) * 1000
-        } catch (_: DateTimeParseException) {
-            null
-        } catch (_: DateTimeException) {
-            null
-        }
-    }
-
-    private fun parseIsoDateMs(text: String): Long? = try {
-        OffsetDateTime.parse(text).toInstant().toEpochMilli()
-    } catch (_: DateTimeParseException) {
-        try {
-            LocalDateTime.parse(text)
-                .atZone(ZoneId.systemDefault())
-                .toInstant()
-                .toEpochMilli()
-        } catch (_: DateTimeParseException) {
-            try {
-                LocalDate.parse(text).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-            } catch (_: DateTimeParseException) {
-                null
-            }
         }
     }
 

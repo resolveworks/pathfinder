@@ -255,16 +255,20 @@ class ProviderRetryTest {
 
     @Test
     fun `parses ISO 8601 retry-after dates like Date parse`() {
-        // Date.parse accepts RFC 1123 and ISO 8601; ISO values without an
-        // offset are read as UTC. (In retryDelayMs itself a leading-digit ISO
-        // date is intercepted by the parseFloat-prefix branch first, exactly
-        // like pi's Number.parseFloat.)
+        // Date.parse accepts RFC 1123 and ISO 8601; zoneless date-times are
+        // read as local time and date-only forms as UTC, per ECMA-262. (In
+        // retryDelayMs itself a leading-digit ISO date is intercepted by the
+        // parseFloat-prefix branch first, exactly like pi's
+        // Number.parseFloat.)
         assertEquals(
             1_002_000L,
             parseHttpDateMsOrNull("1970-01-01T00:16:42Z")
         )
         assertEquals(
-            1_003_000L,
+            java.time.LocalDateTime.parse("1970-01-01T00:16:43")
+                .atZone(java.time.ZoneId.systemDefault())
+                .toInstant()
+                .toEpochMilli(),
             parseHttpDateMsOrNull("1970-01-01T00:16:43")
         )
         assertEquals(86_400_000L, parseHttpDateMsOrNull("1970-01-02"))
