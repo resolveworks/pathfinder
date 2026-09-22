@@ -517,9 +517,43 @@ class ResolveModelScopeTest {
     }
 
     @Test
-    fun `a glob matches provider-slash-id and bare ids case-insensitively`() {
+    fun `a glob matches bare ids case-insensitively`() {
         val result = resolveModelScope(listOf("*GLM-5*"), available)
         assertEquals(listOf("glm-5.3", "glm-5.2"), result.scopedModels.map { it.model.id })
+    }
+
+    /** pi (minimatch): `*` and `?` never match `/`, so a bare `*` skips
+     *  openrouter-style ids like "openai/gpt-x". */
+    @Test
+    fun `a bare star scopes only slash-free ids`() {
+        val result = resolveModelScope(listOf("*"), available)
+        assertEquals(listOf("glm-5.3", "glm-5.2"), result.scopedModels.map { it.model.id })
+    }
+
+    @Test
+    fun `a question mark does not match a slash`() {
+        val result = resolveModelScope(listOf("openai?gpt-x"), available)
+        assertTrue(result.scopedModels.isEmpty())
+        assertEquals(listOf("No models match pattern \"openai?gpt-x\""), result.diagnostics)
+    }
+
+    @Test
+    fun `a provider segment glob is case-insensitive and spans one segment`() {
+        val result = resolveModelScope(listOf("ZAI/*"), available)
+        assertEquals(listOf("glm-5.3", "glm-5.2"), result.scopedModels.map { it.model.id })
+    }
+
+    @Test
+    fun `a provider segment glob does not span nested id segments`() {
+        val result = resolveModelScope(listOf("openrouter/*"), available)
+        assertTrue(result.scopedModels.isEmpty())
+        assertEquals(listOf("No models match pattern \"openrouter/*\""), result.diagnostics)
+    }
+
+    @Test
+    fun `a glob spans nested id segments one segment per slash`() {
+        val result = resolveModelScope(listOf("openrouter/*/*"), available)
+        assertEquals(listOf("openai/gpt-x"), result.scopedModels.map { it.model.id })
     }
 
     @Test
