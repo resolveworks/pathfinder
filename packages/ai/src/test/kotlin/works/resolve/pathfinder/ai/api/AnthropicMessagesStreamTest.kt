@@ -3,6 +3,7 @@ package works.resolve.pathfinder.ai.api
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -26,6 +28,7 @@ import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelCost
+import works.resolve.pathfinder.ai.ProviderAuthException
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.SimpleToolChoice
 import works.resolve.pathfinder.ai.StopReason
@@ -267,6 +270,41 @@ class AnthropicMessagesStreamTest {
         assertEquals("thinking", thinking.thinking)
         assertEquals("sig-1", thinking.thinkingSignature)
         assertFalse(thinking.redacted)
+
+        // No signature_delta: the signature stays the empty string pi seeds
+        // from content_block_start, not null.
+        transport.enqueueNamedResponse(
+            messageStart(),
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            messageDelta(output = 20),
+            messageStop
+        )
+        val unsigned = assertIs<AssistantMessageEvent.Done>(
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        )
+        assertEquals(
+            "",
+            assertIs<ThinkingContent>(unsigned.message.content.single()).thinkingSignature
+        )
+        // Replay treats the empty signature as absent: the block degrades to
+        // text for providers without allowEmptySignature.
+        val replayed = convertMessages(
+            listOf(
+                unsigned.message.copy(api = "anthropic-messages", provider = "anthropic")
+            ),
+            isOAuthToken = false,
+            cacheControl = null,
+            allowEmptySignature = false
+        ).messages
+        val wireBlocks = assertIs<JsonArray>(replayed.single()["content"])
+        assertEquals("text", wireBlocks[0].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("hmm", wireBlocks[0].jsonObject["text"]!!.jsonPrimitive.content)
 
         transport.enqueueNamedResponse(
             messageStart(),
@@ -535,6 +573,21 @@ class AnthropicMessagesStreamTest {
         assertEquals("cannot help with that", error.error.errorMessage)
         assertEquals("refusal", error.error.rawStopReason)
 
+        // pi's `||` applies the default for an empty explanation too.
+        transport.enqueueNamedResponse(
+            messageStart(),
+            messageDelta(stopReason = "refusal", stopDetails = """{"explanation":""}"""),
+            messageStop
+        )
+        last =
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        assertEquals(
+            "The model refused to complete the request",
+            assertIs<AssistantMessageEvent.Error>(last).error.errorMessage
+        )
+
         transport.enqueueNamedResponse(
             messageStart(),
             messageDelta(stopReason = "pause_turn"),
@@ -730,7 +783,109 @@ class AnthropicMessagesStreamTest {
             transport
         ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         val error = assertIs<AssistantMessageEvent.Error>(last)
-        assertTrue("Could not parse Anthropic SSE event" in (error.error.errorMessage ?: ""))
+        val message = error.error.errorMessage ?: ""
+        assertTrue("Could not parse Anthropic SSE event content_block_delta" in message)
+        assertTrue("; data=" in message)
+        assertTrue("; raw=event: content_block_delta\\ndata: " in message, message)
+    }
+
+    /** Ports anthropic-sse-parsing "repairs malformed SSE JSON and malformed streamed tool JSON". */
+    @Test
+    fun `repairs malformed sse json and malformed streamed tool json`() = runTest {
+        // Raw `\H` escape and a raw tab inside JSON string literals: invalid
+        // JSON that pi's repair pass fixes rather than failing the stream.
+        val malformedToolJsonDelta =
+            """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"A\H\",\"text\":\"col1	col2\"}"}}"""
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            messageStart(),
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_test","name":"edit","input":{}}}""",
+            "content_block_delta" to malformedToolJsonDelta,
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            messageDelta(stopReason = "tool_use", output = 5),
+            messageStop
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        )
+        assertNull(done.message.errorMessage)
+        assertEquals(StopReason.TOOL_USE, done.reason)
+        assertEquals(
+            buildJsonObject {
+                put("path", "A\\H")
+                put("text", "col1\tcol2")
+            },
+            assertIs<ToolCall>(done.message.content.single()).arguments
+        )
+    }
+
+    /**
+     * Schema-required event fields are read directly, as in pi: a missing
+     * field throws and becomes the stream's terminal error event instead of
+     * silently skipping the event.
+     */
+    @Test
+    fun `missing required event fields fail the stream`() = runTest {
+        val cases = listOf(
+            "message_start is missing its message object" to listOf(
+                "message_start" to """{"type":"message_start"}""",
+                messageDelta(),
+                messageStop
+            ),
+            "message_start is missing its usage object" to listOf(
+                "message_start" to
+                    """{"type":"message_start","message":{"id":"msg_test","model":"claude-sonnet-4-5"}}""",
+                messageDelta(),
+                messageStop
+            ),
+            "content_block_start is missing its index" to listOf(
+                messageStart(),
+                "content_block_start" to
+                    """{"type":"content_block_start","content_block":{"type":"text","text":""}}""",
+                messageDelta(),
+                messageStop
+            ),
+            "content_block_start is missing its content_block" to listOf(
+                messageStart(),
+                "content_block_start" to """{"type":"content_block_start","index":0}""",
+                messageDelta(),
+                messageStop
+            ),
+            "content_block_delta is missing its delta" to listOf(
+                messageStart(),
+                "content_block_delta" to """{"type":"content_block_delta","index":0}""",
+                messageDelta(),
+                messageStop
+            ),
+            "content_block_stop is missing its index" to listOf(
+                messageStart(),
+                "content_block_stop" to """{"type":"content_block_stop"}""",
+                messageDelta(),
+                messageStop
+            ),
+            "message_delta is missing its delta" to listOf(
+                messageStart(),
+                "message_delta" to
+                    """{"type":"message_delta","usage":{"output_tokens":1}}""",
+                messageStop
+            )
+        )
+        for ((description, events) in cases) {
+            val transport = FakeTransport()
+            transport.enqueueNamedResponse(events)
+            val last = api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+            assertTrue(last is AssistantMessageEvent.Error, "$description: $last")
+            val error = last as AssistantMessageEvent.Error
+            assertTrue(
+                "missing required field" in (error.error.errorMessage ?: ""),
+                "$description: ${error.error.errorMessage}"
+            )
+        }
     }
 
     @Test
@@ -967,7 +1122,9 @@ class AnthropicMessagesStreamTest {
                 .last()
         )
         assertEquals("claude-opus-4-8", done.message.responseModel)
-        assertEquals("claude-opus-4-8", done.message.model)
+        // The served model never overwrites the requested id; only the
+        // separate responseModel field carries it.
+        assertEquals("claude-sonnet-4-5", done.message.model)
         assertEquals(100 * 5.0 / 1_000_000, done.message.usage.cost.input, 1e-12)
         assertEquals(7 * 25.0 / 1_000_000, done.message.usage.cost.output, 1e-12)
     }
@@ -986,6 +1143,8 @@ class AnthropicMessagesStreamTest {
                 .toList()
                 .last()
         )
+        assertNull(done.message.responseModel)
+        assertEquals("claude-sonnet-4-5", done.message.model)
         assertEquals(100 * 3.0 / 1_000_000, done.message.usage.cost.input, 1e-12)
         assertEquals(7 * 15.0 / 1_000_000, done.message.usage.cost.output, 1e-12)
     }
@@ -1435,13 +1594,12 @@ class AnthropicMessagesStreamTest {
     }
 
     @Test
-    fun `streamSimple missing key surfaces as error event without a request`() = runTest {
+    fun `streamSimple without an api key throws synchronously without a request`() = runTest {
         val transport = FakeTransport()
-        val events = api(transport)
-            .streamSimple(claude, context, SimpleStreamOptions())
-            .toList()
-        val error = assertIs<AssistantMessageEvent.Error>(events.single())
-        assertTrue("No API key" in (error.error.errorMessage ?: ""))
+        val error = assertFailsWith<ProviderAuthException> {
+            api(transport).streamSimple(claude, context, SimpleStreamOptions())
+        }
+        assertTrue("No API key" in (error.message ?: ""))
         assertEquals(0, transport.requests.size)
     }
 

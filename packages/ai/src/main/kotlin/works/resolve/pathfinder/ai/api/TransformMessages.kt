@@ -181,7 +181,7 @@ internal fun transformMessages(
     // included), so it never causes a duplicate result for a call that is answered later.
     val heldSystemMessages = mutableListOf<Message>()
 
-    fun closePendingToolCalls(now: Long) {
+    fun closePendingToolCalls() {
         for (tc in pendingToolCalls) {
             if (tc.id !in existingToolResultIds) {
                 result.add(
@@ -190,7 +190,9 @@ internal fun transformMessages(
                         toolName = tc.name,
                         content = listOf(TextContent("No result provided")),
                         isError = true,
-                        timestamp = now
+                        // pi stamps Date.now() here; reading wall time is
+                        // this pass's job.
+                        timestamp = System.currentTimeMillis()
                     )
                 )
             }
@@ -204,7 +206,7 @@ internal fun transformMessages(
     for (msg in transformed) {
         when (msg.role) {
             MessageRole.ASSISTANT -> {
-                closePendingToolCalls(msg.timestamp)
+                closePendingToolCalls()
                 val assistantMsg = msg as AssistantMessage
                 if (assistantMsg.stopReason == works.resolve.pathfinder.ai.StopReason.ERROR ||
                     assistantMsg.stopReason == works.resolve.pathfinder.ai.StopReason.ABORTED
@@ -234,13 +236,13 @@ internal fun transformMessages(
 
             MessageRole.USER -> {
                 // A new user turn interrupts tool flow - insert synthetic results for orphaned calls
-                closePendingToolCalls(msg.timestamp)
+                closePendingToolCalls()
                 result.add(msg)
             }
         }
     }
     // If the conversation ends with unresolved tool calls, synthesize results now.
-    closePendingToolCalls(transformed.lastOrNull()?.timestamp ?: 0L)
+    closePendingToolCalls()
 
     return result
 }

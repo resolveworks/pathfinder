@@ -3,7 +3,6 @@ package works.resolve.pathfinder.ai.api
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -59,10 +58,10 @@ import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.hasToolRedefinitions
 import works.resolve.pathfinder.ai.utils.int
-import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
+import works.resolve.pathfinder.ai.utils.parseJsonWithRepair
 import works.resolve.pathfinder.ai.utils.parseStreamingJson
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
@@ -263,8 +262,6 @@ data class AnthropicMessagesOptions(
  * Anthropic Messages streaming adapter.
  *
  * Divergences from pi:
- * - pi repairs SSE event data with parseJsonWithRepair; here a malformed
- *   data payload is a protocol error.
  * - pi's ambient ANTHROPIC_AUTH_TOKEN / ANTHROPIC_OAUTH_TOKEN env paths are
  *   reduced to ANTHROPIC_API_KEY.
  * - AbortSignal aborts map to coroutine cancellation, which propagates
@@ -385,21 +382,12 @@ class AnthropicMessagesApi(
         }
     }
 
-    /**
-     * Divergence from pi: missing auth emits a terminal
-     * [AssistantMessageEvent.Error] instead of throwing synchronously.
-     */
     override fun streamSimple(
         model: Model,
         context: TranscriptContext,
         options: SimpleStreamOptions
-    ): Flow<AssistantMessageEvent> = flow {
-        try {
-            assertRequestAuth(model.provider, options.apiKey, options.headers)
-        } catch (error: Exception) {
-            emit(missingAuthEvent(model, error))
-            return@flow
-        }
+    ): Flow<AssistantMessageEvent> {
+        assertRequestAuth(model.provider, options.apiKey, options.headers)
 
         val base = buildBaseOptions(model, context, options).copy(
             toolChoice = mapToolChoice(options.toolChoice?.toToolChoice())
@@ -427,7 +415,7 @@ class AnthropicMessagesApi(
                 thinkingBudgetTokens = minOf(thinkingBudget, maxOf(0, clamped - MIN_ANSWER_TOKENS))
             )
         }
-        emitAll(stream(model, context, resolved))
+        return stream(model, context, resolved)
     }
 
     private fun processSseEvent(
@@ -444,17 +432,17 @@ class AnthropicMessagesApi(
         if (name !in ANTHROPIC_MESSAGE_EVENTS) return emptyList()
 
         val parsed = try {
-            lenientJson.parseToJsonElement(event.data)
+            parseJsonWithRepair(event.data)
         } catch (error: Exception) {
             throw ProviderStreamException(
-                "Could not parse Anthropic SSE event $name: ${error.message ?: error::class.simpleName}; data=${event.data}"
+                "Could not parse Anthropic SSE event $name: " +
+                    "${error.message ?: error::class.simpleName}; data=${event.data}; " +
+                    "raw=${rawEventLines(event)}"
             )
         }
-        if (parsed !is JsonObject) {
-            throw ProviderStreamException(
-                "Could not parse Anthropic SSE event $name: expected object; data=${event.data}"
-            )
-        }
+        // pi reads the payload's `type` off whatever JSON value arrived; only
+        // an object can carry a known one, so anything else is ignored.
+        if (parsed !is JsonObject) return emptyList()
 
         return when (name) {
             "message_start" -> state.onMessageStart(parsed, model)
@@ -466,6 +454,17 @@ class AnthropicMessagesApi(
             else -> emptyList()
         }
     }
+
+    /**
+     * pi's error text carries the event's raw framing lines; the transport
+     * boundary discards them, so they are rebuilt from the retained fields
+     * in pi's line order (joined with a literal `\n`, as upstream joins).
+     */
+    private fun rawEventLines(event: works.resolve.pathfinder.ai.transport.SseEvent): String =
+        buildList {
+            event.name?.let { add("event: $it") }
+            event.data.split('\n').forEach { add("data: $it") }
+        }.joinToString("\\n")
 
     private fun assertRequestAuth(
         provider: String,
@@ -480,19 +479,6 @@ class AnthropicMessagesApi(
             return
         }
         throw ProviderAuthException("No API key for provider: $provider")
-    }
-
-    private fun missingAuthEvent(model: Model, error: Exception): AssistantMessageEvent.Error {
-        val message = AssistantMessage(
-            content = emptyList(),
-            api = model.api,
-            provider = model.provider,
-            model = model.id,
-            stopReason = StopReason.ERROR,
-            errorMessage = error.message ?: "Unknown error",
-            timestamp = clock.now().toEpochMilliseconds()
-        )
-        return AssistantMessageEvent.Error(message.stopReason, message)
     }
 
     private fun formatProviderError(error: Exception): String = when (error) {
@@ -1317,6 +1303,13 @@ internal fun convertTools(
 }
 
 /**
+ * A schema-required SSE event field is absent: pi's direct property access
+ * throws and terminates the stream; the same failure surfaces here.
+ */
+private fun missingSseField(eventName: String, field: String): ProviderStreamException =
+    ProviderStreamException("Anthropic $eventName event is missing required field \"$field\"")
+
+/**
  * Accumulates the streamed response. Blocks are keyed by the upstream
  * `index` field; events interleave freely.
  */
@@ -1388,11 +1381,13 @@ internal class AnthropicStreamState(
 
     fun onMessageStart(event: JsonObject, model: Model): List<AssistantMessageEvent> {
         sawMessageStart = true
-        val message = event.obj("message") ?: return emptyList()
+        val message = event.obj("message")
+            ?: throw missingSseField("message_start", "message")
         responseId = message["id"].strOrNull() ?: responseId
-        responseModel = message["model"].strOrNull()
+        val servedModel = message["model"].strOrNull()
+        if (servedModel != model.id) responseModel = servedModel
         (message["input_transformations"] as? JsonArray)?.let { inputTransformations = it }
-        if (responseModel != null && responseModel != model.id) {
+        if (responseModel != null) {
             val fallbackCost = model.anthropicCompat.allowedFallbackModels
                 .find { it.provider == model.provider && it.model == responseModel }?.cost
             if (fallbackCost != null) {
@@ -1400,18 +1395,16 @@ internal class AnthropicStreamState(
             }
         }
         // Capture initial token usage so an early abort still has input counts.
-        val messageUsage = message.obj("usage")
-        if (messageUsage != null) {
-            usage = usage.copy(
-                input = messageUsage.int("input_tokens") ?: 0,
-                output = messageUsage.int("output_tokens") ?: 0,
-                cacheRead = messageUsage.int("cache_read_input_tokens") ?: 0,
-                cacheWrite = messageUsage.int("cache_creation_input_tokens") ?: 0,
-                cacheWrite1h = messageUsage.obj("cache_creation")
-                    ?.int("ephemeral_1h_input_tokens") ?: 0
-            )
-            usage = withTotal(usage)
-        }
+        val messageUsage = message.obj("usage") ?: throw missingSseField("message_start", "usage")
+        usage = usage.copy(
+            input = messageUsage.int("input_tokens") ?: 0,
+            output = messageUsage.int("output_tokens") ?: 0,
+            cacheRead = messageUsage.int("cache_read_input_tokens") ?: 0,
+            cacheWrite = messageUsage.int("cache_creation_input_tokens") ?: 0,
+            cacheWrite1h = messageUsage.obj("cache_creation")
+                ?.int("ephemeral_1h_input_tokens") ?: 0
+        )
+        usage = withTotal(usage)
         return emptyList()
     }
 
@@ -1419,8 +1412,9 @@ internal class AnthropicStreamState(
         event: JsonObject,
         tools: List<works.resolve.pathfinder.ai.Tool>
     ): List<AssistantMessageEvent> {
-        val index = event.int("index") ?: return emptyList()
-        val contentBlock = event.obj("content_block") ?: return emptyList()
+        val index = event.int("index") ?: throw missingSseField("content_block_start", "index")
+        val contentBlock = event.obj("content_block")
+            ?: throw missingSseField("content_block_start", "content_block")
         val type = contentBlock.str("type")
         val block: Block = when (type) {
             "text" -> Text(index).apply {
@@ -1471,8 +1465,8 @@ internal class AnthropicStreamState(
     }
 
     fun onContentBlockDelta(event: JsonObject): List<AssistantMessageEvent> {
-        val index = event.int("index") ?: return emptyList()
-        val delta = event.obj("delta") ?: return emptyList()
+        val index = event.int("index") ?: throw missingSseField("content_block_delta", "index")
+        val delta = event.obj("delta") ?: throw missingSseField("content_block_delta", "delta")
         val blockIndex = byStreamIndex[index] ?: return emptyList()
         return when (val deltaType = delta.str("type")) {
             "text_delta" -> {
@@ -1512,7 +1506,7 @@ internal class AnthropicStreamState(
     }
 
     fun onContentBlockStop(event: JsonObject): List<AssistantMessageEvent> {
-        val index = event.int("index") ?: return emptyList()
+        val index = event.int("index") ?: throw missingSseField("content_block_stop", "index")
         val blockIndex = byStreamIndex[index] ?: return emptyList()
         return when (val block = blocks[blockIndex]) {
             is Text -> listOf(
@@ -1542,18 +1536,16 @@ internal class AnthropicStreamState(
 
     fun onMessageDelta(event: JsonObject, model: Model): List<AssistantMessageEvent> {
         (event["input_transformations"] as? JsonArray)?.let { inputTransformations = it }
-        val delta = event.obj("delta")
-        if (delta != null) {
-            val stopReason = delta.str("stop_reason")
-            if (stopReason != null) {
-                rawStopReason = stopReason
-                val (mapped, error) = mapStopReason(
-                    stopReason,
-                    delta.obj("stop_details")?.get("explanation").strOrNull()
-                )
-                this.stopReason = mapped
-                errorMessage = error ?: errorMessage
-            }
+        val delta = event.obj("delta") ?: throw missingSseField("message_delta", "delta")
+        val stopReason = delta.str("stop_reason")
+        if (stopReason != null) {
+            rawStopReason = stopReason
+            val (mapped, error) = mapStopReason(
+                stopReason,
+                delta.obj("stop_details")?.get("explanation").strOrNull()
+            )
+            this.stopReason = mapped
+            errorMessage = error ?: errorMessage
         }
         // Only update usage fields when present; preserves message_start values
         // when proxies omit them in message_delta.
@@ -1589,7 +1581,10 @@ internal class AnthropicStreamState(
 
         "refusal" ->
             StopReason.ERROR to
-                (refusalExplanation ?: "The model refused to complete the request")
+                (
+                    refusalExplanation?.takeIf { it.isNotEmpty() }
+                        ?: "The model refused to complete the request"
+                    )
 
         "pause_turn" -> StopReason.STOP to null
 
@@ -1660,7 +1655,7 @@ internal class AnthropicStreamState(
 
                 is Thinking -> ThinkingContent(
                     block.thinking.toString(),
-                    block.signature.ifEmpty { null },
+                    block.signature,
                     block.redacted
                 )
 
@@ -1669,7 +1664,7 @@ internal class AnthropicStreamState(
         },
         api = model.api,
         provider = model.provider,
-        model = responseModel ?: model.id,
+        model = model.id,
         usage = usage,
         stopReason = stopReason,
         errorMessage = errorMessage,
