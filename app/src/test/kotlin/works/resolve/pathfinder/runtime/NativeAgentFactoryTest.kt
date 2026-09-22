@@ -364,7 +364,7 @@ class NativeAgentFactoryTest {
 
             val error = events.single() as works.resolve.pathfinder.ai.AssistantMessageEvent.Error
             assertTrue(
-                "Provider 'cloudflare-ai-gateway' is not configured" in
+                "Provider is not configured: cloudflare-ai-gateway" in
                     (error.error.errorMessage ?: "")
             )
             assertTrue(transport.requests.isEmpty(), "no request must be sent")
