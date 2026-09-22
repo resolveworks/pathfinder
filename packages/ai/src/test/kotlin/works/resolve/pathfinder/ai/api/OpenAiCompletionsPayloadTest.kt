@@ -186,7 +186,7 @@ class OpenAiCompletionsPayloadTest {
                 messages = listOf(
                     UserMessage.ofText("hi"),
                     AssistantMessage(
-                        content = listOf(ToolCall("call_1", "read_file", "{}")),
+                        content = listOf(ToolCall("call_1", "read_file", JsonObject(emptyMap()))),
                         api = "openai-completions",
                         provider = "zai",
                         model = "glm-5.2"
@@ -224,14 +224,18 @@ class OpenAiCompletionsPayloadTest {
     }
 
     @Test
-    fun `tool call arguments replay as raw json string with exact escaping`() {
-        val raw = """{"path":"/tmp/a\\"b","n":1}"""
+    fun `tool call arguments replay as stringified json with exact escaping`() {
+        val arguments = buildJsonObject {
+            put("path", "/tmp/a\"b")
+            put("n", 1)
+        }
+        val raw = """{"path":"/tmp/a\"b","n":1}"""
         val b = body(
             normalizeContext(
                 Context(
                     messages = listOf(
                         AssistantMessage(
-                            content = listOf(ToolCall("call_1", "read_file", raw)),
+                            content = listOf(ToolCall("call_1", "read_file", arguments)),
                             api = "openai-completions",
                             provider = "zai",
                             model = "glm-5.2"
@@ -625,7 +629,7 @@ class OpenAiCompletionsPayloadTest {
             Context(
                 messages = listOf(
                     AssistantMessage(
-                        content = listOf(ToolCall("call_1", "read_file", "{}")),
+                        content = listOf(ToolCall("call_1", "read_file", JsonObject(emptyMap()))),
                         api = "openai-completions",
                         provider = deepseekModel.provider,
                         model = deepseekModel.id
@@ -749,7 +753,7 @@ class OpenAiCompletionsPayloadTest {
                                 ToolCall(
                                     id = "call_1",
                                     name = "read",
-                                    arguments = "{}",
+                                    arguments = JsonObject(emptyMap()),
                                     thoughtSignature = detail
                                 )
                             ),
@@ -781,7 +785,7 @@ class OpenAiCompletionsPayloadTest {
                                 ToolCall(
                                     id = "call_1",
                                     name = "read",
-                                    arguments = "{}",
+                                    arguments = JsonObject(emptyMap()),
                                     thoughtSignature = legacy
                                 )
                             ),
@@ -954,7 +958,7 @@ class OpenAiCompletionsPayloadTest {
                     messages = listOf(
                         UserMessage.ofText("read the file"),
                         AssistantMessage(
-                            content = listOf(ToolCall("call_1", "read", "{}")),
+                            content = listOf(ToolCall("call_1", "read", JsonObject(emptyMap()))),
                             api = "openai-completions",
                             provider = "zai",
                             model = "glm-5.2",
@@ -983,7 +987,9 @@ class OpenAiCompletionsPayloadTest {
                 Context(
                     messages = listOf(
                         AssistantMessage(
-                            content = listOf(ToolCall("call_123|fc_123", "read", "{}")),
+                            content = listOf(
+                                ToolCall("call_123|fc_123", "read", JsonObject(emptyMap()))
+                            ),
                             api = "openai-responses",
                             provider = "github-copilot",
                             model = "gpt-5",
@@ -1015,7 +1021,7 @@ class OpenAiCompletionsPayloadTest {
                 Context(
                     messages = listOf(
                         AssistantMessage(
-                            content = listOf(ToolCall(id, "read", "{}")),
+                            content = listOf(ToolCall(id, "read", JsonObject(emptyMap()))),
                             api = "openai-responses",
                             provider = "github-copilot",
                             model = "gpt-5",
@@ -1045,7 +1051,7 @@ class OpenAiCompletionsPayloadTest {
                 Context(
                     messages = listOf(
                         AssistantMessage(
-                            content = listOf(ToolCall(longId, "read", "{}")),
+                            content = listOf(ToolCall(longId, "read", JsonObject(emptyMap()))),
                             api = "openai-completions",
                             provider = "other",
                             model = "other-model",
@@ -1071,7 +1077,7 @@ class OpenAiCompletionsPayloadTest {
                 Context(
                     messages = listOf(
                         AssistantMessage(
-                            content = listOf(ToolCall(id, "read", "{}")),
+                            content = listOf(ToolCall(id, "read", JsonObject(emptyMap()))),
                             api = "openai-completions",
                             provider = "zai",
                             model = "glm-5.2",
@@ -1326,7 +1332,13 @@ class OpenAiCompletionsPayloadTest {
                         UserMessage.ofText("Read the file"),
                         AssistantMessage(
                             content = listOf(
-                                ToolCall("call_1", "read", """{"path":"README.md"}""")
+                                ToolCall(
+                                    "call_1",
+                                    "read",
+                                    buildJsonObject {
+                                        put("path", "README.md")
+                                    }
+                                )
                             ),
                             api = "openai-completions",
                             provider = "openrouter",
@@ -1444,7 +1456,13 @@ class OpenAiCompletionsPayloadTest {
                                     "prior reasoning",
                                     thinkingSignature = "reasoning_content"
                                 ),
-                                ToolCall("call_1", "read", """{"path":"README.md"}""")
+                                ToolCall(
+                                    "call_1",
+                                    "read",
+                                    buildJsonObject {
+                                        put("path", "README.md")
+                                    }
+                                )
                             ),
                             api = "openai-completions",
                             provider = "zai",
@@ -1556,8 +1574,20 @@ class OpenAiCompletionsPayloadTest {
                         UserMessage.ofText("Read the images"),
                         AssistantMessage(
                             content = listOf(
-                                ToolCall("tool-1", "read", """{"path":"img-1.png"}"""),
-                                ToolCall("tool-2", "read", """{"path":"img-2.png"}""")
+                                ToolCall(
+                                    "tool-1",
+                                    "read",
+                                    buildJsonObject {
+                                        put("path", "img-1.png")
+                                    }
+                                ),
+                                ToolCall(
+                                    "tool-2",
+                                    "read",
+                                    buildJsonObject {
+                                        put("path", "img-2.png")
+                                    }
+                                )
                             ),
                             api = "openai-completions",
                             provider = vision.provider,
@@ -1649,7 +1679,13 @@ class OpenAiCompletionsPayloadTest {
                         UserMessage.ofText("Read README.md"),
                         AssistantMessage(
                             content = listOf(
-                                ToolCall("call_1", "read", """{"path":"README.md"}""")
+                                ToolCall(
+                                    "call_1",
+                                    "read",
+                                    buildJsonObject {
+                                        put("path", "README.md")
+                                    }
+                                )
                             ),
                             api = "openai-completions",
                             provider = "xiaomi",

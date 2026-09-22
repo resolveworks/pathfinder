@@ -57,6 +57,7 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.long
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
+import works.resolve.pathfinder.ai.utils.parseStreamingJson
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
 import works.resolve.pathfinder.ai.utils.resolveTranscript
@@ -543,7 +544,10 @@ internal class MistralStreamingState(private val model: Model, private val times
             override var built: Content? = null
         }
 
-        class Tool(val id: String, val name: String, val arguments: StringBuilder) : Block {
+        class Tool(val id: String, val name: String) : Block {
+            /** Parsed arguments; kept current with every streamed fragment. */
+            var arguments: JsonObject = JsonObject(emptyMap())
+            val partialArgs = StringBuilder()
             override var built: Content? = null
         }
     }
@@ -637,19 +641,22 @@ internal class MistralStreamingState(private val model: Model, private val times
         var blockIndex = toolBlocksByKey[key]
         if (blockIndex == null) {
             blockIndex = blocks.size
-            blocks.add(Block.Tool(callId, name, StringBuilder()))
+            blocks.add(Block.Tool(callId, name))
             toolBlocksByKey[key] = blockIndex
             events.add(AssistantMessageEvent.ToolCallStart(blockIndex, snapshot()))
         }
 
         val toolBlock = blocks[blockIndex] as Block.Tool
-        val argsDelta = function?.get("arguments")?.let { arg ->
-            when (arg) {
-                is JsonPrimitive -> arg.content
-                else -> arg.toString() // pi JSON.stringify(.... || {})
-            }
-        } ?: ""
-        toolBlock.arguments.append(argsDelta)
+        // The SDK hands over parsed objects, so non-string arguments are
+        // re-stringified (JSON.stringify semantics: null/absent becomes "{}")
+        // before accumulating.
+        val argsDelta = when (val arg = function?.get("arguments")) {
+            null, is JsonNull -> "{}"
+            is JsonPrimitive -> arg.content
+            else -> arg.toString()
+        }
+        toolBlock.partialArgs.append(argsDelta)
+        toolBlock.arguments = parseStreamingJson(toolBlock.partialArgs.toString())
         toolBlock.built = null
 
         events.add(AssistantMessageEvent.ToolCallDelta(blockIndex, argsDelta))
@@ -662,13 +669,14 @@ internal class MistralStreamingState(private val model: Model, private val times
         for (index in toolBlocksByKey.values) {
             val block = blocks[index]
             if (block is Block.Tool) {
+                block.arguments = parseStreamingJson(block.partialArgs.toString())
                 events.add(
                     AssistantMessageEvent.ToolCallEnd(
                         index,
                         ToolCall(
                             id = block.id,
                             name = block.name,
-                            arguments = block.arguments.toString()
+                            arguments = block.arguments
                         ),
                         snapshot()
                     )
@@ -684,7 +692,7 @@ internal class MistralStreamingState(private val model: Model, private val times
                 block.built ?: when (block) {
                     is Block.Text -> TextContent(block.text.toString())
                     is Block.Thinking -> ThinkingContent(block.thinking.toString())
-                    is Block.Tool -> ToolCall(block.id, block.name, block.arguments.toString())
+                    is Block.Tool -> ToolCall(block.id, block.name, block.arguments)
                 }.also { block.built = it }
                 )
         },
@@ -949,7 +957,10 @@ object MistralConversationsPayload {
                                             "function",
                                             buildJsonObject {
                                                 put("name", call.name)
-                                                put("arguments", call.arguments.ifEmpty { "{}" })
+                                                put(
+                                                    "arguments",
+                                                    JsonPrimitive(call.arguments.toString())
+                                                )
                                             }
                                         )
                                         put("index", 0)

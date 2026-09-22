@@ -483,7 +483,7 @@ internal object GoogleStreamEngine {
                 val toolCall = ToolCall(
                     id = toolCallId,
                     name = name,
-                    arguments = args.toString(),
+                    arguments = args,
                     thoughtSignature = part["thoughtSignature"].strOrNull()
                         ?.takeIf { it.isNotEmpty() }
                 )

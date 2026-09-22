@@ -26,7 +26,6 @@ import works.resolve.pathfinder.ai.toModelThinkingLevel
 import works.resolve.pathfinder.ai.toThinkingLevelOrNull
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.collapseSystemMessages
-import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strictBoolean
@@ -39,8 +38,6 @@ import works.resolve.pathfinder.ai.utils.withoutInitialSystemMessage
  * - Upstream delegates the wire protocol to the `@google/genai` SDK;
  *   Pathfinder has no such SDK, so the conversion here must produce the same
  *   GenerateContentRequest JSON the SDK emits for the fields pi sets.
- * - [ToolCall.arguments] stays a raw JSON string rather than a parsed object;
- *   parsing belongs to tool execution.
  */
 object GoogleShared {
 
@@ -275,7 +272,7 @@ object GoogleShared {
                                             "functionCall",
                                             buildJsonObject {
                                                 put("name", block.name)
-                                                put("args", parseArgsOrEmpty(block.arguments))
+                                                put("args", block.arguments)
                                                 if (requiresToolCallId(
                                                         model.id
                                                     )
@@ -445,13 +442,6 @@ object GoogleShared {
             put("role", "user")
             put("parts", JsonArray(parts))
         }
-    }
-
-    private fun parseArgsOrEmpty(raw: String): JsonElement = try {
-        val parsed = lenientJson.parseToJsonElement(raw)
-        if (parsed is JsonObject) parsed else JsonObject(emptyMap())
-    } catch (_: Exception) {
-        JsonObject(emptyMap())
     }
 
     // JSON Schema meta-declarations stripped when using legacy OpenAPI `parameters`.

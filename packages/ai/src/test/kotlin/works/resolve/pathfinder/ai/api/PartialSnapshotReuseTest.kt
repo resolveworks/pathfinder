@@ -6,6 +6,9 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.InputModality
@@ -145,7 +148,7 @@ class PartialSnapshotReuseTest {
         val scaffold = assertIs<ToolCall>(toolStart.partial.content[1])
         assertEquals("c1", scaffold.id)
         assertEquals("read", scaffold.name)
-        assertEquals("", scaffold.arguments)
+        assertEquals(JsonObject(emptyMap()), scaffold.arguments)
         // The text block is the same immutable instance in every later
         // boundary snapshot, and the tool arguments accumulate to the final
         // call only at the end boundary.
@@ -157,10 +160,10 @@ class PartialSnapshotReuseTest {
         )
         assertEquals("pre ", textEnd.content)
         assertEquals(
-            """{"path":"/x"}""",
+            buildJsonObject { put("path", "/x") },
             assertIs<ToolCall>(toolEnd.partial.content[1]).arguments
         )
-        assertEquals("""{"path":"/x"}""", toolEnd.toolCall.arguments)
+        assertEquals(buildJsonObject { put("path", "/x") }, toolEnd.toolCall.arguments)
     }
 
     @Test
@@ -245,7 +248,7 @@ class PartialSnapshotReuseTest {
             "closed text block must reuse its content instance"
         )
         assertEquals("ab", assertIs<TextContent>(toolEnd.partial.content[0]).text)
-        assertEquals("{}", toolEnd.toolCall.arguments)
+        assertEquals(JsonObject(emptyMap()), toolEnd.toolCall.arguments)
     }
 
     @Test

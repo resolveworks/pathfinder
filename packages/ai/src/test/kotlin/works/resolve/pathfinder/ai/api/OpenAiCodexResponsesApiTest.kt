@@ -739,7 +739,7 @@ class OpenAiCodexResponsesApiTest {
                 messages = listOf(
                     UserMessage.ofText("Hello", 1),
                     AssistantMessage(
-                        content = listOf(ToolCall("call_1", "base_tool", "{}")),
+                        content = listOf(ToolCall("call_1", "base_tool", JsonObject(emptyMap()))),
                         api = "anthropic-messages",
                         provider = "anthropic",
                         model = "claude-opus-4-6",

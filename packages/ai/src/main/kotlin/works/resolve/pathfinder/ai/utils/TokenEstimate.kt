@@ -137,12 +137,6 @@ private fun estimateMessages(messages: List<Message>): ContextUsageEstimate {
 
 /** Compact JSON re-serialization mirroring JS `JSON.stringify`; unparseable
  * input yields the same "[unserializable]" placeholder as pi. */
-private fun safeJsonStringify(json: String): String = try {
-    safeJsonStringify(lenientJson.parseToJsonElement(json))
-} catch (_: Exception) {
-    "[unserializable]"
-}
-
 private fun safeJsonStringify(element: JsonElement): String = try {
     lenientJson.encodeToString(JsonElement.serializer(), element)
 } catch (_: Exception) {

@@ -126,8 +126,8 @@ data class ImageContent(
 data class ToolCall(
     val id: String,
     val name: String,
-    /** Raw JSON arguments string exactly as the provider streamed/replayed them. */
-    val arguments: String,
+    /** Parsed JSON arguments object, accumulated from streamed fragments or replayed as-is. */
+    val arguments: JsonObject,
     /**
      * Opaque thought-signature replay data Google attaches to a functionCall
      * part; only meaningful for the same provider/model.
