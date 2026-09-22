@@ -26,6 +26,7 @@ import works.resolve.pathfinder.ai.utils.RetryPolicy
 import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.ai.utils.contentText
 import works.resolve.pathfinder.ai.utils.estimateMessageTokens
+import works.resolve.pathfinder.ai.utils.estimateTextTokens
 import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.codingagent.core.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.CompactionEntry
@@ -33,7 +34,7 @@ import works.resolve.pathfinder.codingagent.core.MessageEntry
 import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
 import works.resolve.pathfinder.codingagent.core.SessionEntry
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
-import works.resolve.pathfinder.codingagent.core.buildSessionContext
+import works.resolve.pathfinder.codingagent.core.buildContextEntries
 import works.resolve.pathfinder.codingagent.core.createBranchSummaryMessage
 import works.resolve.pathfinder.codingagent.core.createCompactionSummaryMessage
 import works.resolve.pathfinder.codingagent.core.utils.addUsage
@@ -76,11 +77,20 @@ fun getLastAssistantUsage(entries: List<SessionEntry>): Usage? {
 }
 
 /**
- * Upstream also estimates `custom`, `bashExecution`, `branchSummary`, and
- * `compactionSummary` message roles; the pathfinder [Message] hierarchy has
- * no such roles.
+ * pi's compaction-local estimator, deliberately not the ai-module
+ * `estimateMessageTokens`: system messages are prompt state, not
+ * conversation, and estimate to 0 (pi's role switch has no system case).
+ * pi additionally estimates custom/bashExecution/summary roles; pathfinder
+ * has no custom or bash messages, and the summary roles are estimated from
+ * their entries by [estimateEntryTokens] because they project to wrapped
+ * user messages (Messages.kt).
  */
-fun estimateTokens(message: Message): Int = estimateMessageTokens(message)
+fun estimateTokens(message: Message): Int = when (message.role) {
+    MessageRole.SYSTEM -> 0
+
+    MessageRole.USER, MessageRole.ASSISTANT, MessageRole.TOOL_RESULT ->
+        estimateMessageTokens(message)
+}
 
 private fun getLastAssistantUsageInfo(messages: List<Message>): Pair<Usage, Int>? {
     for (i in messages.indices.reversed()) {
@@ -127,6 +137,27 @@ fun estimateContextTokens(messages: List<Message>): ContextUsageEstimate {
     )
 }
 
+/**
+ * pi's `estimateContextTokens(buildSessionContext(pathEntries).messages).tokens`
+ * over the compaction-aware context entries: the backward usage scan runs
+ * over entries (only message entries project assistant messages), and
+ * trailing entries estimate via [estimateEntryTokens] so summary entries
+ * count `summary.length/4` and system entries 0.
+ */
+private fun estimateContextTokensFromEntries(entries: List<SessionEntry>): Int {
+    for (i in entries.indices.reversed()) {
+        val entry = entries[i]
+        if (entry is MessageEntry) {
+            val usage = getAssistantUsage(entry.message)
+            if (usage != null) {
+                return calculateContextTokens(usage) +
+                    entries.subList(i + 1, entries.size).sumOf(::estimateEntryTokens)
+            }
+        }
+    }
+    return entries.sumOf(::estimateEntryTokens)
+}
+
 fun shouldCompact(contextTokens: Int, contextWindow: Int, settings: CompactionSettings): Boolean {
     if (!settings.enabled) return false
     return contextTokens > contextWindow - settings.reserveTokens
@@ -139,7 +170,25 @@ fun shouldCompact(contextTokens: Int, contextWindow: Int, settings: CompactionSe
 private fun entryContextMessages(entry: SessionEntry): List<Message> =
     listOfNotNull(getMessageFromEntry(entry))
 
-private fun isCutPointMessage(message: Message): Boolean = message.role != MessageRole.TOOL_RESULT
+/**
+ * pi sums `estimateTokens` over an entry's context messages, where the
+ * summary entries project dedicated branchSummary/compactionSummary roles
+ * estimated as `summary.length/4`; pathfinder projects wrapped user
+ * messages, so the summary length is measured at the entry instead. The
+ * compaction entry's system-message replay estimates 0 upstream and is
+ * dropped here.
+ */
+internal fun estimateEntryTokens(entry: SessionEntry): Int = when (entry) {
+    is CompactionEntry -> estimateTextTokens(entry.summary)
+    is BranchSummaryEntry -> estimateTextTokens(entry.summary)
+    else -> entryContextMessages(entry).sumOf { estimateTokens(it) }
+}
+
+/** pi's switch omits system: prompt state is not a conversation cut point. */
+private fun isCutPointMessage(message: Message): Boolean = when (message.role) {
+    MessageRole.USER, MessageRole.ASSISTANT -> true
+    MessageRole.TOOL_RESULT, MessageRole.SYSTEM -> false
+}
 
 private fun isTurnStartEntry(entry: SessionEntry): Boolean =
     entry !is CompactionEntry && entryContextMessages(entry).any { it.role == MessageRole.USER }
@@ -189,7 +238,7 @@ fun findCutPoint(
     var cutIndex = cutPoints[0]
 
     for (i in endIndex - 1 downTo startIndex) {
-        val messageTokens = entryContextMessages(entries[i]).sumOf { estimateTokens(it) }
+        val messageTokens = estimateEntryTokens(entries[i])
         if (messageTokens == 0) continue
         accumulatedTokens += messageTokens
         if (accumulatedTokens >= keepRecentTokens) {
@@ -602,7 +651,7 @@ fun prepareCompaction(
     }
     val boundaryEnd = pathEntries.size
 
-    val tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens
+    val tokensBefore = estimateContextTokensFromEntries(buildContextEntries(pathEntries))
 
     val cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens)
     val firstKeptEntryId = pathEntries[cutPoint.firstKeptEntryIndex].id

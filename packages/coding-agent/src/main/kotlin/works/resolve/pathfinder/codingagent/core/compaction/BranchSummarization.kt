@@ -25,8 +25,6 @@ import works.resolve.pathfinder.codingagent.core.MessageEntry
 import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
 import works.resolve.pathfinder.codingagent.core.ReadonlySessionManager
 import works.resolve.pathfinder.codingagent.core.SessionEntry
-import works.resolve.pathfinder.codingagent.core.SessionError
-import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.codingagent.core.createBranchSummaryMessage
 import works.resolve.pathfinder.codingagent.core.createCompactionSummaryMessage
@@ -51,7 +49,8 @@ data class CollectEntriesResult(val entries: List<SessionEntry>, val commonAnces
  * (exclusive) the deepest common ancestor of [oldLeafId] and [targetId]
  * down to [oldLeafId], in chronological order. Does not stop at
  * compaction boundaries — those are included and their summaries become
- * context.
+ * context. A dangling parentId (corrupt session file) truncates the walk
+ * like pi's `if (!entry) break` instead of failing it.
  */
 fun collectEntriesForBranchSummary(
     session: ReadonlySessionManager,
@@ -75,8 +74,7 @@ fun collectEntriesForBranchSummary(
     val entries = mutableListOf<SessionEntry>()
     var current: String? = oldLeafId
     while (current != null && current != commonAncestorId) {
-        val entry = session.getEntry(current)
-            ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Entry not found: $current")
+        val entry = session.getEntry(current) ?: break
         entries.add(entry)
         current = entry.parentId
     }
@@ -147,7 +145,7 @@ fun prepareBranchEntries(entries: List<SessionEntry>, tokenBudget: Int = 0): Bra
         val message = getMessageFromEntry(entry) ?: continue
         extractFileOpsFromMessage(message, fileOps)
 
-        val tokens = estimateTokens(message)
+        val tokens = estimateEntryTokens(entry)
         if (tokenBudget > 0 && totalTokens + tokens > tokenBudget) {
             if ((entry is CompactionEntry || entry is BranchSummaryEntry) &&
                 totalTokens < tokenBudget * 0.9
