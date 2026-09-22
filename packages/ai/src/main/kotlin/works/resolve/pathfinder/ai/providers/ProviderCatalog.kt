@@ -77,16 +77,19 @@ class CatalogProvider(
      * Auth prompts still missing values: the first prompt maps to the API
      * key ([key]), later prompts to their [env] slot. Empty means the
      * credential is complete. Values are never echoed — only prompt
-     * metadata is.
+     * metadata is. A value counts as missing only when null or empty:
+     * resolution treats whitespace-only values as present (JS truthiness,
+     * pi's `credential?.key` / per-field `!== undefined`), so prompting
+     * must agree or a resolvable credential would be re-prompted.
      */
     fun missingAuthPrompts(key: String?, env: Map<String, String>): List<AuthPrompt> {
         val missing = auth.prompts.mapIndexedNotNull { index, prompt ->
             val value = if (index == 0) key else env[prompt.envKey]
-            if (value.isNullOrBlank()) prompt else null
+            if (value.isNullOrEmpty()) prompt else null
         }.toMutableList()
         // OAuth-only providers have no key prompts; their OAuth state is
         // evaluated separately by ProviderAuthService and the auth registry.
-        if (auth.prompts.isEmpty() && key.isNullOrBlank()) {
+        if (auth.prompts.isEmpty() && key.isNullOrEmpty()) {
             missing += AuthPrompt("API_KEY", "API key")
         }
         return missing
@@ -473,7 +476,10 @@ private data class CompatDto(
             vllmPriority = vllmPriority
         )
 
-    /** Per-field defaults mirror pi's openai-responses getCompat. */
+    /** Per-field defaults mirror pi's adapter getCompat functions; fields
+     * whose defaults differ per API stay null and the adapters default
+     * them ([supportsStrictMode]: codex/azure true, openai-responses
+     * false). */
     fun toResponsesDomain(where: String) = OpenAiResponsesCompat(
         supportsDeveloperRole = supportsDeveloperRole ?: true,
         supportsMidConvoSystemMessages = supportsMidConvoSystemMessages ?: false,
@@ -481,7 +487,7 @@ private data class CompatDto(
             parseSessionAffinityFormat(it, where)
         },
         supportsLongCacheRetention = supportsLongCacheRetention ?: true,
-        supportsStrictMode = supportsStrictMode ?: false,
+        supportsStrictMode = supportsStrictMode,
         supportsOpenAIGrammarTools = supportsOpenAIGrammarTools ?: false,
         supportsAdditionalTools = supportsAdditionalTools ?: false,
         supportsToolSearch = supportsToolSearch ?: false,

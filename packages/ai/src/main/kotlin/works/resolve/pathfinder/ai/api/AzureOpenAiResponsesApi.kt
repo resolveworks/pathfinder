@@ -182,8 +182,9 @@ class AzureOpenAiResponsesApi(
         context: TranscriptContext,
         options: SimpleStreamOptions
     ): Flow<AssistantMessageEvent> {
-        val apiKey = options.apiKey
-            ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
+        // pi wraps every API in lazyStream, so streamSimple setup failures
+        // (including missing auth) become terminal error events in-stream;
+        // the stream() body's own key check provides that here.
         val clamped = options.reasoning?.let {
             works.resolve.pathfinder.ai.clampThinkingLevel(model, it.toModelThinkingLevel())
         }
@@ -285,8 +286,8 @@ class AzureOpenAiResponsesApi(
     }
 }
 
-/** Query and fragment are preserved for non-Azure hosts; only the Azure-host
- * path rewrite strips the query. */
+/** Query and fragment are preserved verbatim; only the Azure-host path
+ * rewrite clears the query (pi clears url.search inside that branch only). */
 internal fun normalizeAzureBaseUrl(raw: String): String {
     val trimmed = raw.trim().trimEnd('/')
     val url = try {
@@ -299,6 +300,7 @@ internal fun normalizeAzureBaseUrl(raw: String): String {
         host.endsWith(".cognitiveservices.azure.com") ||
         host.endsWith(".ai.azure.com")
     var effectivePath = (url.path ?: "").trimEnd('/')
+    var stripQuery = false
     if (isAzureHost &&
         (
             effectivePath.isEmpty() || effectivePath == "/openai" ||
@@ -306,10 +308,11 @@ internal fun normalizeAzureBaseUrl(raw: String): String {
             )
     ) {
         effectivePath = "/openai/v1"
+        stripQuery = true
     }
     val port = if (url.port != -1) ":${url.port}" else ""
     val userInfo = url.userInfo?.takeIf { it.isNotEmpty() }?.let { "$it@" } ?: ""
-    val query = if (isAzureHost) {
+    val query = if (stripQuery) {
         ""
     } else {
         url.rawQuery?.takeIf { it.isNotEmpty() }?.let { "?$it" }

@@ -204,8 +204,9 @@ internal fun isRetryableError(status: Int, errorText: String): Boolean {
 /**
  * Retry delay from the retry-after-ms / retry-after headers. Parsing stays
  * codex-local rather than shared with ProviderRetry: the two parsers are
- * deliberately different (this one uses strict whole-string number parsing
- * and clamps to >= 0; ProviderRetry parses lenient floats without
+ * deliberately different (this one uses JS `Number()` semantics —
+ * whole-string parsing with hex integers accepted, non-finite values
+ * skipped — and clamps to >= 0; ProviderRetry parses lenient floats without
  * clamping), so they are not deduplicated. The delay-cap check they feed
  * into is shared ([validateRetryDelayMs]).
  */
@@ -215,10 +216,14 @@ internal fun getRetryAfterDelayMs(
     nowMs: () -> Long
 ): Long? {
     retryAfterMs?.let {
-        it.toDoubleOrNull()?.let { millis -> return maxOf(0.0, millis).toLong() }
+        jsNumberOrNull(it)?.takeIf { value -> value.isFinite() }?.let { millis ->
+            return maxOf(0.0, millis).toLong()
+        }
     }
-    if (retryAfter == null) return null
-    retryAfter.toDoubleOrNull()?.let { seconds -> return maxOf(0.0, seconds * 1000).toLong() }
+    if (retryAfter == null || retryAfter.isEmpty()) return null
+    jsNumberOrNull(retryAfter)?.takeIf { value -> value.isFinite() }?.let { seconds ->
+        return maxOf(0.0, seconds * 1000).toLong()
+    }
     // retry-after can be an HTTP date ("Wed, 21 Oct 2015 07:28:00 GMT" —
     // the spec format) or ISO-8601; try both, RFC 1123 first (Instant.parse
     // only accepts ISO-8601-with-Z).
@@ -229,6 +234,21 @@ internal fun getRetryAfterDelayMs(
             return null
         }
     return maxOf(0L, date - nowMs())
+}
+
+/** JS `Number()` for the string forms a retry header can carry: decimal
+ * (with exponent and sign) via the platform parser, hex integers via the
+ * 0x/0X prefix, and trimmed-empty strings as 0. Returns null where
+ * `Number()` yields NaN. */
+private fun jsNumberOrNull(value: String): Double? {
+    val trimmed = value.trim()
+    if (trimmed.isEmpty()) return 0.0
+    val hex = Regex("^([+-]?)0[xX]([0-9a-fA-F]+)$").find(trimmed)
+    if (hex != null) {
+        val magnitude = hex.groupValues[2].toLongOrNull(16) ?: return null
+        return (if (hex.groupValues[1] == "-") -magnitude else magnitude).toDouble()
+    }
+    return trimmed.toDoubleOrNull()
 }
 
 /**
@@ -352,6 +372,14 @@ class OpenAICodexResponsesApi(
                 )
             options.onPayload?.let { hook -> hook(bodyObj, model)?.let { bodyObj = it } }
             val bodyJson = bodyObj.toString()
+            // pi's normalizeTimeoutMs: negative or non-finite values are
+            // invalid for both timeout knobs, surfacing as a stream error.
+            options.timeoutMs?.let {
+                require(it >= 0) { "Invalid timeoutMs: $it" }
+            }
+            options.websocketConnectTimeoutMs?.let {
+                require(it >= 0) { "Invalid timeoutMs: $it" }
+            }
             // Both header sets are built up front so an SSE fallback after a
             // WebSocket transport failure reuses them.
             val websocketRequestId = codexSessionId ?: uuidv7()
@@ -742,15 +770,9 @@ class OpenAICodexResponsesApi(
                 // never retry.
                 val terminal: Exception = when (error) {
                     is ProviderHttpException -> {
-                        val (message, friendly) = parseCodexErrorResponse(
-                            error.status,
-                            error.body,
-                            error.statusText,
-                            ::nowMs
-                        )
-                        if (friendly != null) {
-                            throw ProviderStreamException(friendly)
-                        }
+                        // Retryability is decided first; the body is parsed for
+                        // a friendly message only on the final attempt or a
+                        // non-retryable error (pi's loop order).
                         if (attempt < maxRetries && isRetryableError(error.status, error.body)) {
                             val retryAfter = getRetryAfterDelayMs(
                                 error.header("retry-after-ms"),
@@ -765,7 +787,13 @@ class OpenAICodexResponsesApi(
                             sleep(delayMs)
                             continue
                         }
-                        ProviderStreamException(message)
+                        val (message, friendly) = parseCodexErrorResponse(
+                            error.status,
+                            error.body,
+                            error.statusText,
+                            ::nowMs
+                        )
+                        ProviderStreamException(friendly ?: message)
                     }
 
                     else -> error
@@ -887,7 +915,12 @@ internal fun buildCodexRequestBody(
             instructions.takeIf { it.isNotEmpty() } ?: "You are a helpful assistant."
         )
         put("input", JsonArray(messages))
-        put("text", buildJsonObject { put("verbosity", options?.textVerbosity ?: "low") })
+        put(
+            "text",
+            buildJsonObject {
+                put("verbosity", options?.textVerbosity?.takeIf { it.isNotEmpty() } ?: "low")
+            }
+        )
         put("include", JsonArray(listOf(JsonPrimitive("reasoning.encrypted_content"))))
         codexSessionId?.let { put("prompt_cache_key", it) }
         put("tool_choice", options?.toolChoice ?: "auto")
@@ -1011,7 +1044,8 @@ internal fun mapCodexEvent(
     event: JsonObject,
     onEndTurn: (Boolean) -> Unit
 ): Pair<JsonObject, Boolean>? {
-    val type = event.string("type") ?: return null
+    // Falsy type (absent, non-string, or empty) skips the event entirely.
+    val type = event.string("type")?.takeIf { it.isNotEmpty() } ?: return null
 
     if (type == "error") {
         val nested = event.obj("error")
@@ -1172,9 +1206,11 @@ class OpenAICodexWebSocketSessions(val clock: Clock = Clock.System) {
     /**
      * pi's acquireWebSocket. No [sessionId] gives a one-shot socket (release
      * closes it); expired-by-age, busy, or non-reusable cached entries fall
-     * back to fresh connections exactly as upstream. The connect happens
-     * outside the lock; insertion afterwards mirrors pi's post-await map
-     * insert (last writer wins per session/account).
+     * back to fresh connections exactly as upstream. All connects happen
+     * outside the lock (pi connects on the event loop without blocking other
+     * sessions); insertion afterwards mirrors pi's post-await map insert
+     * (last writer wins per session/account). The busy entry's fallback
+     * socket stays one-shot like pi's.
      */
     internal suspend fun acquire(
         transport: WebSocketStreamingTransport,
@@ -1198,7 +1234,8 @@ class OpenAICodexWebSocketSessions(val clock: Clock = Clock.System) {
         }
 
         // Cached-entry triage under the lock; anything but a clean reuse
-        // falls through to a fresh connect.
+        // falls through to a fresh connect outside it.
+        var busyOneShot = false
         mutex.withLock {
             val accountEntries = sessionCache[sessionId]
             val cached = accountEntries?.get(accountId)
@@ -1220,12 +1257,7 @@ class OpenAICodexWebSocketSessions(val clock: Clock = Clock.System) {
                         }
                     }
 
-                    cached.busy -> {
-                        val connection = connect()
-                        return Acquired(connection, entry = null, reused = false) {
-                            connection.close()
-                        }
-                    }
+                    cached.busy -> busyOneShot = true
 
                     else -> {
                         cached.connection.close()
@@ -1236,7 +1268,10 @@ class OpenAICodexWebSocketSessions(val clock: Clock = Clock.System) {
         }
 
         val connection = connect()
-        val entry = CachedWebSocketEntry(connection, createdAt = nowMs())
+        if (busyOneShot) {
+            return Acquired(connection, entry = null, reused = false) { connection.close() }
+        }
+        val entry = CachedWebSocketEntry(connection, createdAt = nowMs()).apply { busy = true }
         mutex.withLock {
             sessionCache.getOrPut(sessionId) { mutableMapOf() }[accountId] = entry
         }
@@ -1395,18 +1430,24 @@ internal fun parseCodexErrorResponse(
         val err = parsed?.get("error") as? JsonObject
         if (err != null) {
             val code = err.str("code") ?: err.str("type") ?: ""
-            val usageLimit = Regex("usage_limit_reached|usage_not_included|rate_limit_exceeded")
-                .containsMatchIn(code) || status == 429
+            val usageLimit =
+                Regex(
+                    "usage_limit_reached|usage_not_included|rate_limit_exceeded",
+                    RegexOption.IGNORE_CASE
+                ).containsMatchIn(code) || status == 429
             if (usageLimit) {
-                val plan = err.str("plan_type")?.let { " (${it.lowercase()} plan)" } ?: ""
+                val plan = err.str("plan_type")?.takeIf { it.isNotEmpty() }
+                    ?.let { " (${it.lowercase()} plan)" } ?: ""
+                // JS truthiness: 0 (and NaN) resets_at values read as absent.
                 val resetsAt = err.strictDouble("resets_at")
+                    ?.takeIf { it != 0.0 && !it.isNaN() }
                 val whenText = resetsAt?.let {
                     val mins = maxOf(0, Math.round((it * 1000 - nowMs()) / 60000.0))
                     " Try again in ~${mins.toInt()} min."
                 } ?: ""
                 friendly = ("You have hit your ChatGPT usage limit$plan.$whenText").trim()
             }
-            message = err.str("message") ?: friendly ?: message
+            message = err.str("message")?.takeIf { it.isNotEmpty() } ?: friendly ?: message
         }
     } catch (_: Exception) {
         // Non-JSON body: keep the raw text.
@@ -1444,7 +1485,18 @@ internal fun buildBaseCodexHeaders(
 ): MutableMap<String, String?> {
     val headers = LinkedHashMap<String, String?>()
     headers.putAll(modelHeaders)
-    headers.putAll(optionsHeaders) // a null value deletes the header (Headers.delete semantics)
+    // Headers.set/delete semantics: names match case-insensitively, so a
+    // mixed-case option key replaces (or removes) an existing header.
+    for ((key, value) in optionsHeaders) {
+        val existing = headers.keys.firstOrNull { it.equals(key, ignoreCase = true) }
+        if (value == null) {
+            existing?.let { headers.remove(it) }
+        } else if (existing != null) {
+            headers[existing] = value
+        } else {
+            headers[key] = value
+        }
+    }
     headers["Authorization"] = "Bearer $token"
     headers["chatgpt-account-id"] = accountId
     // pi sends `originator: "pi"`; Pathfinder identifies itself instead —
@@ -1493,8 +1545,10 @@ internal fun buildCodexWebSocketHeaders(
     requestId: String
 ): Map<String, String> {
     val headers = buildBaseCodexHeaders(modelHeaders, optionsHeaders, accountId, token)
-    headers.remove("accept")
-    headers.remove("content-type")
+    // Headers.delete is case-insensitive: accept/content-type drop in any
+    // casing, as do both OpenAI-Beta spellings.
+    headers.keys.filter { it.lowercase() == "accept" || it.lowercase() == "content-type" }
+        .forEach { headers.remove(it) }
     headers.keys.filter { it.lowercase() == "openai-beta" }.forEach { headers.remove(it) }
     headers["OpenAI-Beta"] = OpenAICodexWebSocketSessions.OPENAI_BETA_RESPONSES_WEBSOCKETS
     headers["x-client-request-id"] = requestId

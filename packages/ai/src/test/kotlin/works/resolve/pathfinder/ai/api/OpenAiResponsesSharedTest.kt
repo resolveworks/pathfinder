@@ -9,6 +9,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
@@ -530,6 +531,17 @@ class OpenAiResponsesSharedTest {
         assertEquals("function", strictOn["type"]!!.jsonPrimitive.content)
         assertEquals(true, strictOn["strict"]!!.jsonPrimitive.content.toBoolean())
         assertEquals("t", strictOn["name"]!!.jsonPrimitive.content)
+
+        // pi assigns the resolved strict value unconditionally when the model
+        // supports strict mode, so null (codex) is sent as `"strict": null`.
+        val strictNull = OpenAiResponsesShared.convertResponsesTools(
+            listOf(tool),
+            OpenAiResponsesShared.ConvertResponsesToolsOptions(
+                strict = null,
+                supportsStrictMode = true
+            )
+        ).single()
+        assertEquals(JsonNull, strictNull["strict"])
     }
 
     private fun event(jsonText: String): JsonObject = json.parseToJsonElement(jsonText).jsonObject

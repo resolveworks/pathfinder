@@ -83,7 +83,8 @@ object OpenAiResponsesShared {
     }
 
     data class ConvertResponsesToolsOptions(
-        /** Null omits the `strict` field (server default) rather than sending false. */
+        /** Null sends `"strict": null` on the wire (pi assigns the resolved
+         * value unconditionally when the model supports strict mode). */
         val strict: Boolean? = false,
         val supportsStrictMode: Boolean = true,
         val supportsOpenAIGrammarTools: Boolean = false,
@@ -491,7 +492,7 @@ object OpenAiResponsesShared {
                 put("description", tool.description)
                 put("parameters", getJsonSchemaToolParameters(tool, strict == true))
                 if (options.toolSearchResult) put("defer_loading", true)
-                if (options.supportsStrictMode) strict?.let { put("strict", it) }
+                if (options.supportsStrictMode) put("strict", strict)
             }
         }
     }
