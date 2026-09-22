@@ -247,6 +247,21 @@ sealed class AgentEvent {
     ) : AgentEvent()
 
     /**
+     * Session-level: the prompt cycle settled — the agent run and every
+     * post-run continuation (retry backoff, compaction) finished, or the
+     * run aborted. Emitted by the owning session after its terminal
+     * `agent_end` handling; never appears in loop output.
+     */
+    data object AgentSettled : AgentEvent()
+
+    /**
+     * Session-level: the session's effective thinking level changed (pi's
+     * thinking_level_changed). Emitted by the owning session's
+     * setThinkingLevel; carries the clamped effective level.
+     */
+    data class ThinkingLevelChanged(val level: ModelThinkingLevel) : AgentEvent()
+
+    /**
      * A retryable run is being retried after an exponential-backoff delay.
      * Emitted by the [Agent] facade; never appears in [runAgentLoop] output.
      */

@@ -356,6 +356,8 @@ internal class ChatHarness(
             // parallel hand-written Model.
             models = switchModels,
             tools = listOf(fakeWebSearchTool),
+            // pi's restore presence check, wired like production.
+            hasConfiguredAuth = { providerId -> authService.isConfigured(providerId) },
             // Keep the prompt loop inside runTest's virtual clock: the
             // production default (Dispatchers.Default) is invisible to it.
             loopDispatcher = testDispatcher,

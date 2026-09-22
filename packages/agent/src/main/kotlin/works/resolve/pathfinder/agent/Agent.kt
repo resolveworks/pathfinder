@@ -393,6 +393,8 @@ class Agent(
     suspend fun processEvent(event: AgentEvent) = eventMutex.withLock {
         when (event) {
             is AgentEvent.AgentStart,
+            is AgentEvent.AgentSettled,
+            is AgentEvent.ThinkingLevelChanged,
             is AgentEvent.TurnStart,
             is AgentEvent.AutoRetryStart,
             is AgentEvent.AutoRetryEnd,

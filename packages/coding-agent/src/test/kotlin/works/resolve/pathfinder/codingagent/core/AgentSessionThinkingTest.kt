@@ -3,16 +3,21 @@ package works.resolve.pathfinder.codingagent.core
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import works.resolve.pathfinder.agent.Agent
+import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
@@ -135,6 +140,31 @@ class AgentSessionThinkingTest {
         assertEquals("the second entry chains under the first", entry.id, second.parentId)
         assertEquals(second.id, s.sessionManager.getLeafId())
     }
+
+    @Test
+    fun `setThinkingLevel emits thinking_level_changed with the clamped level only on change`() =
+        runTest {
+            val s = session(extendedModel)
+            val events = mutableListOf<AgentEvent>()
+            val collector = launch { s.events.toList(events) }
+            yield()
+
+            yield()
+            s.setThinkingLevel(ModelThinkingLevel.MEDIUM)
+            // medium is unsupported by the map: the event carries the
+            // clamped effective level, like pi.
+            yield()
+            s.setThinkingLevel(ModelThinkingLevel.HIGH)
+            yield()
+            s.setThinkingLevel(ModelThinkingLevel.MAX)
+            yield()
+
+            collector.cancelAndJoin()
+            assertEquals(
+                listOf(ModelThinkingLevel.HIGH, ModelThinkingLevel.MAX),
+                events.filterIsInstance<AgentEvent.ThinkingLevelChanged>().map { it.level }
+            )
+        }
 
     /** Clamping rounds up to the nearest supported level first, then down. */
     @Test

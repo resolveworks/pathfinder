@@ -19,6 +19,7 @@ import works.resolve.pathfinder.ai.auth.CatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
 import works.resolve.pathfinder.ai.auth.CredentialStore
 import works.resolve.pathfinder.ai.auth.NoopAuthContext
+import works.resolve.pathfinder.ai.auth.ProviderAuthService
 import works.resolve.pathfinder.ai.auth.resolveProviderAuth
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
@@ -122,11 +123,17 @@ class NativeAgentFactory(
         val cwd = ssh?.cwd ?: ""
         sessionManager.updateCwd(cwd)
 
+        // pi's ModelRuntime.hasConfiguredAuth: the restore path checks
+        // provider-credential presence without resolving (no OAuth refresh);
+        // ProviderAuthService.isConfigured is that presence check.
+        val authService = ProviderAuthService(catalog, authRegistry, credentials)
+
         val result =
             createAgentSession(
                 manager = sessionManager,
                 settingsManager = settingsManager,
                 models = models,
+                hasConfiguredAuth = { providerId -> authService.isConfigured(providerId) },
                 streamFn = StreamFn { requestedModel, context, options ->
                     // Request encoding and stream decoding run off Main; agent/session
                     // state and tool execution stay on the loop's dispatcher. A small

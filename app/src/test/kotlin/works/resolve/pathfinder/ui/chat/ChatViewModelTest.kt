@@ -428,6 +428,35 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         }
 
     @Test
+    fun isStreaming_spansRetryBackoff() = runTest(mainDispatcherRule.scheduler) {
+        val h = harness()
+        val vm = h.newViewModel()
+        vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.awaitState { it.status == ChatStatus.Ready }
+
+        h.scriptedStreams.add(h.errorStream(h.assistant("", StopReason.ERROR, "terminated")))
+        h.scriptedStreams.add(
+            h.gatedStream(
+                "recovered",
+                CompletableDeferred<Unit>().apply { complete(Unit) }
+            )
+        )
+        vm.onDraftChange("Hello")
+        vm.send()
+
+        // Session-level run-active state (pi's session isStreaming) keeps
+        // the UI busy across the retry backoff, where the agent's own
+        // per-run flag already reports idle.
+        vm.awaitState { it.isStreaming && it.retryStatus != null }
+
+        vm.awaitState { !it.isStreaming && it.messages.size == 3 && it.retryStatus == null }
+        val state = vm.uiState.value
+        assertTrue(state.messages[2].message() is AssistantMessage)
+        vm.closeForTest()
+    }
+
+    @Test
     fun streamError_surfacesError_andPersists() = runTest(mainDispatcherRule.scheduler) {
         val h = harness()
         val vm = h.newViewModel()
@@ -687,10 +716,13 @@ internal class ChatViewModelTest : ChatHarnessTest() {
                     vm.streamingState.value.streaming == null
             }
 
-            // The result joins the SAME row (no remove-and-re-add across the
-            // persistence write); output keeps line structure verbatim.
+            // The result joins the settled row in place. Under pi's
+            // emit-before-append order the row re-keyed once — from its
+            // live-keyed pending id to the entry id — when the append
+            // landed at this projection; result joins and the later error
+            // update keep that settled id (no remove-and-re-add).
             val okRow = vm.uiState.value.messages[4] as TranscriptRow.Tool
-            assertEquals(runningRow.id, okRow.id)
+            assertEquals("call-1", okRow.call.id)
             val okResult = okRow.result!!
             assertEquals("call-1", okResult.toolCallId)
             assertEquals("get_weather", okResult.toolName)
@@ -714,7 +746,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             }
 
             val errorRow = vm.uiState.value.messages[4] as TranscriptRow.Tool
-            assertEquals(runningRow.id, errorRow.id)
+            assertEquals(okRow.id, errorRow.id)
             assertEquals("boom\nexit 1", errorRow.result!!.content.textContent())
 
             vm.closeForTest()
