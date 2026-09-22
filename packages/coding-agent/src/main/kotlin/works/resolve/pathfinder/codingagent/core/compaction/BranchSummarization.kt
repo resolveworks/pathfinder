@@ -23,6 +23,7 @@ import works.resolve.pathfinder.codingagent.core.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.MessageEntry
 import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.RawEntry
 import works.resolve.pathfinder.codingagent.core.ReadonlySessionManager
 import works.resolve.pathfinder.codingagent.core.SessionEntry
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
@@ -100,7 +101,7 @@ private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
         entry.timestamp
     )
 
-    is ModelChangeEntry, is ThinkingLevelEntry -> null
+    is ModelChangeEntry, is ThinkingLevelEntry, is RawEntry -> null
 }
 
 /**

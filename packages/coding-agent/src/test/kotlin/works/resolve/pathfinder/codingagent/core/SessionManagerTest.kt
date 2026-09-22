@@ -333,6 +333,54 @@ class SessionManagerTest {
         assertTrue(SessionManager.list(dir, ioDispatcher = testDispatcher()).isEmpty())
     }
 
+    @Test
+    fun `a lone carriage return does not split lines`() = runTest {
+        val dir = createTempDirectory()
+        val header =
+            JsonlCodec.encodeHeaderLine(JsonlCodec.SessionHeader("cr-1", 0L)).trimEnd()
+        val userLine =
+            JsonlCodec.encodeEntryLine(MessageEntry("a", null, 1L, user("x"))).trimEnd()
+        val assistantLine =
+            JsonlCodec.encodeEntryLine(MessageEntry("b", "a", 2L, assistant())).trimEnd()
+
+        // \r alone is not a line break: the joined pair is one unparsable
+        // line, skipped whole, exactly like pi's \n-only split.
+        val cr = File(dir, "cr.jsonl")
+        cr.writeText(header + "\n" + userLine + "\r" + assistantLine + "\n")
+        val opened = SessionManager.open(cr, clock, ioDispatcher = testDispatcher())
+        assertTrue(opened.getEntries().isEmpty())
+        assertNull(opened.getLeafId())
+
+        // \r\n line endings parse: the trailing \r is JSON whitespace.
+        val crlf = File(dir, "crlf.jsonl")
+        crlf.writeText(header + "\r\n" + userLine + "\r\n")
+        assertEquals(
+            listOf("a"),
+            SessionManager.open(crlf, clock, ioDispatcher = testDispatcher())
+                .getEntries().map { it.id }
+        )
+    }
+
+    @Test
+    fun `list falls back to the entry timestamp when a message lacks its own`() = runTest {
+        val dir = createTempDirectory()
+        val file = File(dir, "notime.jsonl")
+        file.writeText(
+            """{"type":"session","version":3,"id":"s",""" +
+                """"timestamp":"2026-09-05T19:03:40.000Z","cwd":""}""" + "\n" +
+                """{"type":"message","id":"m1","parentId":null,""" +
+                """"timestamp":"2026-09-05T19:03:42.000Z",""" +
+                """"message":{"role":"user",""" +
+                """"content":[{"type":"text","text":"hi"}]}}""" + "\n"
+        )
+
+        val info = SessionManager.list(dir, ioDispatcher = testDispatcher()).single()
+
+        assertEquals(1, info.messageCount)
+        assertEquals("hi", info.firstMessage)
+        assertEquals(1788635022000L, info.modified)
+    }
+
     private class DispatcherSpy : kotlinx.coroutines.CoroutineDispatcher() {
         var dispatched = false
         override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {

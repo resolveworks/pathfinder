@@ -9,10 +9,13 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
@@ -160,4 +163,119 @@ class LoadEntriesTest {
 
     private fun createTempDirectory(): File =
         kotlin.io.path.createTempDirectory("load-entries-test").toFile()
+
+    private fun piHeader() = """{"type":"session","version":3,"id":"pi-1",""" +
+        """"timestamp":"2026-09-05T19:03:40.386Z","cwd":"/home/u/p"}"""
+
+    private fun piUserLine() = """{"type":"message","id":"m1","parentId":null,""" +
+        """"timestamp":"2026-09-05T19:03:41.000Z",""" +
+        """"message":{"role":"user","timestamp":1788635021000,""" +
+        """"content":[{"type":"text","text":"list the files"}]}}"""
+
+    @Test
+    fun `a pi-written tool-call turn loads`() = runTest {
+        val file = File(createTempDirectory(), "pi.jsonl")
+        file.writeText(
+            piHeader() + "\n" + piUserLine() + "\n" +
+                """{"type":"message","id":"m2","parentId":"m1",""" +
+                """"timestamp":"2026-09-05T19:03:42.000Z",""" +
+                """"message":{"role":"assistant","timestamp":1788635022000,""" +
+                """"content":[{"type":"toolCall","id":"call_1","name":"bash",""" +
+                """"arguments":{"command":"ls"}}],""" +
+                """"api":"anthropic-messages","provider":"anthropic",""" +
+                """"model":"claude-sonnet-4",""" +
+                """"usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,""" +
+                """"totalTokens":15,"cost":{"input":0,"output":0,"cacheRead":0,""" +
+                """"cacheWrite":0,"total":0}},"stopReason":"toolUse"}}""" + "\n" +
+                """{"type":"message","id":"m3","parentId":"m2",""" +
+                """"timestamp":"2026-09-05T19:03:43.000Z",""" +
+                """"message":{"role":"toolResult","timestamp":1788635023000,""" +
+                """"toolCallId":"call_1","toolName":"bash",""" +
+                """"content":[{"type":"text","text":"a.txt"}],"isError":false}}""" + "\n"
+        )
+
+        val loaded = SessionManager.open(file, clock, ioDispatcher = Dispatchers.Unconfined)
+
+        assertEquals(listOf("m1", "m2", "m3"), loaded.getEntries().map { it.id })
+        assertEquals("m3", loaded.getLeafId())
+        val assistant =
+            assertIs<AssistantMessage>((loaded.getEntry("m2") as MessageEntry).message)
+        assertEquals(StopReason.TOOL_USE, assistant.stopReason)
+        val call = assertIs<ToolCall>(assistant.content.single())
+        assertEquals(buildJsonObject { put("command", "ls") }, call.arguments)
+    }
+
+    @Test
+    fun `no-millis and offset timestamps load`() = runTest {
+        val file = File(createTempDirectory(), "lenient.jsonl")
+        file.writeText(
+            """{"type":"session","version":3,"id":"s",""" +
+                """"timestamp":"2026-09-05T19:03:40Z","cwd":""}""" + "\n" +
+                """{"type":"message","id":"a","parentId":null,""" +
+                """"timestamp":"2026-09-05T21:03:40+0200",""" +
+                """"message":{"role":"user","timestamp":1788635020000,"content":[]}}""" + "\n" +
+                """{"type":"message","id":"b","parentId":"a",""" +
+                """"timestamp":"2026-09-05T19:03Z",""" +
+                """"message":{"role":"assistant","timestamp":1788634980000,"content":[],""" +
+                """"api":"anthropic-messages","provider":"anthropic","model":"claude",""" +
+                """"usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,""" +
+                """"totalTokens":2,"cost":{"input":0,"output":0,"cacheRead":0,""" +
+                """"cacheWrite":0,"total":0}},"stopReason":"stop"}}""" + "\n"
+        )
+
+        val loaded = SessionManager.open(file, clock, ioDispatcher = Dispatchers.Unconfined)
+
+        assertEquals(2, loaded.getEntries().size)
+        // The colonless +0200 offset resolves to the same instant as
+        // 19:03:40Z; the minute-only timestamp is a whole minute earlier.
+        assertEquals(1788635020000L, loaded.getEntries()[0].timestamp)
+        assertEquals(1788634980000L, loaded.getEntries()[1].timestamp)
+    }
+
+    @Test
+    fun `unknown entry types are retained in the tree and roundtrip`() = runTest {
+        val usageLine =
+            """{"type":"usage","id":"u1","parentId":"m2",""" +
+                """"timestamp":"2026-09-05T19:03:44.000Z","kind":"cache_warm",""" +
+                """"provider":"anthropic","model":"claude",""" +
+                """"usage":{"input":1},"note":"warmed"}"""
+        val file = File(createTempDirectory(), "raw.jsonl")
+        file.writeText(
+            """{"type":"session","version":3,"id":"s",""" +
+                """"timestamp":"2026-09-05T19:03:40.000Z","cwd":""}""" + "\n" +
+                piUserLine() + "\n" +
+                """{"type":"message","id":"m2","parentId":"m1",""" +
+                """"timestamp":"2026-09-05T19:03:42.000Z",""" +
+                """"message":{"role":"assistant","timestamp":1788635022000,""" +
+                """"content":[{"type":"text","text":"hello"}],""" +
+                """"api":"anthropic-messages","provider":"anthropic","model":"claude",""" +
+                """"usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,""" +
+                """"totalTokens":2,"cost":{"input":0,"output":0,"cacheRead":0,""" +
+                """"cacheWrite":0,"total":0}},"stopReason":"stop"}}""" + "\n" +
+                usageLine + "\n"
+        )
+        val loaded = SessionManager.open(file, clock, ioDispatcher = Dispatchers.Unconfined)
+
+        assertEquals(listOf("m1", "m2", "u1"), loaded.getEntries().map { it.id })
+        val raw = assertIs<RawEntry>(loaded.getEntry("u1"))
+        assertEquals("m2", raw.parentId)
+        // The raw entry claims the leaf — and the unknown-leaf fallback —
+        // like pi's last raw entry.
+        assertEquals("u1", loaded.getLeafId())
+        assertEquals(
+            listOf("m1", "m2", "u1"),
+            buildSessionPath(loaded.getEntries(), "missing").map { it.id }
+        )
+        // It chains in the tree and projects nothing into the LLM context.
+        assertEquals(
+            listOf("u1"),
+            loaded.getTree().single().children.single().children.map { it.entry.id }
+        )
+        assertEquals(2, loaded.buildSessionContext().messages.size)
+
+        loaded.appendMessage(user("more"))
+        val lines = file.readText().split('\n').filter { it.isNotEmpty() }
+        assertEquals(5, lines.size)
+        assertEquals(usageLine, lines[3])
+    }
 }

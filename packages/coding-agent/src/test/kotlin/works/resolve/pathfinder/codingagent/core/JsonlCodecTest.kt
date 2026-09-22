@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.codingagent.core
 
+import java.util.TimeZone
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -170,13 +171,28 @@ class JsonlCodecTest {
         val message = assertIs<AssistantMessage>((decoded as MessageEntry).message)
         assertEquals(StopReason.ABORTED, message.stopReason)
         assertEquals(0, message.usage.reasoning)
-        // Old Pathfinder files with uppercase enum names still decode.
-        val upper = piLine.replace("\"stopReason\":\"aborted\"", "\"stopReason\":\"ABORTED\"")
-        val upperDecoded = assertIs<JsonlCodec.Line.Entry>(JsonlCodec.parseLine(upper)).entry
-        assertEquals(
-            StopReason.ABORTED,
-            (assertIs<AssistantMessage>((upperDecoded as MessageEntry).message)).stopReason
+        // Only pi's wire strings decode; old Pathfinder shapes ("ABORTED",
+        // "tool_use") are invalid data and reject.
+        assertNull(
+            JsonlCodec.parseLine(
+                piLine.replace("\"stopReason\":\"aborted\"", "\"stopReason\":\"ABORTED\"")
+            )
         )
+        assertNull(
+            JsonlCodec.parseLine(
+                piLine.replace("\"stopReason\":\"aborted\"", "\"stopReason\":\"tool_use\"")
+            )
+        )
+
+        // pi's wire value for TOOL_USE is camelCase.
+        val toolUse = MessageEntry(
+            "t",
+            null,
+            0L,
+            assistant("run", 0L).copy(stopReason = StopReason.TOOL_USE)
+        )
+        assertTrue("\"stopReason\":\"toolUse\"" in JsonlCodec.encodeEntryLine(toolUse).trimEnd())
+        assertEquals(toolUse, roundtripEntry(toolUse))
     }
 
     @Test
@@ -198,6 +214,7 @@ class JsonlCodecTest {
         assertNull(JsonlCodec.parseLine(""))
         assertNull(JsonlCodec.parseLine("   "))
         assertNull(JsonlCodec.parseLine("{ torn"))
+        // Unknown type without the raw minimum (string id, timestamp).
         assertNull(JsonlCodec.parseLine("""{"type":"nope","id":"x"}"""))
         assertNull(JsonlCodec.parseLine("""not json at all"""))
         // Entries before a header are dropped by callers; the codec itself
@@ -223,6 +240,67 @@ class JsonlCodecTest {
                 """{"kind":"entry","seq":1,"id":"a","type":"message","parentId":null,"timestamp":1,"message":{"role":"user","timestamp":1,"content":[]}}"""
             )
         )
+    }
+
+    @Test
+    fun `unknown entry types decode as raw entries and roundtrip verbatim`() {
+        val usageLine =
+            """{"type":"usage","id":"u","parentId":"m",""" +
+                """"timestamp":"2026-09-05T19:03:40.386Z","kind":"cache_warm",""" +
+                """"provider":"anthropic","model":"claude","usage":{"input":1}}"""
+        val decoded = assertIs<JsonlCodec.Line.Entry>(JsonlCodec.parseLine(usageLine)).entry
+        val raw = assertIs<RawEntry>(decoded)
+        assertEquals("u", raw.id)
+        assertEquals("m", raw.parentId)
+        assertEquals(1788635020386L, raw.timestamp)
+        assertEquals(usageLine, JsonlCodec.encodeEntryLine(raw).trimEnd())
+
+        // Raw retention needs only a string id and a parseable timestamp;
+        // even a typeless object indexes like pi's _buildIndex.
+        val typeless =
+            JsonlCodec.parseLine("""{"id":"x","timestamp":"2026-09-05T19:03:40Z"}""")
+        assertIs<RawEntry>(assertIs<JsonlCodec.Line.Entry>(typeless).entry)
+        assertNull(JsonlCodec.parseLine("""{"type":"usage","timestamp":"2026-09-05T19:03:40Z"}"""))
+        assertNull(JsonlCodec.parseLine("""{"type":"usage","id":"u","timestamp":"yesterday"}"""))
+    }
+
+    @Test
+    fun `parseIso accepts what new Date accepts for iso forms`() {
+        assertEquals(1788635020000L, JsonlCodec.parseIso("2026-09-05T19:03:40Z"))
+        assertEquals(1788635020300L, JsonlCodec.parseIso("2026-09-05T19:03:40.3Z"))
+        assertEquals(1788635020123L, JsonlCodec.parseIso("2026-09-05T19:03:40.1234567Z"))
+        assertEquals(1788627820000L, JsonlCodec.parseIso("2026-09-05T19:03:40+02:00"))
+        assertEquals(1788627820386L, JsonlCodec.parseIso("2026-09-05T19:03:40.386+0200"))
+        assertEquals(1788662020386L, JsonlCodec.parseIso("2026-09-05T19:03:40.386-07:30"))
+        assertEquals(1788634980000L, JsonlCodec.parseIso("2026-09-05T19:03Z"))
+        assertEquals(1788652800000L, JsonlCodec.parseIso("2026-09-05T24:00:00Z"))
+        // V8 rolls end-of-month day overflow instead of rejecting it.
+        assertEquals(1772478220000L, JsonlCodec.parseIso("2026-02-30T19:03:40Z"))
+        assertEquals(1788566400000L, JsonlCodec.parseIso("2026-09-05"))
+    }
+
+    @Test
+    fun `parseIso rejects what new Date rejects`() {
+        assertNull(JsonlCodec.parseIso("2026-13-01T00:00:00Z"))
+        assertNull(JsonlCodec.parseIso("2026-09-05T19:60:00Z"))
+        assertNull(JsonlCodec.parseIso("2026-09-05T19:03:61Z"))
+        assertNull(JsonlCodec.parseIso("2026-09-05T19:03:40+25:00"))
+        // V8 rejects hour-only zone offsets and the space separator.
+        assertNull(JsonlCodec.parseIso("2026-09-05T19:03:40+02"))
+        assertNull(JsonlCodec.parseIso("2026-09-05 19:03:40Z"))
+        assertNull(JsonlCodec.parseIso("10000-01-01T00:00:00Z"))
+        assertNull(JsonlCodec.parseIso("not a timestamp"))
+    }
+
+    @Test
+    fun `zoneless date-times read as local time`() {
+        val original = TimeZone.getDefault()
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("Asia/Tokyo"))
+            assertEquals(1788602620000L, JsonlCodec.parseIso("2026-09-05T19:03:40"))
+        } finally {
+            TimeZone.setDefault(original)
+        }
     }
 
     @Test
