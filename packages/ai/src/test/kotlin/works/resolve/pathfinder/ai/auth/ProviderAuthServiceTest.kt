@@ -290,34 +290,36 @@ class ProviderAuthServiceTest {
     }
 
     @Test
-    fun `blank api key value is rejected and nothing is stored`() = runTest {
+    fun `blank api key value is stored like pi and leaves the provider unconfigured`() = runTest {
         val store = InMemoryCredentialStore()
         val interaction = FakeInteraction(mutableListOf("  ", "account-42"))
-        try {
-            service(catalog(), store).login("acme", AuthType.API_KEY, interaction)
-            fail("expected ModelsError")
-        } catch (error: ModelsError) {
-            assertEquals(ModelsErrorCode.AUTH, error.code)
-            assertEquals("Acme requires a value for ACME_API_KEY", error.message)
-        }
-        assertEquals(null, store.read("acme"))
-        assertEquals(1, interaction.prompts.size)
+
+        val status = service(catalog(), store).login("acme", AuthType.API_KEY, interaction)
+
+        assertEquals(AuthStatus("acme", CredentialType.API_KEY), status)
+        val credential = store.read("acme") as ApiKeyCredential
+        assertEquals("  ", credential.key)
+        assertEquals(mapOf("ACME_ACCOUNT_ID" to "account-42"), credential.env)
+        // pi's prompts accept blank values; the empty credential later
+        // resolves as unconfigured instead.
+        assertTrue(!service(catalog(), store).isConfigured("acme"))
     }
 
     @Test
-    fun `blank later prompt value is rejected and nothing is stored`() = runTest {
+    fun `blank later prompt value is stored like pi`() = runTest {
         val store = InMemoryCredentialStore()
-        try {
-            service(catalog(), store).login(
-                "acme",
-                AuthType.API_KEY,
-                FakeInteraction(mutableListOf("sk-test", ""))
-            )
-            fail("expected ModelsError")
-        } catch (error: ModelsError) {
-            assertEquals(ModelsErrorCode.AUTH, error.code)
-        }
-        assertEquals(null, store.read("acme"))
+
+        val status = service(catalog(), store).login(
+            "acme",
+            AuthType.API_KEY,
+            FakeInteraction(mutableListOf("sk-test", ""))
+        )
+
+        assertEquals(AuthStatus("acme", CredentialType.API_KEY), status)
+        val credential = store.read("acme") as ApiKeyCredential
+        assertEquals("sk-test", credential.key)
+        assertEquals(mapOf("ACME_ACCOUNT_ID" to ""), credential.env)
+        assertTrue(!service(catalog(), store).isConfigured("acme"))
     }
 
     @Test
@@ -401,17 +403,17 @@ class ProviderAuthServiceTest {
     }
 
     @Test
-    fun `failed login wraps in auth error and does not mutate`() = runTest {
+    fun `failed login propagates raw and does not mutate`() = runTest {
         val store = InMemoryCredentialStore()
         store.modify("acme") { ApiKeyCredential(key = "old") }
         val failingOAuth = FakeOAuthAuth(onLogin = { throw IllegalStateException("network down") })
         try {
             service(catalog(apiKey = false, oauth = true), store, failingOAuth)
                 .login("acme", AuthType.OAUTH, FakeInteraction(mutableListOf()))
-            fail("expected ModelsError")
-        } catch (error: ModelsError) {
-            assertEquals(ModelsErrorCode.AUTH, error.code)
-            assertTrue(error.message!!.contains("network down"))
+            fail("expected IllegalStateException")
+        } catch (error: IllegalStateException) {
+            // pi propagates flow failures raw; only store mutations are wrapped.
+            assertEquals("network down", error.message)
         }
         assertEquals("old", (store.read("acme") as ApiKeyCredential).key)
     }
@@ -605,7 +607,7 @@ class ProviderAuthServiceTest {
     }
 
     @Test
-    fun `blank answer without prompts script is a login failure not a crash loop`() = runTest {
+    fun `blank answer without prompts script stores the credential unconfigured`() = runTest {
         val singlePrompt = ProviderCatalog(
             listOf(
                 CatalogProvider(
@@ -629,15 +631,13 @@ class ProviderAuthServiceTest {
             )
         )
         val store = InMemoryCredentialStore()
-        try {
-            service(
-                singlePrompt,
-                store
-            ).login("acme", AuthType.API_KEY, FakeInteraction(mutableListOf("")))
-            fail("expected ModelsError")
-        } catch (error: ModelsError) {
-            assertEquals(ModelsErrorCode.AUTH, error.code)
-        }
-        assertEquals(null, store.read("acme"))
+        val status = service(
+            singlePrompt,
+            store
+        ).login("acme", AuthType.API_KEY, FakeInteraction(mutableListOf("")))
+
+        assertEquals(AuthStatus("acme", CredentialType.API_KEY), status)
+        assertEquals("", (store.read("acme") as ApiKeyCredential).key)
+        assertTrue(!service(singlePrompt, store).isConfigured("acme"))
     }
 }

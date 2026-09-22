@@ -27,9 +27,6 @@ import works.resolve.pathfinder.ai.utils.string
  * wins outright and cancels the pending prompt.
  *
  * Divergences from pi:
- * - pi's in-handler catch renders a text/plain 500; this handler cannot
- *   realistically throw (the shared transport pre-parses the request), and
- *   [LoopbackOAuthServer]'s uniform HTML 500 covers the impossible case.
  * - Bind failure fails the login outright (like pi's Anthropic flow, unlike
  *   the sibling Codex flow, which degrades to manual login). pi surfaces
  *   Node's `EADDRINUSE` errno; this port has no Node error metadata and
@@ -112,10 +109,16 @@ class AnthropicOAuthAuth(
         val verifier = challenge.verifier
 
         val handle =
-            LoopbackOAuthServer(port = callbackPort, host = CALLBACK_HOST, gate = gate) {
-                    request,
-                    settle
-                ->
+            LoopbackOAuthServer(
+                port = callbackPort,
+                host = CALLBACK_HOST,
+                gate = gate,
+                handlerError = LoopbackCallbackResponse(
+                    500,
+                    "Internal error",
+                    contentType = "text/plain; charset=utf-8"
+                )
+            ) { request, settle ->
                 callbackResponse(request, settle, verifier)
             }.start()
                 ?: throw IllegalStateException(

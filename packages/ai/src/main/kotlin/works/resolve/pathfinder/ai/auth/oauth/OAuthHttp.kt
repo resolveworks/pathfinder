@@ -1,21 +1,28 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
 import java.io.IOException
-import java.net.HttpURLConnection
+import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
-import java.net.URL
-import kotlin.concurrent.thread
+import java.util.Locale
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.suspendCancellableCoroutine
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 
 /**
- * The narrow Android stand-in for pi's `fetch`: a single JSON request
- * executed with bounded timeouts, returning status/body/headers for the flow
- * to interpret — matching pi, non-2xx handling is the caller's decision, not
- * the transport's.
+ * The narrow Android stand-in for pi's `fetch`: a single request executed
+ * under one whole-exchange deadline, returning status/body/headers for the
+ * flow to interpret — matching pi, non-2xx handling is the caller's decision,
+ * not the transport's.
  *
- * Network-level failures throw [IOException] (bounded connect/read timeouts
- * as [SocketTimeoutException]); coroutine cancellation disconnects the
- * underlying connection and propagates as
+ * Network-level failures throw [IOException], with whole-exchange deadline
+ * expiry surfaced as [SocketTimeoutException] (OkHttp reports it as a bare
+ * `InterruptedIOException("timeout")`); coroutine cancellation cancels the
+ * underlying call and propagates as
  * [kotlinx.coroutines.CancellationException]. Implementations must never log
  * request URLs' query secrets, bodies, response bodies, or headers.
  */
@@ -36,7 +43,10 @@ data class OAuthHttpRequest(
     val url: String,
     val headers: Map<String, String> = emptyMap(),
     val body: ByteArray,
-    /** Bounded connect AND read timeout, mirroring pi's single exchange deadline. */
+    /**
+     * Deadline for the complete exchange — DNS, connect, request write, and
+     * response read together, mirroring pi's single `AbortSignal.timeout`.
+     */
     val timeoutMs: Int
 ) {
     override fun toString(): String =
@@ -90,88 +100,86 @@ data class OAuthHttpResponse(
 }
 
 /**
- * Platform [OAuthHttpClient] built exclusively on JDK/Android APIs
- * ([HttpURLConnection]) — deliberately not OkHttp: OAuth logins are rare,
- * one-shot, non-streaming exchanges, so the app's streaming dependency adds
- * no value here.
- *
- * The exchange runs on its own worker thread; response bodies are read only
- * up to [MAX_BODY_BYTES] so a hostile server cannot exhaust memory.
+ * Platform [OAuthHttpClient] over OkHttp. The request's [OAuthHttpRequest.timeoutMs]
+ * is applied as OkHttp's per-client call timeout — one deadline covering DNS
+ * through the last response byte, like pi's `AbortSignal.timeout` — with the
+ * connect timeout capped at the same budget so a late connect can never
+ * extend it. Response bodies are read in full, unbounded, like pi's
+ * `await response.text()` / `.json()`.
  */
-class UrlConnectionOAuthHttpClient : OAuthHttpClient {
+class OkHttpOAuthHttpClient : OAuthHttpClient {
+
+    /** Derivatives share this client's dispatcher and connection pool. */
+    private val baseClient = OkHttpClient()
 
     override suspend fun execute(request: OAuthHttpRequest): OAuthHttpResponse =
         suspendCancellableCoroutine { continuation ->
-            val connection = try {
-                (URL(request.url).openConnection() as HttpURLConnection).apply {
-                    requestMethod = request.method
-                    connectTimeout = request.timeoutMs
-                    readTimeout = request.timeoutMs
-                    for ((name, value) in request.headers) setRequestProperty(name, value)
-                    if (request.body.isNotEmpty()) {
-                        doOutput = true
-                        setFixedLengthStreamingMode(request.body.size)
+            val client = baseClient
+                .newBuilder()
+                .callTimeout(request.timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+                .connectTimeout(request.timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+                // The call deadline is the only read/write bound; a stalled
+                // exchange fails with it, not with a separate per-read
+                // timeout.
+                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .writeTimeout(0, TimeUnit.MILLISECONDS)
+                .build()
+
+            val call = client.newCall(request.toOkHttp())
+            // Cancellation must cancel the in-flight call so a blocked
+            // exchange unblocks; the cancelled continuation then discards
+            // any late result/exception.
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(
+                object : Callback {
+                    override fun onFailure(call: Call, e: IOException) {
+                        // OkHttp reports call-deadline expiry as
+                        // InterruptedIOException("timeout"); surface the
+                        // timeout flavor the flows recognize.
+                        val failure: IOException =
+                            if (e is InterruptedIOException && e.message == "timeout") {
+                                SocketTimeoutException("timeout").apply { initCause(e) }
+                            } else {
+                                e
+                            }
+                        continuation.resumeWith(Result.failure(failure))
+                    }
+
+                    override fun onResponse(call: Call, response: Response) {
+                        response.use {
+                            continuation.resumeWith(
+                                Result.success(
+                                    OAuthHttpResponse(
+                                        status = it.code,
+                                        headers = it.headers.toMultimap().mapKeys { (name, _) ->
+                                            name.lowercase(Locale.ROOT)
+                                        },
+                                        body = it.body.bytes()
+                                    )
+                                )
+                            )
+                        }
                     }
                 }
-            } catch (error: Exception) {
-                continuation.resumeWith(Result.failure(IOException(error.message, error)))
-                return@suspendCancellableCoroutine
-            }
-
-            // Cancellation must disconnect so the blocked worker unblocks; the
-            // cancelled continuation then discards any late result/exception.
-            continuation.invokeOnCancellation { connection.disconnect() }
-
-            thread(isDaemon = true, name = "oauth-http") {
-                val response = try {
-                    Result.success(perform(connection, request))
-                } catch (error: Throwable) {
-                    Result.failure<OAuthHttpResponse>(error)
-                } finally {
-                    connection.disconnect()
-                }
-                continuation.resumeWith(response)
-            }
+            )
         }
 
-    private fun perform(
-        connection: HttpURLConnection,
-        request: OAuthHttpRequest
-    ): OAuthHttpResponse {
-        if (request.body.isNotEmpty()) {
-            connection.outputStream.use { it.write(request.body) }
-        }
-        val status = connection.responseCode
-        val body = try {
-            connection.inputStream
-        } catch (_: IOException) {
-            connection.errorStream
-        }.use { stream ->
-            if (stream == null) {
-                ByteArray(0)
+    private fun OAuthHttpRequest.toOkHttp(): Request = Request.Builder()
+        .url(url)
+        // OkHttp rejects GET/HEAD request bodies; those requests are
+        // always bodyless here.
+        .method(
+            method,
+            if (method.equals("GET", ignoreCase = true) ||
+                method.equals("HEAD", ignoreCase = true)
+            ) {
+                null
             } else {
-                stream.readAtMost(MAX_BODY_BYTES)
+                body.toRequestBody()
             }
+        )
+        .apply {
+            for ((name, value) in headers) header(name, value)
         }
-        val headers = connection.headerFields.entries
-            .filter { (name, _) -> name != null }
-            .associate { (name, values) -> name.lowercase() to values.toList() }
-        return OAuthHttpResponse(status, headers, body)
-    }
-
-    private fun java.io.InputStream.readAtMost(limit: Int): ByteArray {
-        val buffer = ByteArray(limit)
-        var read = 0
-        while (read < limit) {
-            val count = read(buffer, read, limit - read)
-            if (count < 0) break
-            read += count
-        }
-        return buffer.copyOf(read)
-    }
-
-    companion object {
-        /** Enough for any sane OAuth token/error payload; a bound against oversized bodies. */
-        const val MAX_BODY_BYTES: Int = 64 * 1024
-    }
+        .build()
 }

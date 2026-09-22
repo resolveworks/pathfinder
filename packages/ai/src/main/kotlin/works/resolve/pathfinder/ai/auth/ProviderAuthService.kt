@@ -112,8 +112,10 @@ class ProviderAuthService(
 
     /**
      * The credential is persisted only after a successful login, replacing
-     * whatever was stored. Login logging lives at the Android caller
-     * boundary, not here — pi's login takes no telemetry context.
+     * whatever was stored. Like pi, flow failures propagate raw (pi wraps
+     * only store mutations as "Credential store modify failed"); login
+     * logging lives at the Android caller boundary, not here — pi's login
+     * takes no telemetry context.
      */
     suspend fun login(
         providerId: String,
@@ -121,21 +123,9 @@ class ProviderAuthService(
         interaction: AuthInteraction
     ): AuthStatus {
         val provider = requireProvider(providerId)
-        val credential = try {
-            when (type) {
-                AuthType.API_KEY -> runApiKeyLogin(provider, interaction)
-                AuthType.OAUTH -> runOAuthLogin(provider, interaction)
-            }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: ModelsError) {
-            throw error
-        } catch (error: Exception) {
-            throw ModelsError(
-                ModelsErrorCode.AUTH,
-                "Login failed for provider '${provider.id}'",
-                error
-            )
+        val credential = when (type) {
+            AuthType.API_KEY -> runApiKeyLogin(provider, interaction)
+            AuthType.OAUTH -> runOAuthLogin(provider, interaction)
         }
         try {
             credentials.modify(providerId) { credential }

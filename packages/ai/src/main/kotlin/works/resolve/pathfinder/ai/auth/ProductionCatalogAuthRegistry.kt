@@ -6,9 +6,9 @@ import works.resolve.pathfinder.ai.auth.oauth.GitHubCopilotOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.KimiCodingOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.OAuthForegroundGate
 import works.resolve.pathfinder.ai.auth.oauth.OAuthHttpClient
+import works.resolve.pathfinder.ai.auth.oauth.OkHttpOAuthHttpClient
 import works.resolve.pathfinder.ai.auth.oauth.OpenAiCodexOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.OpenRouterOAuthAuth
-import works.resolve.pathfinder.ai.auth.oauth.UrlConnectionOAuthHttpClient
 import works.resolve.pathfinder.ai.auth.oauth.XaiOAuthAuth
 
 /**
@@ -25,7 +25,7 @@ class ProductionCatalogAuthRegistry(
     private val gate: OAuthForegroundGate = OAuthForegroundGate.NONE
 ) : CatalogAuthRegistry {
     private fun client(): OAuthHttpClient =
-        ForegroundGatedOAuthHttpClient(UrlConnectionOAuthHttpClient(), gate)
+        ForegroundGatedOAuthHttpClient(OkHttpOAuthHttpClient(), gate)
 
     private val delegate = MapCatalogAuthRegistry(
         mapOf(

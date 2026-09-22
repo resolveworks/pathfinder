@@ -29,9 +29,15 @@ class LoopbackOAuthServerTest {
 
     private fun <R> started(
         port: Int = 0,
+        handlerError: LoopbackCallbackResponse = LoopbackCallbackResponse(
+            500,
+            oauthErrorHtml("Internal error while processing OAuth callback.")
+        ),
         handler: suspend (LoopbackCallbackRequest, (R?) -> Unit) -> LoopbackCallbackResponse
     ): LoopbackCallbackHandle<R> = runBlocking {
-        val handle = LoopbackOAuthServer<R>(port = port, handler = handler).start()
+        val handle =
+            LoopbackOAuthServer(port = port, handlerError = handlerError, handler = handler)
+                .start()
         handles += assertNotNull(handle)
         handle
     }
@@ -260,6 +266,24 @@ class LoopbackOAuthServerTest {
     }
 
     @Test
+    fun `malformed percent sequences pass through like URLSearchParams`() {
+        var received: LoopbackCallbackRequest? = null
+        val handle = started<String> { request, _ ->
+            received = request
+            LoopbackCallbackResponse(200, "ok")
+        }
+        get(handle.port, "/cb?code=ab%zz&state=100%&raw=%FF&ok=%41&utf8=%C3%A9")
+
+        val query = assertNotNull(received).query
+        assertEquals("ab%zz", query["code"])
+        assertEquals("100%", query["state"])
+        // Invalid UTF-8 becomes U+FFFD; valid escapes decode normally.
+        assertEquals("\uFFFD", query["raw"])
+        assertEquals("A", query["ok"])
+        assertEquals("\u00E9", query["utf8"])
+    }
+
+    @Test
     fun `handler throwing produces a 500 error page and the server keeps serving`() {
         var thrown = false
         val handle = started<String> { _, _ ->
@@ -269,9 +293,33 @@ class LoopbackOAuthServerTest {
             }
             LoopbackCallbackResponse(200, "ok")
         }
-        val (status, _, body) = get(handle.port, "/cb")
+        val (status, headers, body) = get(handle.port, "/cb")
         assertEquals(500, status)
+        assertEquals("text/html; charset=utf-8", headers["content-type"])
         assertTrue(body.contains("Internal error while processing OAuth callback."))
+        assertEquals(200, get(handle.port, "/later").first)
+    }
+
+    @Test
+    fun `a flow may swap the handler-error page for pi anthropic text plain 500`() {
+        var thrown = false
+        val handle = started<String>(
+            handlerError = LoopbackCallbackResponse(
+                500,
+                "Internal error",
+                contentType = "text/plain; charset=utf-8"
+            )
+        ) { _, _ ->
+            if (!thrown) {
+                thrown = true
+                error("boom")
+            }
+            LoopbackCallbackResponse(200, "ok")
+        }
+        val (status, headers, body) = get(handle.port, "/cb")
+        assertEquals(500, status)
+        assertEquals("text/plain; charset=utf-8", headers["content-type"])
+        assertEquals("Internal error", body)
         assertEquals(200, get(handle.port, "/later").first)
     }
 }
