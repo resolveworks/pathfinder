@@ -292,16 +292,17 @@ class ProviderAuthServiceTest {
     @Test
     fun `blank api key value is stored like pi and leaves the provider unconfigured`() = runTest {
         val store = InMemoryCredentialStore()
-        val interaction = FakeInteraction(mutableListOf("  ", "account-42"))
+        val interaction = FakeInteraction(mutableListOf("", "account-42"))
 
         val status = service(catalog(), store).login("acme", AuthType.API_KEY, interaction)
 
         assertEquals(AuthStatus("acme", CredentialType.API_KEY), status)
         val credential = store.read("acme") as ApiKeyCredential
-        assertEquals("  ", credential.key)
+        assertEquals("", credential.key)
         assertEquals(mapOf("ACME_ACCOUNT_ID" to "account-42"), credential.env)
         // pi's prompts accept blank values; the empty credential later
-        // resolves as unconfigured instead.
+        // resolves as unconfigured instead (a whitespace-only key is
+        // truthy in pi and stays configured).
         assertTrue(!service(catalog(), store).isConfigured("acme"))
     }
 

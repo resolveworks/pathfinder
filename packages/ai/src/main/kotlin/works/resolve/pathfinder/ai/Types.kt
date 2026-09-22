@@ -744,7 +744,9 @@ data class OpenAiResponsesCompat(
     /** null means auto-detect from provider/baseUrl. */
     val sessionAffinityFormat: SessionAffinityFormat? = null,
     val supportsLongCacheRetention: Boolean = true,
-    val supportsStrictMode: Boolean = false,
+    /** null means unset; each adapter applies its own default (codex and
+     * azure true, openai-responses false), as pi does per-API. */
+    val supportsStrictMode: Boolean? = null,
     val supportsOpenAIGrammarTools: Boolean = false,
     val supportsAdditionalTools: Boolean = false,
     val supportsToolSearch: Boolean = false,

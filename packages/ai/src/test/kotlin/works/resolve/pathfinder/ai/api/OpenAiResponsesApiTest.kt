@@ -3,6 +3,7 @@ package works.resolve.pathfinder.ai.api
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -662,6 +663,26 @@ class OpenAiResponsesApiTest {
         json["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
 
     private fun JsonObject.typeName(): String? = this["type"]?.jsonPrimitive?.content
+
+    @Test
+    fun `catalog responses models without the strict flag default off`() {
+        // The asset omits supportsStrictMode for opencode's responses models;
+        // the openai-responses default is false, so no strict key is sent.
+        val model = realAsset().getProvider("opencode")!!.models.first {
+            it.api == "openai-responses"
+        }
+        assertNull(model.responsesCompat?.supportsStrictMode)
+        assertFalse(getCompat(model).supportsStrictMode)
+        val json = params(
+            model,
+            normalizeContext(
+                Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(makeTool("t")))
+            )
+        )
+        assertNull(
+            json["tools"]!!.jsonArray.single().jsonObject["strict"]
+        )
+    }
 
     @Test
     fun `deferred tools load through additional_tools for gpt-5_4`() {

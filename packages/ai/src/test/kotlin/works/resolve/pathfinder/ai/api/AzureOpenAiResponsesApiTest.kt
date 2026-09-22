@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.api
 
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -15,6 +16,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import org.junit.Assume.assumeTrue
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
@@ -22,6 +24,7 @@ import works.resolve.pathfinder.ai.ModelCost
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
@@ -198,6 +201,21 @@ class AzureOpenAiResponsesApiTest {
     }
 
     @Test
+    fun `streamSimple defers missing auth into the flow as an error event`() = runTest {
+        // pi wraps every API in lazyStream: streamSimple setup failures
+        // (missing auth included) become terminal error events in-stream.
+        val transport = FakeTransport()
+        val events = api(transport).streamSimple(
+            model,
+            context,
+            works.resolve.pathfinder.ai.SimpleStreamOptions()
+        ).toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.single())
+        assertEquals("No API key for provider: azure-openai-responses", error.error.errorMessage)
+        assertTrue(transport.requests.isEmpty())
+    }
+
+    @Test
     fun `http errors carry the azure prefix`() = runTest {
         val transport = FakeTransport()
         transport.enqueueError(401, """{"error":{"message":"bad key"}}""")
@@ -225,7 +243,8 @@ class AzureOpenAiResponsesApiTest {
 
     @Test
     fun `custom gateway base urls keep their query string`() {
-        // Only the Azure-host branch strips the query; other hosts keep it, as in pi.
+        // Only the Azure-host path-rewrite branch strips the query; other
+        // hosts — and Azure hosts outside that branch — keep it, as in pi.
         assertEquals(
             "https://my-proxy.example.com/v1?custom=true",
             normalizeAzureBaseUrl("https://my-proxy.example.com/v1?custom=true")
@@ -234,6 +253,12 @@ class AzureOpenAiResponsesApiTest {
             "https://my-resource.openai.azure.com/openai/v1",
             normalizeAzureBaseUrl(
                 "https://my-resource.openai.azure.com/openai?api-version=2024-12-01"
+            )
+        )
+        assertEquals(
+            "https://my-resource.openai.azure.com/custom?api-version=2024-12-01",
+            normalizeAzureBaseUrl(
+                "https://my-resource.openai.azure.com/custom?api-version=2024-12-01"
             )
         )
     }
@@ -413,5 +438,44 @@ class AzureOpenAiResponsesApiTest {
         val body = bodyOf(transport)
         assertEquals("none", body["tool_choice"]!!.jsonPrimitive.content)
         assertEquals(1, body["tools"]!!.jsonArray.size)
+    }
+
+    private var realCatalog: ProviderCatalog? = null
+
+    /** The generated asset, mirroring ProviderCatalogTest's realAsset(). */
+    private fun realAsset(): ProviderCatalog {
+        val file = File("src/main/assets/models-catalog.json")
+        assumeTrue("real catalog asset not found at ${file.absolutePath}", file.isFile)
+        var cached = realCatalog
+        if (cached == null) {
+            cached = ProviderCatalog.parse(file.readText())
+            realCatalog = cached
+        }
+        return cached
+    }
+
+    @Test
+    fun `catalog azure models are strict-capable and send strict false`() = runTest {
+        // The asset omits supportsStrictMode for azure models; pi's azure
+        // default is true, so ordinary tools carry an explicit strict:false.
+        val model = realAsset().getProvider("azure-openai-responses")!!.models.first()
+        assertNull(model.responsesCompat?.supportsStrictMode)
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completed().toTypedArray()))
+        api(transport).stream(
+            model,
+            normalizeContext(
+                Context(
+                    messages = listOf(UserMessage.ofText("hi")),
+                    tools = listOf(Tool("t", "T", buildJsonObject { put("type", "object") }))
+                )
+            ),
+            AzureOpenAiResponsesOptions(apiKey = "k", azureResourceName = "res")
+        ).toList()
+        assertEquals(
+            false,
+            bodyOf(transport)["tools"]!!.jsonArray.single().jsonObject["strict"]!!
+                .jsonPrimitive.content.toBoolean()
+        )
     }
 }

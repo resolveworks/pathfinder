@@ -7,12 +7,14 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -842,5 +844,114 @@ class OpenAICodexWebSocketStreamTest {
         assertEquals("req-1", headers["session-id"])
         assertEquals("Bearer tok", headers["Authorization"])
         assertEquals("acc", headers["chatgpt-account-id"])
+    }
+
+    @Test
+    fun `busy-entry fallback connects without holding the session mutex`() = runTest {
+        // pi connects on the event loop without blocking other sessions; a
+        // busy entry's fresh connect must not head-of-line block another
+        // session's acquire.
+        val sessions = cleanSlate()
+        val http = FakeTransport()
+        val gate = CompletableDeferred<Unit>()
+        var connects = 0
+        val ws = object : WebSocketStreamingTransport {
+            override suspend fun connect(
+                url: String,
+                headers: Map<String, String>,
+                connectTimeoutMs: Long
+            ): WebSocketConnection {
+                connects++
+                val connection = FakeWebSocketConnection()
+                when (connects) {
+                    // Session s1: the server never replies, so the entry stays busy.
+                    1 -> {}
+
+                    // Same session/account: the busy-entry one-shot connect, gated.
+                    2 -> gate.await()
+
+                    // A different session: must finish while connect 2 is pending.
+                    else -> connection.onSend = { _ ->
+                        connection.serverAll(completedOnly("resp_other_session"))
+                    }
+                }
+                return connection
+            }
+        }
+        val api =
+            OpenAICodexResponsesApi(http, webSocketTransport = ws, webSocketSessions = sessions)
+        val context = normalizeContext(Context(systemPrompt = "", messages = emptyList()))
+
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            api.stream(
+                model,
+                context,
+                OpenAICodexResponsesOptions(
+                    apiKey = jwt("a"),
+                    sessionId = "s1",
+                    transport = Transport.WEBSOCKET_CACHED
+                )
+            ).toList()
+        }
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            api.stream(
+                model,
+                context,
+                OpenAICodexResponsesOptions(
+                    apiKey = jwt("a"),
+                    sessionId = "s1",
+                    transport = Transport.WEBSOCKET_CACHED
+                )
+            ).toList()
+        }
+
+        val otherSession = withTimeout(10_000) {
+            api.stream(
+                model,
+                context,
+                OpenAICodexResponsesOptions(
+                    apiKey = jwt("b"),
+                    sessionId = "s2",
+                    transport = Transport.WEBSOCKET_CACHED
+                )
+            ).toList()
+        }
+        assertEquals(StopReason.STOP, messageOf(otherSession).stopReason)
+        assertEquals(3, connects)
+
+        gate.complete(Unit)
+    }
+
+    @Test
+    fun `empty-type frames are skipped and never start output`() = runTest {
+        val sessions = cleanSlate()
+        val ws = FakeWebSocketTransport()
+        val http = FakeTransport()
+        http.enqueueResponse(sse(*sseChunks().toTypedArray()))
+        val api = api(http, ws, sessions)
+        ws.onConnect = { connection ->
+            connection.onSend = { _ ->
+                connection.server(buildJsonObject { put("type", "") })
+                connection.server(errorEvent("codex_error", "boom"))
+            }
+        }
+
+        val events = api.stream(
+            model,
+            normalizeContext(
+                Context(
+                    systemPrompt = "You are a helpful assistant.",
+                    messages = listOf(UserMessage.ofText("Say hello"))
+                )
+            ),
+            OpenAICodexResponsesOptions(apiKey = jwt("acc_test"), transport = Transport.AUTO)
+        ).toList()
+        // The empty-type frame is skipped, so output never started on the
+        // socket and the codex error surfaces directly (non-transport errors
+        // thrown before start are not SSE fallbacks).
+        val error = assertIs<AssistantMessageEvent.Error>(events.last())
+        assertEquals("Codex error: boom", error.error.errorMessage)
+        assertTrue(events.none { it is AssistantMessageEvent.Start })
+        assertTrue(http.requests.isEmpty())
     }
 }

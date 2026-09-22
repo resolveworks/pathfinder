@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -292,7 +293,8 @@ class OpenAiCodexResponsesApiTest {
         ).stream(model, toolContext, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         val function = bodyOf(fallback)["tools"]!!.jsonArray.single().jsonObject
         assertEquals("function", function["type"]!!.jsonPrimitive.content)
-        assertNull(function["strict"])
+        // Codex passes strict=null, and pi emits the assigned value verbatim.
+        assertEquals(JsonNull, function["strict"])
     }
 
     @Test
@@ -494,11 +496,32 @@ class OpenAiCodexResponsesApiTest {
     }
 
     @Test
+    fun `retryable 429 is retried before friendly usage limit parsing`() = runTest {
+        // pi decides retryability first; the friendly message is parsed only
+        // on the final attempt or a non-retryable error.
+        val transport = FakeTransport()
+        transport.enqueueError(
+            429,
+            """{"error":{"code":"rate_limit_exceeded","message":"slow down"}}"""
+        )
+        transport.enqueueResponse(sse(*doneEvents().toTypedArray()))
+        val delays = mutableListOf<Long>()
+        val events = api(transport, delays).stream(
+            model,
+            context,
+            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 1)
+        ).toList()
+        assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(2, transport.requests.size)
+        assertEquals(listOf(1000L), delays)
+    }
+
+    @Test
     fun `terminal usage limits on 429 are not retried and get friendly text`() = runTest {
         val transport = FakeTransport()
         transport.enqueueError(
             429,
-            """{"error":{"code":"usage_limit_reached","message":"limit","plan_type":"Plus","resets_at":1893456000}}"""
+            """{"error":{"code":"usage_limit_reached","message":"insufficient_quota","plan_type":"Plus","resets_at":1893456000}}"""
         )
         val delays = mutableListOf<Long>()
         val events = api(transport, delays).stream(
@@ -791,6 +814,137 @@ class OpenAiCodexResponsesApiTest {
         assertEquals(listOf("base_tool", "late_tool"), toolNamesOf("gpt-5.3-codex-spark"))
         assertTrue(topLevel.none { it.isType("additional_tools") })
         assertTrue(topLevel.none { it.isType("tool_search_output") })
+    }
+
+    @Test
+    fun `usage limit codes match case-insensitively and empty messages fall back`() {
+        val (message, friendly) = parseCodexErrorResponse(
+            400,
+            """{"error":{"code":"USAGE_LIMIT_REACHED","message":""}}""",
+            nowMs = { 0L }
+        )
+        assertEquals("You have hit your ChatGPT usage limit.", friendly)
+        assertEquals(friendly, message)
+    }
+
+    @Test
+    fun `zero resets_at is treated as absent`() {
+        val (_, friendly) = parseCodexErrorResponse(
+            400,
+            """{"error":{"code":"usage_limit_reached","message":"limit","resets_at":0}}""",
+            nowMs = { 0L }
+        )
+        assertEquals("You have hit your ChatGPT usage limit.", friendly)
+    }
+
+    @Test
+    fun `events with an empty type are skipped`() {
+        assertNull(mapCodexEvent(buildJsonObject { put("type", "") }) {})
+        assertNull(
+            mapCodexEvent(
+                buildJsonObject { put("type", kotlinx.serialization.json.JsonNull) }
+            ) {}
+        )
+    }
+
+    @Test
+    fun `retry-after parsing follows js number semantics`() {
+        // JS Number(): hex integers parse, non-finite values are skipped.
+        assertEquals(16L, getRetryAfterDelayMs("0x10", null) { 0L })
+        assertEquals(1500L, getRetryAfterDelayMs("1.5e3", null) { 0L })
+        assertEquals(2000L, getRetryAfterDelayMs(null, "2") { 0L })
+        assertNull(getRetryAfterDelayMs("Infinity", null) { 0L })
+        assertNull(getRetryAfterDelayMs(null, "NaN") { 0L })
+    }
+
+    @Test
+    fun `negative timeout values fail the stream without a request`() = runTest {
+        val transport = FakeTransport()
+        val events = api(transport).stream(
+            model,
+            context,
+            OpenAICodexResponsesOptions(apiKey = apiKey, timeoutMs = -1)
+        ).toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.single())
+        assertEquals("Invalid timeoutMs: -1", error.error.errorMessage)
+        assertTrue(transport.requests.isEmpty())
+
+        val wsTransport = FakeTransport()
+        val wsEvents = api(wsTransport).stream(
+            model,
+            context,
+            OpenAICodexResponsesOptions(apiKey = apiKey, websocketConnectTimeoutMs = -5)
+        ).toList()
+        val wsError = assertIs<AssistantMessageEvent.Error>(wsEvents.single())
+        assertEquals("Invalid timeoutMs: -5", wsError.error.errorMessage)
+        assertTrue(wsTransport.requests.isEmpty())
+    }
+
+    @Test
+    fun `empty text verbosity falls back to low`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*doneEvents().toTypedArray()))
+        api(transport).stream(
+            model,
+            context,
+            OpenAICodexResponsesOptions(apiKey = apiKey, textVerbosity = "")
+        ).toList()
+        assertEquals(
+            "low",
+            bodyOf(transport)["text"]!!.jsonObject["verbosity"]!!.jsonPrimitive.content
+        )
+    }
+
+    @Test
+    fun `header overrides and deletions are case-insensitive`() {
+        // Headers.set/delete match names case-insensitively.
+        val base = buildBaseCodexHeaders(
+            modelHeaders = mapOf("X-Model" to "a", "Accept" to "text/plain"),
+            optionsHeaders = mapOf("x-model" to "b", "ACCEPT" to null),
+            accountId = "acc",
+            token = "tok"
+        )
+        assertEquals("b", base["X-Model"])
+        assertNull(base.keys.firstOrNull { it.equals("accept", ignoreCase = true) })
+
+        val ws = buildCodexWebSocketHeaders(
+            modelHeaders = mapOf(
+                "Accept" to "text/event-stream",
+                "Content-Type" to "application/json"
+            ),
+            optionsHeaders = emptyMap(),
+            accountId = "acc",
+            token = "tok",
+            requestId = "req-1"
+        )
+        assertNull(ws.keys.firstOrNull { it.equals("accept", ignoreCase = true) })
+        assertNull(ws.keys.firstOrNull { it.equals("content-type", ignoreCase = true) })
+        assertEquals("responses_websockets=2026-02-06", ws["OpenAI-Beta"])
+    }
+
+    @Test
+    fun `catalog codex models are strict-capable and send strict null`() = runTest {
+        // The asset omits supportsStrictMode for codex models; pi's codex
+        // default is true, so tools carry the assigned strict (null) value.
+        val model = realAsset().getProvider("openai-codex")!!.models.first()
+        assertNull(model.responsesCompat?.supportsStrictMode)
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*doneEvents().toTypedArray()))
+        api(transport).stream(
+            model,
+            normalizeContext(
+                Context(
+                    systemPrompt = "You are Codex.",
+                    messages = listOf(UserMessage.ofText("hi")),
+                    tools = listOf(Tool("t", "T", buildJsonObject { put("type", "object") }))
+                )
+            ),
+            OpenAICodexResponsesOptions(apiKey = apiKey)
+        ).toList()
+        assertEquals(
+            JsonNull,
+            bodyOf(transport)["tools"]!!.jsonArray.single().jsonObject["strict"]
+        )
     }
 }
 

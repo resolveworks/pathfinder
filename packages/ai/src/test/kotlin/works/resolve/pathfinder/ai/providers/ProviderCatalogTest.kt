@@ -508,7 +508,7 @@ class ProviderCatalogTest {
         assertFalse(
             provider.isCredentialComplete(
                 "cf-key",
-                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "  ")
+                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "")
             )
         )
         assertFalse(
@@ -542,12 +542,42 @@ class ProviderCatalogTest {
     }
 
     @Test
+    fun `whitespace-only credential values count as present`() {
+        // pi treats whitespace strings as truthy (envApiKeyAuth's
+        // `credential?.key`, cloudflare's per-field `!== undefined`), so
+        // resolution sends them and prompting must not flag them missing;
+        // only null and empty are missing.
+        val provider = TestCatalogs.CLOUDFLARE
+        assertTrue(
+            provider.isCredentialComplete(
+                " ",
+                mapOf("CLOUDFLARE_ACCOUNT_ID" to " ", "CLOUDFLARE_GATEWAY_ID" to " ")
+            )
+        )
+        assertFalse(
+            provider.isCredentialComplete(
+                "",
+                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw")
+            )
+        )
+        assertEquals(
+            listOf("CLOUDFLARE_ACCOUNT_ID"),
+            provider.missingAuthPrompts(
+                "k",
+                mapOf("CLOUDFLARE_ACCOUNT_ID" to "", "CLOUDFLARE_GATEWAY_ID" to " ")
+            ).map { it.envKey }
+        )
+    }
+
+    @Test
     fun `provider with no auth prompts still requires a key`() {
         val provider = ProviderCatalog.parse(
             """{"providers":[{"id":"p","name":"P","baseUrl":"u","models":[]}]}"""
         ).getProvider("p")!!
         assertFalse(provider.isCredentialComplete(null, emptyMap()))
-        assertFalse(provider.isCredentialComplete("  ", emptyMap()))
+        assertFalse(provider.isCredentialComplete("", emptyMap()))
+        // Same presence rule as prompted values: whitespace is truthy in pi.
+        assertTrue(provider.isCredentialComplete(" ", emptyMap()))
         assertTrue(provider.isCredentialComplete("k", emptyMap()))
     }
 
@@ -709,6 +739,26 @@ class ProviderCatalogTest {
             }.id
         )!!
         assertNull(claude.responsesCompat)
+    }
+
+    @Test
+    fun `responses supportsStrictMode stays unset when the asset omits it`() {
+        // The asset carries no supportsStrictMode for codex or azure models;
+        // the parse seam keeps that unset so each adapter applies its own
+        // default (both true), unlike openai-responses (false).
+        val catalog = realAsset()
+        assertNull(
+            catalog.getProvider("openai-codex")!!.models.first().responsesCompat?.supportsStrictMode
+        )
+        assertNull(
+            catalog.getProvider("azure-openai-responses")!!.models.first()
+                .responsesCompat?.supportsStrictMode
+        )
+        assertNull(
+            catalog.getProvider("opencode")!!.models.first {
+                it.api == "openai-responses"
+            }.responsesCompat?.supportsStrictMode
+        )
     }
 
     @Test
