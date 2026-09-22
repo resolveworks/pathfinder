@@ -130,8 +130,6 @@ class KimiCodingOAuthAuth(
         val accessToken = record.string("access_token")
         val refreshToken = record.string("refresh_token")
         val expiresIn = record.strictDouble("expires_in")
-        // JSON-parsed numbers are never non-finite; the isFinite filter is
-        // exactly pi's `Number.isFinite` guard.
         if (accessToken.isNullOrEmpty() || refreshToken.isNullOrEmpty() ||
             expiresIn == null || !expiresIn.isFinite() || expiresIn <= 0
         ) {
