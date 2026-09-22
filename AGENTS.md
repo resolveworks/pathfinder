@@ -109,6 +109,16 @@ degradation at warn, surfaced failures at error. Never log credentials,
 message text, model responses, or tool arguments and results; log machine ids,
 not machine addresses.
 
+## Release
+
+Bump `versionCode` and `versionName` in `app/build.gradle.kts` in a dedicated
+`Release vX.Y.Z` commit on main, then tag that commit `vX.Y.Z` and publish a
+GitHub release for it. Publishing triggers `.github/workflows/release.yml`,
+which builds and signs the APK from the tag and uploads it to the release.
+The tag must point at the bump commit: the workflow builds from the tag, so
+an unbumped tag ships an APK whose versionCode does not advance and
+Obtainium installs fail.
+
 ## Check
 
 Pathfinder is in early alpha. Do not add regression tests unless explicitly
