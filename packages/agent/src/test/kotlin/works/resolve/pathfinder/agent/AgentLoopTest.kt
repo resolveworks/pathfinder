@@ -288,7 +288,7 @@ class AgentLoopTest {
         val tool2 = FakeTool(Tool("t2", "two", buildJsonObject {}))
         val contexts = mutableListOf<TranscriptContext>()
         val streamFn = scriptedStream(
-            toolCallAssistant(ToolCall("c1", "t1", """{"a":1}""")),
+            toolCallAssistant(ToolCall("c1", "t1", buildJsonObject { put("a", 1) })),
             assistant("done"),
             contexts = contexts
         )
@@ -325,7 +325,8 @@ class AgentLoopTest {
                     }
                 }
             )
-            val assistant1 = toolCallAssistant(ToolCall("c1", "my_tool", """{"a":1}"""))
+            val assistant1 =
+                toolCallAssistant(ToolCall("c1", "my_tool", buildJsonObject { put("a", 1) }))
             val assistant2 = assistant("done")
             val streamFn = scriptedStream(assistant1, assistant2)
             val prompt = UserMessage.ofText("q")
@@ -399,7 +400,7 @@ class AgentLoopTest {
                 AgentToolResult(listOf(TextContent("ok")), terminate = true)
             }
         )
-        val assistant1 = toolCallAssistant(ToolCall("c1", "my_tool", "{}"))
+        val assistant1 = toolCallAssistant(ToolCall("c1", "my_tool", JsonObject(emptyMap())))
         val streamFn = scriptedStream(assistant1)
 
         val events = mutableListOf<AgentEvent>()
@@ -431,8 +432,8 @@ class AgentLoopTest {
             }
         )
         val assistant1 = toolCallAssistant(
-            ToolCall("c1", "my_tool", "{}"),
-            ToolCall("c2", "my_tool", "{}")
+            ToolCall("c1", "my_tool", JsonObject(emptyMap())),
+            ToolCall("c2", "my_tool", JsonObject(emptyMap()))
         )
         val assistant2 = assistant("done")
         val streamFn = scriptedStream(assistant1, assistant2)
@@ -453,8 +454,12 @@ class AgentLoopTest {
     @Test
     fun `multiple tool turns continue until a response has no tool calls`() = runTest {
         val tool = FakeTool(Tool("t", "d", buildJsonObject {}))
-        val a1 = toolCallAssistant(ToolCall("c1", "t", "{}"), ToolCall("c2", "t", "{}"))
-        val a2 = toolCallAssistant(ToolCall("c3", "t", "{}"))
+        val a1 =
+            toolCallAssistant(
+                ToolCall("c1", "t", JsonObject(emptyMap())),
+                ToolCall("c2", "t", JsonObject(emptyMap()))
+            )
+        val a2 = toolCallAssistant(ToolCall("c3", "t", JsonObject(emptyMap())))
         val a3 = assistant("done")
         val streamFn = scriptedStream(a1, a2, a3)
 
@@ -481,7 +486,7 @@ class AgentLoopTest {
     fun `assistant error stop reason never executes embedded tool calls`() = runTest {
         val tool = FakeTool()
         val message = toolCallAssistant(
-            ToolCall("c1", "my_tool", "{}"),
+            ToolCall("c1", "my_tool", JsonObject(emptyMap())),
             stopReason = StopReason.ERROR
         )
             .copy(errorMessage = "boom")
@@ -506,7 +511,10 @@ class AgentLoopTest {
     fun `assistant aborted stop reason never executes embedded tool calls`() = runTest {
         val tool = FakeTool()
         val message =
-            toolCallAssistant(ToolCall("c1", "my_tool", "{}"), stopReason = StopReason.ABORTED)
+            toolCallAssistant(
+                ToolCall("c1", "my_tool", JsonObject(emptyMap())),
+                stopReason = StopReason.ABORTED
+            )
         val streamFn = scriptedStream(message)
 
         val events = mutableListOf<AgentEvent>()
@@ -526,8 +534,8 @@ class AgentLoopTest {
     fun `length stop reason fails every call without invoking tools`() = runTest {
         val tool = FakeTool()
         val message = toolCallAssistant(
-            ToolCall("c1", "my_tool", """{"a":1}"""),
-            ToolCall("c2", "my_tool", "not json"),
+            ToolCall("c1", "my_tool", buildJsonObject { put("a", 1) }),
+            ToolCall("c2", "my_tool", buildJsonObject { put("b", 2) }),
             stopReason = StopReason.LENGTH
         )
         val streamFn = scriptedStream(message, assistant("redone"))
@@ -547,8 +555,7 @@ class AgentLoopTest {
         val starts = events.filterIsInstance<AgentEvent.ToolExecutionStart>()
         assertEquals(listOf("c1", "c2"), starts.map { it.toolCallId })
         assertEquals(buildJsonObject { put("a", 1) }, starts[0].arguments)
-        // Unparseable raw arguments degrade to an empty object for the start event.
-        assertEquals(JsonObject(emptyMap()), starts[1].arguments)
+        assertEquals(buildJsonObject { put("b", 2) }, starts[1].arguments)
 
         val ends = events.filterIsInstance<AgentEvent.ToolExecutionEnd>()
         assertEquals(listOf("c1", "c2"), ends.map { it.toolCallId })
@@ -570,58 +577,11 @@ class AgentLoopTest {
     }
 
     @Test
-    fun `malformed json arguments fail validation with stable message`() = runTest {
-        val tool = FakeTool()
-        val events = mutableListOf<AgentEvent>()
-        val streamFn = scriptedStream(
-            toolCallAssistant(ToolCall("c1", "my_tool", """{"a": """)),
-            assistant("done")
-        )
-        val result = runAgentLoop(
-            listOf(UserMessage.ofText("q")),
-            toolContext(tool),
-            AgentLoopConfig(model, streamFn = streamFn)
-        ) { events.add(it) }
-
-        val end = events.filterIsInstance<AgentEvent.ToolExecutionEnd>().single()
-        assertTrue(end.isError)
-        assertEquals(
-            "Validation failed for tool \"my_tool\": arguments are not a JSON object",
-            (end.result.content.single() as TextContent).text
-        )
-        assertTrue(tool.executedCalls.isEmpty())
-        assertEquals(2, typeLabels(events).count { it == "TurnStart" })
-        assertEquals(4, result.size)
-    }
-
-    @Test
-    fun `non-object json arguments fail validation with stable message`() = runTest {
-        val tool = FakeTool()
-        val events = mutableListOf<AgentEvent>()
-        val streamFn = scriptedStream(
-            toolCallAssistant(ToolCall("c1", "my_tool", """[1,2]""")),
-            assistant("done")
-        )
-        runAgentLoop(
-            listOf(UserMessage.ofText("q")),
-            toolContext(tool),
-            AgentLoopConfig(model, streamFn = streamFn)
-        ) { events.add(it) }
-
-        val end = events.filterIsInstance<AgentEvent.ToolExecutionEnd>().single()
-        assertEquals(
-            "Validation failed for tool \"my_tool\": arguments are not a JSON object",
-            (end.result.content.single() as TextContent).text
-        )
-        assertTrue(tool.executedCalls.isEmpty())
-    }
-
-    @Test
     fun `validator rejection message becomes the error result`() = runTest {
         val tool = FakeTool(validate = { throw IllegalArgumentException("bad args") })
         val events = mutableListOf<AgentEvent>()
         val streamFn = scriptedStream(
-            toolCallAssistant(ToolCall("c1", "my_tool", "{}")),
+            toolCallAssistant(ToolCall("c1", "my_tool", JsonObject(emptyMap()))),
             assistant("done")
         )
         runAgentLoop(
@@ -641,7 +601,7 @@ class AgentLoopTest {
         val tool = FakeTool()
         val events = mutableListOf<AgentEvent>()
         val streamFn = scriptedStream(
-            toolCallAssistant(ToolCall("c1", "ghost", "{}")),
+            toolCallAssistant(ToolCall("c1", "ghost", JsonObject(emptyMap()))),
             assistant("done")
         )
         val result = runAgentLoop(
@@ -663,7 +623,7 @@ class AgentLoopTest {
         val tool = FakeTool(executeImpl = { _, _, _ -> throw IllegalStateException("boom") })
         val events = mutableListOf<AgentEvent>()
         val streamFn = scriptedStream(
-            toolCallAssistant(ToolCall("c1", "my_tool", "{}")),
+            toolCallAssistant(ToolCall("c1", "my_tool", JsonObject(emptyMap()))),
             assistant("done")
         )
         val result = runAgentLoop(
@@ -700,7 +660,7 @@ class AgentLoopTest {
             }
         )
         val streamFn = scriptedStream(
-            toolCallAssistant(ToolCall("c1", "my_tool", "{}")),
+            toolCallAssistant(ToolCall("c1", "my_tool", JsonObject(emptyMap()))),
             assistant("done")
         )
 
@@ -745,7 +705,10 @@ class AgentLoopTest {
                 }
             )
             val streamFn = scriptedStream(
-                toolCallAssistant(ToolCall("c1", "t1", "{}"), ToolCall("c2", "t2", "{}")),
+                toolCallAssistant(
+                    ToolCall("c1", "t1", JsonObject(emptyMap())),
+                    ToolCall("c2", "t2", JsonObject(emptyMap()))
+                ),
                 assistant("done")
             )
 
@@ -806,8 +769,8 @@ class AgentLoopTest {
         val ok = FakeTool(Tool("t2", "d", buildJsonObject {}))
         val streamFn = scriptedStream(
             toolCallAssistant(
-                ToolCall("c1", "ghost", "{}"),
-                ToolCall("c2", "t2", "{}")
+                ToolCall("c1", "ghost", JsonObject(emptyMap())),
+                ToolCall("c2", "t2", JsonObject(emptyMap()))
             ),
             assistant("done")
         )
@@ -851,7 +814,10 @@ class AgentLoopTest {
             }
         )
         val streamFn = scriptedStream(
-            toolCallAssistant(ToolCall("c1", "t1", "{}"), ToolCall("c2", "t2", "{}")),
+            toolCallAssistant(
+                ToolCall("c1", "t1", JsonObject(emptyMap())),
+                ToolCall("c2", "t2", JsonObject(emptyMap()))
+            ),
             assistant("done")
         )
 
@@ -899,7 +865,7 @@ class AgentLoopTest {
             }
         )
         val streamFn = scriptedStream(
-            toolCallAssistant(ToolCall("c1", "my_tool", "{}")),
+            toolCallAssistant(ToolCall("c1", "my_tool", JsonObject(emptyMap()))),
             assistant("done")
         )
 
@@ -932,7 +898,7 @@ class AgentLoopTest {
             }
         )
         val streamFn = scriptedStream(
-            toolCallAssistant(ToolCall("c1", "my_tool", "{}")),
+            toolCallAssistant(ToolCall("c1", "my_tool", JsonObject(emptyMap()))),
             assistant("done")
         )
 
@@ -962,7 +928,7 @@ class AgentLoopTest {
             }
         )
         val streamFn = scriptedStream(
-            toolCallAssistant(ToolCall("c1", "my_tool", "{}")),
+            toolCallAssistant(ToolCall("c1", "my_tool", JsonObject(emptyMap()))),
             assistant("done")
         )
 
@@ -1001,7 +967,9 @@ class AgentLoopTest {
             }
             val message =
                 if (llmCalls == 1) {
-                    toolCallAssistant(ToolCall("tool-1", "my_tool", "{\"value\":\"hello\"}"))
+                    toolCallAssistant(
+                        ToolCall("tool-1", "my_tool", buildJsonObject { put("value", "hello") })
+                    )
                 } else {
                     assistant("done")
                 }

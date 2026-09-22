@@ -106,7 +106,7 @@ class AgentSessionCompactionTest {
                 assistant("old-history:" + "a".repeat(800)),
                 assistant("recent-history:" + "b".repeat(800)),
                 assistant("", stopReason = StopReason.TOOL_USE).copy(
-                    content = listOf(ToolCall("tool-1", "large_result", "{}"))
+                    content = listOf(ToolCall("tool-1", "large_result", JsonObject(emptyMap())))
                 ),
                 // Extensions are out of scope, so the history and split-turn
                 // summaries supplied by upstream's hook are provider responses here.

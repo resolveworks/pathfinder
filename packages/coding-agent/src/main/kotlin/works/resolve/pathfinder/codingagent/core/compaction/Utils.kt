@@ -1,22 +1,13 @@
 package works.resolve.pathfinder.codingagent.core.compaction
 
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.ContentType
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.utils.contentText
-import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.string
-
-/*
- * [ToolCall.arguments] is the raw JSON argument string exactly as the
- * provider streamed it (pi stores a parsed object), so argument access
- * below parses that string; unparsable arguments are treated as absent,
- * mirroring pi's `if (!args) continue` guards.
- */
 
 /** File paths touched by a session branch or compaction range. */
 data class FileOperations(
@@ -28,18 +19,13 @@ data class FileOperations(
 
 fun createFileOps(): FileOperations = FileOperations(mutableSetOf(), mutableSetOf(), mutableSetOf())
 
-private fun parseToolCallArguments(toolCall: ToolCall): JsonObject? =
-    // runCatching is policy-compliant here: non-suspending, expected-failure parse.
-    runCatching { lenientJson.parseToJsonElement(toolCall.arguments) }.getOrNull() as? JsonObject
-
 fun extractFileOpsFromMessage(message: Message, fileOps: FileOperations) {
     if (message !is AssistantMessage) return
 
     for (block in message.content) {
         if (block !is ToolCall) continue
-        val args = parseToolCallArguments(block) ?: continue
 
-        val path = args.string("path") ?: continue
+        val path = block.arguments.string("path") ?: continue
 
         when (block.name) {
             "read" -> fileOps.read.add(path)
@@ -101,13 +87,8 @@ fun serializeConversation(messages: List<Message>): String {
                         )
 
                         is ToolCall -> {
-                            val args = parseToolCallArguments(block)
-                            val argsStr = when (args) {
-                                null -> block.arguments
-
-                                else -> args.entries.joinToString(", ") { (k, v) ->
-                                    "$k=${safeJsonStringify(v)}"
-                                }
+                            val argsStr = block.arguments.entries.joinToString(", ") { (k, v) ->
+                                "$k=${safeJsonStringify(v)}"
                             }
                             toolCalls.add("${block.name}($argsStr)")
                         }

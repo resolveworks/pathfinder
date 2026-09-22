@@ -29,8 +29,8 @@ import works.resolve.pathfinder.ai.toThinkingLevelOrNull
 import works.resolve.pathfinder.ai.utils.ToolStateChanges
 import works.resolve.pathfinder.ai.utils.getCurrentTools
 import works.resolve.pathfinder.ai.utils.getToolStateChanges
-import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.normalizeContext
+import works.resolve.pathfinder.ai.utils.parseStreamingJson
 import works.resolve.pathfinder.ai.utils.toToolDeclaration
 
 /**
@@ -411,10 +411,13 @@ private suspend fun streamAssistantResponse(
  *
  * Boundary snapshots are accurate as emitted: text/thinking content is the
  * base plus the deltas appended since the last boundary (providers append
- * those incrementally). Tool-call arguments are not append-safe — Google
- * emits the complete arguments as a single redundant delta after a complete
- * start scaffold, while other providers stream fragments — so joined deltas
- * replace the scaffold's arguments whenever any arrived.
+ * those incrementally). Tool-call argument deltas are not plain text —
+ * Google emits the complete arguments as a single redundant delta after a
+ * complete start scaffold, while other providers stream JSON fragments — so
+ * at materialize the joined fragments are salvaged into the arguments
+ * object through the streaming parser, the same parse the providers run at
+ * every fragment, and replace the scaffold's arguments whenever any
+ * arrived.
  */
 private class AssistantStreamFold {
     private var boundary: AssistantMessage? = null
@@ -458,9 +461,7 @@ private class AssistantStreamFold {
                     is ToolCall ->
                         toolArguments[index]
                             ?.let { args ->
-                                block.copy(
-                                    arguments = args.toString().ifEmpty { block.arguments }
-                                )
+                                block.copy(arguments = parseStreamingJson(args.toString()))
                             }
                             ?: block
 
@@ -549,10 +550,6 @@ private suspend fun recoverAbortedToolBatch(
  * Fails every tool call from a message truncated by the output token limit:
  * none are safe to execute, so each is reported as an error the model can
  * re-issue, in source order.
- *
- * Divergence: pi's tool calls carry parsed argument objects; here
- * [ToolCall.arguments] is a raw JSON string, parsed best-effort (empty
- * object when it does not parse) for the `tool_execution_start` event.
  */
 private suspend fun failToolCallsFromTruncatedMessage(
     toolCalls: List<ToolCall>,
@@ -718,24 +715,10 @@ private suspend fun ensureActiveBetweenCalls() {
 private fun shouldTerminateToolBatch(finalizedCalls: List<FinalizedToolCallOutcome>): Boolean =
     finalizedCalls.isNotEmpty() && finalizedCalls.all { it.result.terminate == true }
 
-private val toolArgumentsJson = lenientJson
-
 /**
- * Parses the provider's raw JSON arguments string into a [JsonObject], or
- * null when the string is malformed or not a JSON object.
- */
-private fun parseRawArguments(raw: String): JsonObject? = try {
-    toolArgumentsJson.parseToJsonElement(raw) as? JsonObject
-} catch (_: IllegalArgumentException) {
-    null
-}
-
-/**
- * Finds the tool by exact name, parses [ToolCall.arguments] (a raw JSON
- * string) into a [JsonObject], and validates them. Any failure — missing
- * tool, non-object arguments (given a stable message rather than an
- * unstable serialization exception message), or a throw from
- * `validateArguments` — becomes an immediate error result.
+ * Finds the tool by exact name and validates [ToolCall.arguments]. Any
+ * failure — missing tool, or a throw from `validateArguments` — becomes an
+ * immediate error result.
  *
  * The validated map is copied so a tool cannot mutate transcript-owned
  * values.
@@ -748,11 +731,7 @@ private fun prepareToolCall(context: AgentContext, toolCall: ToolCall): ToolCall
         )
 
     return try {
-        val parsed = parseRawArguments(toolCall.arguments)
-            ?: throw IllegalArgumentException(
-                "Validation failed for tool \"${toolCall.name}\": arguments are not a JSON object"
-            )
-        val validated = tool.validateArguments(parsed)
+        val validated = tool.validateArguments(toolCall.arguments)
         PreparedToolCall(
             toolCall = toolCall,
             tool = tool,
@@ -895,7 +874,7 @@ private suspend fun emitToolExecutionStart(
         AgentEvent.ToolExecutionStart(
             toolCallId = toolCall.id,
             toolName = toolCall.name,
-            arguments = parseRawArguments(toolCall.arguments) ?: JsonObject(emptyMap())
+            arguments = toolCall.arguments
         )
     )
     progress.recordStarted(toolCall.id)

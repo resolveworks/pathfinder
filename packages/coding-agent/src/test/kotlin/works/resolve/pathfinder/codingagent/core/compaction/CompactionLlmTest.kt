@@ -9,6 +9,8 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.agent.CompactionDetails
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
@@ -285,7 +287,11 @@ class CompactionLlmTest {
         val u1 = createMessageEntry(createUserMessage("user msg 1"))
         val assistantMessage = createAssistantMessage("assistant msg 1").copy(
             content = listOf(
-                ToolCall(id = "tool-1", name = "write", arguments = """{"path":"written.ts"}""")
+                ToolCall(
+                    id = "tool-1",
+                    name = "write",
+                    arguments = buildJsonObject { put("path", "written.ts") }
+                )
             )
         )
         val a1 = createMessageEntry(assistantMessage, u1.id)
@@ -833,7 +839,11 @@ class CompactionLlmTest {
             createMockUsage(1000, 200)
         ).copy(
             content = listOf(
-                ToolCall(id = "tool-1", name = "read", arguments = """{"path":"src/index.ts"}""")
+                ToolCall(
+                    id = "tool-1",
+                    name = "read",
+                    arguments = buildJsonObject { put("path", "src/index.ts") }
+                )
             )
         )
         val a1 = createMessageEntry(assistantMessage, u1.id)

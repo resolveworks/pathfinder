@@ -1,5 +1,8 @@
 package works.resolve.pathfinder.ui.chat
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -197,7 +200,7 @@ class TreeProjectionTest {
         val call = ToolCall(
             id = "t1",
             name = "web_search",
-            arguments = """{"query":"kotlin compose"}"""
+            arguments = buildJsonObject { put("query", "kotlin compose") }
         )
         val u1 = entry("u1", null, user("look it up"))
         val a1 = entry("a1", "u1", assistantCalling(call))
@@ -220,7 +223,7 @@ class TreeProjectionTest {
 
     @Test
     fun `tool rows without a usable call keep the bare tool name`() {
-        // Known tool, but malformed arguments: no parsed input.
+        // Known tool, but no key argument: no parsed input.
         val badJson = entry(
             "t1",
             "a1",
@@ -237,8 +240,8 @@ class TreeProjectionTest {
                     "a1",
                     "u1",
                     assistantCalling(
-                        ToolCall("t1", "web_search", "not json"),
-                        ToolCall("t2", "mystery_tool", """{"x":1}""")
+                        ToolCall("t1", "web_search", JsonObject(emptyMap())),
+                        ToolCall("t2", "mystery_tool", buildJsonObject { put("x", 1) })
                     )
                 ),
                 badJson,
@@ -249,14 +252,15 @@ class TreeProjectionTest {
 
         val result = rows(conversation.first, conversation.second)
         // Rows carry the originating call as-is (pi's toolCallMap); titles
-        // parse from the call at render, falling back to the bare name.
+        // read the key argument from the call at render, falling back to
+        // the bare name.
         val t1Body = result.first { it.id == "t1" }.body as TreeRowBody.Tool
         assertEquals("web_search", t1Body.name)
         assertEquals("t1", t1Body.call?.id)
-        assertEquals("not json", t1Body.call?.arguments)
+        assertEquals(JsonObject(emptyMap()), t1Body.call?.arguments)
         val t2Body = result.first { it.id == "t2" }.body as TreeRowBody.Tool
         assertEquals("mystery_tool", t2Body.name)
-        assertEquals("""{"x":1}""", t2Body.call?.arguments)
+        assertEquals(buildJsonObject { put("x", 1) }, t2Body.call?.arguments)
         // Orphaned result: the originating call never committed.
         assertEquals(TreeRowBody.Tool("web_fetch", null), result.first { it.id == "t3" }.body)
     }

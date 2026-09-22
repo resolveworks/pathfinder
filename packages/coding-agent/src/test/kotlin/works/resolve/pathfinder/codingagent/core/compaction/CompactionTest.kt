@@ -6,6 +6,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.agent.CompactionDetails
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.ImageContent
@@ -249,7 +252,11 @@ class CompactionTest {
         val assistantWithThinkingAndTool = assistant.copy(
             content = listOf(
                 ThinkingContent("thinking"),
-                ToolCall(id = "call-1", name = "read", arguments = """{"path":"file.ts"}""")
+                ToolCall(
+                    id = "call-1",
+                    name = "read",
+                    arguments = buildJsonObject { put("path", "file.ts") }
+                )
             )
         )
         val toolResultWithImage = ToolResultMessage(
@@ -348,7 +355,11 @@ class CompactionTest {
             content = listOf(
                 ThinkingContent("let me think"),
                 TextContent("answer"),
-                ToolCall(id = "t1", name = "read", arguments = """{"path":"file.ts"}""")
+                ToolCall(
+                    id = "t1",
+                    name = "read",
+                    arguments = buildJsonObject { put("path", "file.ts") }
+                )
             ),
             api = "anthropic-messages",
             provider = "anthropic",
@@ -369,11 +380,27 @@ class CompactionTest {
     fun `extracts file operations from tool calls`() {
         val assistantWithCalls = AssistantMessage(
             content = listOf(
-                ToolCall(id = "1", name = "read", arguments = """{"path":"a.ts"}"""),
-                ToolCall(id = "2", name = "write", arguments = """{"path":"b.ts"}"""),
-                ToolCall(id = "3", name = "edit", arguments = """{"path":"c.ts"}"""),
-                ToolCall(id = "4", name = "read", arguments = """{"other":"no path"}"""),
-                ToolCall(id = "5", name = "read", arguments = "not json")
+                ToolCall(
+                    id = "1",
+                    name = "read",
+                    arguments = buildJsonObject { put("path", "a.ts") }
+                ),
+                ToolCall(
+                    id = "2",
+                    name = "write",
+                    arguments = buildJsonObject { put("path", "b.ts") }
+                ),
+                ToolCall(
+                    id = "3",
+                    name = "edit",
+                    arguments = buildJsonObject { put("path", "c.ts") }
+                ),
+                ToolCall(
+                    id = "4",
+                    name = "read",
+                    arguments = buildJsonObject { put("other", "no path") }
+                ),
+                ToolCall(id = "5", name = "read", arguments = JsonObject(emptyMap()))
             ),
             api = "anthropic-messages",
             provider = "anthropic",
@@ -391,7 +418,11 @@ class CompactionTest {
     fun `extractFileOperations carries previous compaction details`() {
         val assistant = AssistantMessage(
             content = listOf(
-                ToolCall(id = "1", name = "read", arguments = """{"path":"new.ts"}""")
+                ToolCall(
+                    id = "1",
+                    name = "read",
+                    arguments = buildJsonObject { put("path", "new.ts") }
+                )
             ),
             api = "anthropic-messages",
             provider = "anthropic",

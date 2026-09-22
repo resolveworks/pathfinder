@@ -52,6 +52,7 @@ import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.constrainedSamplingToJson
 import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
+import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
 import works.resolve.pathfinder.ai.utils.uuidv7
@@ -868,7 +869,7 @@ internal object JsonlCodec {
             "toolCall" -> ToolCall(
                 id = obj.string("id") ?: invalid(),
                 name = obj.string("name") ?: invalid(),
-                arguments = obj.string("arguments") ?: invalid(),
+                arguments = obj.obj("arguments") ?: invalid(),
                 thoughtSignature = obj.string("thoughtSignature"),
                 namespace = obj.string("namespace")
             )

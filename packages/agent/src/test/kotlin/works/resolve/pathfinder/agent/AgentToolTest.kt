@@ -80,7 +80,7 @@ class AgentToolTest {
     @Test
     fun `result rejects toolCall content`() {
         try {
-            AgentToolResult(content = listOf(ToolCall("t1", "web_search", "{}")))
+            AgentToolResult(content = listOf(ToolCall("t1", "web_search", JsonObject(emptyMap()))))
             fail("expected IllegalArgumentException")
         } catch (e: IllegalArgumentException) {
             assertTrue(e.message!!.contains("only TextContent or ImageContent"))
@@ -155,7 +155,7 @@ class AgentToolTest {
                 AgentLoopConfig(
                     model,
                     streamFn = scriptedStream(
-                        toolUseMessage(ToolCall("call-1", "progress_tool", "{}")),
+                        toolUseMessage(ToolCall("call-1", "progress_tool", JsonObject(emptyMap()))),
                         textMessage("finished")
                     )
                 )
@@ -192,7 +192,7 @@ class AgentToolTest {
             AgentLoopConfig(
                 model,
                 streamFn = scriptedStream(
-                    toolUseMessage(ToolCall("call-1", "shell", "{}")),
+                    toolUseMessage(ToolCall("call-1", "shell", JsonObject(emptyMap()))),
                     textMessage("handled")
                 )
             )

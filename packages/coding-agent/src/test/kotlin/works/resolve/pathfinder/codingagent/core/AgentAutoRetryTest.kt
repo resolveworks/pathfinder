@@ -226,7 +226,7 @@ class AgentAutoRetryTest {
             // neither replayed nor duplicated, and the session tree keeps
             // everything (append-only).
             val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
-                content = listOf(ToolCall("call-1", "get_weather", "{}"))
+                content = listOf(ToolCall("call-1", "get_weather", JsonObject(emptyMap())))
             )
             val fakeTool = object : AgentTool {
                 override val definition =
