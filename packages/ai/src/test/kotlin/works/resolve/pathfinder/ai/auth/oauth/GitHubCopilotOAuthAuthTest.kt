@@ -28,6 +28,7 @@ import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.utils.parseHttpDateMsOrNull
 
 /** Faked HTTP and virtual time (`runTest` + scheduler clock) keep poll sleeps and retry backoffs instant. */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -542,17 +543,16 @@ class GitHubCopilotOAuthAuthTest {
 
     @Test
     fun `iso date retry-after is parsed like js Date-parse`() {
-        val a = auth(FakeHttpClient())
-        assertEquals(1445412480000L, a.parseHttpDateMs("2015-10-21T07:28:00Z"))
-        assertEquals(1445412480000L, a.parseHttpDateMs("2015-10-21T08:28:00+01:00"))
+        assertEquals(1445412480000L, parseHttpDateMsOrNull("2015-10-21T07:28:00Z"))
+        assertEquals(1445412480000L, parseHttpDateMsOrNull("2015-10-21T08:28:00+01:00"))
         // Date-only forms resolve as UTC per ECMA-262.
-        assertEquals(1445385600000L, a.parseHttpDateMs("2015-10-21"))
+        assertEquals(1445385600000L, parseHttpDateMsOrNull("2015-10-21"))
         // Zoneless date-times are local time; only presence is asserted
         // because the JVM default zone varies.
-        assertTrue(a.parseHttpDateMs("2015-10-21T07:28:00") != null)
-        assertNull(a.parseHttpDateMs("2015-10-21T07:28:00+25:00"))
-        assertNull(a.parseHttpDateMs("soon"))
-        assertNull(a.parseHttpDateMs(""))
+        assertTrue(parseHttpDateMsOrNull("2015-10-21T07:28:00") != null)
+        assertNull(parseHttpDateMsOrNull("2015-10-21T07:28:00+25:00"))
+        assertNull(parseHttpDateMsOrNull("soon"))
+        assertNull(parseHttpDateMsOrNull(""))
     }
 
     @Test
@@ -583,9 +583,8 @@ class GitHubCopilotOAuthAuthTest {
 
         assertEquals(5, http.requests.size)
 
-        val a = auth(FakeHttpClient())
-        assertEquals(1445412480000L, a.parseHttpDateMs("Wed, 21 Oct 2015 07:28:00 GMT"))
-        assertNull(a.parseHttpDateMs("soon"))
+        assertEquals(1445412480000L, parseHttpDateMsOrNull("Wed, 21 Oct 2015 07:28:00 GMT"))
+        assertNull(parseHttpDateMsOrNull("soon"))
     }
 
     @Test

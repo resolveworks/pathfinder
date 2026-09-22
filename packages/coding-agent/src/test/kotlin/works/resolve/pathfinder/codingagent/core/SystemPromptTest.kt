@@ -156,7 +156,7 @@ class SystemPromptTest {
     }
 
     @Test
-    fun `whitespace-only snippet is treated as absent`() {
+    fun `whitespace-only snippet is kept verbatim like pi truthiness`() {
         val prompt = buildSystemPrompt(
             listOf(
                 FakeTool("bash", promptSnippet = "   "),
@@ -169,6 +169,7 @@ class SystemPromptTest {
                 "You help users by reading files, executing commands, editing code, " +
                 "and writing new files.\n\n" +
                 "<tools>\n" +
+                "- bash:    \n" +
                 "- read: Read file contents\n" +
                 "</tools>\n" +
                 "\n" +
@@ -182,7 +183,7 @@ class SystemPromptTest {
     }
 
     @Test
-    fun `multi-line snippet with whitespace runs is collapsed to one trimmed line`() {
+    fun `multi-line snippet is preserved verbatim`() {
         val prompt = buildSystemPrompt(
             listOf(FakeTool("web_search", promptSnippet = "Search\n  the   web\r\nfor facts  "))
         )
@@ -192,7 +193,7 @@ class SystemPromptTest {
                 "You help users by reading files, executing commands, editing code, " +
                 "and writing new files.\n\n" +
                 "<tools>\n" +
-                "- web_search: Search the web for facts\n" +
+                "- web_search: Search\n  the   web\r\nfor facts  \n" +
                 "</tools>\n" +
                 "\n" +
                 "<rules>\n" +

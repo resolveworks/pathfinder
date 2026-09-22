@@ -17,13 +17,6 @@ private const val PREAMBLE =
     "You are an expert coding assistant operating inside pathfinder, a coding agent harness. " +
         "You help users by reading files, executing commands, editing code, and writing new files."
 
-/** Normalizes a tool's prompt snippet: blank input becomes null, otherwise a single trimmed line. */
-private fun normalizePromptSnippet(text: String?): String? {
-    if (text.isNullOrEmpty()) return null
-    val oneLine = text.replace("[\\r\\n]+".toRegex(), " ").replace("\\s+".toRegex(), " ").trim()
-    return oneLine.ifEmpty { null }
-}
-
 /**
  * pi's buildRules: set-deduped on the trimmed rule, insertion-ordered —
  * pi's file-exploration rule first (only the bash branch can fire here:
@@ -95,11 +88,10 @@ fun buildSystemPromptSections(
     activeTools: List<AgentTool>,
     cwd: String = ""
 ): SystemPromptSections {
-    // Inclusion rule: a tool appears in the tools section only when its
-    // snippet normalizes to a non-null line (pi gates on
-    // `!!toolSnippets[name]` — an empty string is falsy there too).
+    // Inclusion rule: pi's `!!toolSnippets[name]` — only a null or empty
+    // snippet hides a tool; the snippet text is used verbatim.
     val visibleTools = activeTools.mapNotNull { tool ->
-        normalizePromptSnippet(tool.promptSnippet)?.let { tool.definition.name to it }
+        tool.promptSnippet?.takeIf { it.isNotEmpty() }?.let { tool.definition.name to it }
     }
     val toolsList =
         if (visibleTools.isNotEmpty()) {

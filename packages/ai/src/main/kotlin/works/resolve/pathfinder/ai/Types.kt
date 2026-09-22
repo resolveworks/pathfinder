@@ -693,6 +693,19 @@ enum class ThinkingFormat { OPENAI, ZAI, QWEN, DEEPSEEK, BASETEN, OPENROUTER, AN
 /** Only "anthropic" exists upstream; the single-member enum keeps pi's value domain. */
 enum class CacheControlFormat { ANTHROPIC }
 
+/**
+ * Compat knobs for openai-completions models. Unlike pi these are hard
+ * defaults, not a tri-state: pi leaves fields unset on models from custom
+ * providers and auto-detects unset fields from provider/baseUrl at request
+ * time (`model.compat.X ?? detected.X`). The port has no dynamic model
+ * surface (see [Models]), and its generated catalog is produced by pi's own
+ * generate-models script, which bakes the URL-detected delta plus explicit
+ * overrides into every entry — so an absent value already equals what pi's
+ * runtime detection would resolve. The residual divergence would be an
+ * auth-overridden baseUrl (GitHub Copilot) matching one of pi's detection
+ * substrings; no catalog provider's override URL does, and pi runs the same
+ * override before its detection.
+ */
 data class OpenAiCompletionsCompat(
     val supportsStore: Boolean = true,
     val supportsDeveloperRole: Boolean = true,
