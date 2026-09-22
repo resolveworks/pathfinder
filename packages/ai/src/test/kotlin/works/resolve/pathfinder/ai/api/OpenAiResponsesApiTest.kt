@@ -626,7 +626,7 @@ class OpenAiResponsesApiTest {
             messages = listOf(
                 UserMessage.ofText("Hello", 1),
                 AssistantMessage(
-                    content = listOf(ToolCall("call_1", "base_tool", "{}")),
+                    content = listOf(ToolCall("call_1", "base_tool", JsonObject(emptyMap()))),
                     api = "anthropic-messages",
                     provider = "anthropic",
                     model = "claude-opus-4-6",
@@ -688,7 +688,7 @@ class OpenAiResponsesApiTest {
                 messages = listOf(
                     UserMessage.ofText("Hello", 1),
                     AssistantMessage(
-                        content = listOf(ToolCall("call_1", "base_tool", "{}")),
+                        content = listOf(ToolCall("call_1", "base_tool", JsonObject(emptyMap()))),
                         api = "anthropic-messages",
                         provider = "anthropic",
                         model = "claude-opus-4-6",
@@ -707,7 +707,9 @@ class OpenAiResponsesApiTest {
                         timestamp = 3
                     ),
                     AssistantMessage(
-                        content = listOf(ToolCall("call_late|fc_late", "late_tool", "{}")),
+                        content = listOf(
+                            ToolCall("call_late|fc_late", "late_tool", JsonObject(emptyMap()))
+                        ),
                         api = "openai-responses",
                         provider = "openai",
                         model = "gpt-5.4",

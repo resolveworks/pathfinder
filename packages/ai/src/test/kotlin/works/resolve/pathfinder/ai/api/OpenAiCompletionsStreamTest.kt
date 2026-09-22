@@ -15,10 +15,12 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 import org.junit.Assume.assumeTrue
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
@@ -284,7 +286,7 @@ class OpenAiCompletionsStreamTest {
             val toolCall = assertIs<ToolCall>(done.message.content[1])
             assertEquals("call_1", toolCall.id)
             assertEquals("read", toolCall.name)
-            assertEquals("""{"path":"README.md"}""", toolCall.arguments)
+            assertEquals(buildJsonObject { put("path", "README.md") }, toolCall.arguments)
 
             api(transport)
                 .stream(
@@ -421,14 +423,14 @@ class OpenAiCompletionsStreamTest {
         val call = assertIs<ToolCall>(done.message.content.single())
         assertEquals("call_1", call.id)
         assertEquals("read_file", call.name)
-        assertEquals("""{"path":"/tmp"}""", call.arguments)
+        assertEquals(buildJsonObject { put("path", "/tmp") }, call.arguments)
         val end =
             assertIs<AssistantMessageEvent.ToolCallEnd>(
                 events.filter {
                     it is AssistantMessageEvent.ToolCallEnd
                 }.single()
             )
-        assertEquals("""{"path":"/tmp"}""", end.toolCall.arguments)
+        assertEquals(buildJsonObject { put("path", "/tmp") }, end.toolCall.arguments)
     }
 
     @Test
@@ -471,8 +473,19 @@ class OpenAiCompletionsStreamTest {
             transport
         ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
-        assertEquals("""{"x":1,"z":3}""", assertIs<ToolCall>(done.message.content[0]).arguments)
-        assertEquals("""{"y":2}""", assertIs<ToolCall>(done.message.content[1]).arguments)
+        assertEquals(
+            buildJsonObject {
+                put("x", 1)
+                put("z", 3)
+            },
+            assertIs<ToolCall>(done.message.content[0]).arguments
+        )
+        assertEquals(
+            buildJsonObject {
+                put("y", 2)
+            },
+            assertIs<ToolCall>(done.message.content[1]).arguments
+        )
     }
 
     @Test
@@ -1429,7 +1442,7 @@ class OpenAiCompletionsStreamTest {
             val toolCall = assertIs<ToolCall>(done.message.content.single())
             assertEquals("functions.read:0", toolCall.id)
             assertEquals("read", toolCall.name)
-            assertEquals("""{"path":"README.md"}""", toolCall.arguments)
+            assertEquals(buildJsonObject { put("path", "README.md") }, toolCall.arguments)
         }
 
     @Test
@@ -1514,13 +1527,25 @@ class OpenAiCompletionsStreamTest {
             val list = assertIs<ToolCall>(done.message.content[4])
             val write = assertIs<ToolCall>(done.message.content[5])
             assertEquals("tc_read_initial", read.id)
-            assertEquals("""{"path":"README.md"}""", read.arguments)
+            assertEquals(buildJsonObject { put("path", "README.md") }, read.arguments)
             assertEquals("tc_grep_initial", grep.id)
-            assertEquals("""{"pattern":"TODO","path":"src"}""", grep.arguments)
+            assertEquals(
+                buildJsonObject {
+                    put("pattern", "TODO")
+                    put("path", "src")
+                },
+                grep.arguments
+            )
             assertEquals("tc_list_no_index", list.id)
-            assertEquals("""{"path":"packages/ai"}""", list.arguments)
+            assertEquals(buildJsonObject { put("path", "packages/ai") }, list.arguments)
             assertEquals("tc_write_no_index", write.id)
-            assertEquals("""{"path":"out.txt","content":"ok"}""", write.arguments)
+            assertEquals(
+                buildJsonObject {
+                    put("path", "out.txt")
+                    put("content", "ok")
+                },
+                write.arguments
+            )
         }
 
     @Test
@@ -1539,7 +1564,7 @@ class OpenAiCompletionsStreamTest {
         val toolCall = assertIs<ToolCall>(done.message.content.single())
         assertEquals("call_1", toolCall.id)
         assertEquals("read", toolCall.name)
-        assertEquals("""{"path":"README.md"}""", toolCall.arguments)
+        assertEquals(buildJsonObject { put("path", "README.md") }, toolCall.arguments)
     }
 
     // ---------------------------------------------------------------------

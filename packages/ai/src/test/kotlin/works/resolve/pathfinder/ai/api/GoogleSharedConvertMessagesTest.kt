@@ -7,9 +7,11 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ImageContent
@@ -25,6 +27,8 @@ import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class GoogleSharedConvertMessagesTest {
+
+    private fun argsOf(command: String) = buildJsonObject { put("command", command) }
 
     private fun model(
         id: String = "gemini-3-pro-preview",
@@ -67,7 +71,7 @@ class GoogleSharedConvertMessagesTest {
                 model,
                 listOf(
                     ThinkingContent("", validSig),
-                    ToolCall("call_1", "bash", """{"command":"ls"}""")
+                    ToolCall("call_1", "bash", argsOf("ls"))
                 )
             )
         )
@@ -89,7 +93,7 @@ class GoogleSharedConvertMessagesTest {
                 model,
                 listOf(
                     TextContent("", validSig),
-                    ToolCall("call_1", "bash", """{"command":"ls"}""")
+                    ToolCall("call_1", "bash", argsOf("ls"))
                 )
             )
         )
@@ -113,7 +117,7 @@ class GoogleSharedConvertMessagesTest {
                 listOf(
                     ThinkingContent(""),
                     TextContent("   "),
-                    ToolCall("call_1", "bash", """{"command":"ls"}""")
+                    ToolCall("call_1", "bash", argsOf("ls"))
                 )
             )
         )
@@ -133,7 +137,7 @@ class GoogleSharedConvertMessagesTest {
                 listOf(
                     ThinkingContent("", validSig),
                     TextContent("", validSig),
-                    ToolCall("call_1", "bash", """{"command":"ls"}""")
+                    ToolCall("call_1", "bash", argsOf("ls"))
                 )
             )
         )
@@ -185,9 +189,9 @@ class GoogleSharedConvertMessagesTest {
                 UserMessage.ofText("read the files"),
                 AssistantMessage(
                     content = listOf(
-                        ToolCall("call_a", "read", """{"path":"a.txt"}"""),
-                        ToolCall("call_img", "read", """{"path":"image.png"}"""),
-                        ToolCall("call_b", "read", """{"path":"b.txt"}""")
+                        ToolCall("call_a", "read", buildJsonObject { put("path", "a.txt") }),
+                        ToolCall("call_img", "read", buildJsonObject { put("path", "image.png") }),
+                        ToolCall("call_b", "read", buildJsonObject { put("path", "b.txt") })
                     ),
                     api = "google-generative-ai",
                     provider = "google",
@@ -242,8 +246,8 @@ class GoogleSharedConvertMessagesTest {
                         UserMessage.ofText("go"),
                         AssistantMessage(
                             content = listOf(
-                                ToolCall("c1", "ok", "{}"),
-                                ToolCall("c2", "bad", "{}")
+                                ToolCall("c1", "ok", JsonObject(emptyMap())),
+                                ToolCall("c2", "bad", JsonObject(emptyMap()))
                             ),
                             api = model.api,
                             provider = model.provider,
@@ -275,7 +279,10 @@ class GoogleSharedConvertMessagesTest {
                     messages = listOf(
                         UserMessage.ofText("go"),
                         AssistantMessage(
-                            content = listOf(ToolCall("c1", "t", "{}"), ToolCall("c2", "t", "{}")),
+                            content = listOf(
+                                ToolCall("c1", "t", JsonObject(emptyMap())),
+                                ToolCall("c2", "t", JsonObject(emptyMap()))
+                            ),
                             api = model.api,
                             provider = model.provider,
                             model = model.id,
@@ -305,7 +312,7 @@ class GoogleSharedConvertMessagesTest {
                         // Tool call IDs are normalized only when replaying across
                         // models, hence the foreign assistant message.
                         AssistantMessage(
-                            content = listOf(ToolCall(weird, "t", "{}")),
+                            content = listOf(ToolCall(weird, "t", JsonObject(emptyMap()))),
                             api = "openai-completions",
                             provider = "openai",
                             model = "gpt-x",
@@ -337,7 +344,7 @@ class GoogleSharedConvertMessagesTest {
                     messages = listOf(
                         UserMessage.ofText("go"),
                         AssistantMessage(
-                            content = listOf(ToolCall("call_1", "t", "{}")),
+                            content = listOf(ToolCall("call_1", "t", JsonObject(emptyMap()))),
                             api = model.api,
                             provider = model.provider,
                             model = model.id,
@@ -366,8 +373,8 @@ class GoogleSharedConvertMessagesTest {
                             UserMessage.ofText("Hi"),
                             AssistantMessage(
                                 content = listOf(
-                                    ToolCall("call_1", "bash", """{"command":"echo hi"}"""),
-                                    ToolCall("call_2", "bash", """{"command":"ls -la"}""")
+                                    ToolCall("call_1", "bash", argsOf("echo hi")),
+                                    ToolCall("call_2", "bash", argsOf("ls -la"))
                                 ),
                                 api = model.api,
                                 provider = model.provider,
@@ -399,8 +406,8 @@ class GoogleSharedConvertMessagesTest {
             contextFor(
                 model,
                 listOf(
-                    ToolCall("call_1", "bash", """{"command":"echo hi"}"""),
-                    ToolCall("call_2", "bash", """{"command":"ls -la"}""")
+                    ToolCall("call_1", "bash", argsOf("echo hi")),
+                    ToolCall("call_2", "bash", argsOf("ls -la"))
                 )
             )
         )
@@ -421,8 +428,8 @@ class GoogleSharedConvertMessagesTest {
             contextFor(
                 model,
                 listOf(
-                    ToolCall("call_1", "bash", """{"command":"ls"}""", thoughtSignature = validSig),
-                    ToolCall("call_2", "bash", """{"command":"ls"}""")
+                    ToolCall("call_1", "bash", argsOf("ls"), thoughtSignature = validSig),
+                    ToolCall("call_2", "bash", argsOf("ls"))
                 )
             )
         )
@@ -464,7 +471,7 @@ class GoogleSharedConvertMessagesTest {
             listOf(
                 UserMessage.ofText("go"),
                 AssistantMessage(
-                    content = listOf(ToolCall("call_x", "t", "{}")),
+                    content = listOf(ToolCall("call_x", "t", JsonObject(emptyMap()))),
                     api = model.api,
                     provider = model.provider,
                     model = model.id,

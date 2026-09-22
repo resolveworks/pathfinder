@@ -178,9 +178,9 @@ private fun streamWithDeltas(message: AssistantMessage): Flow<AssistantMessageEv
             }
 
             is ToolCall -> {
-                content.add(block.copy(arguments = "{}"))
+                content.add(block.copy(arguments = JsonObject(emptyMap())))
                 emit(AssistantMessageEvent.ToolCallStart(index, partial()))
-                for (chunk in splitStringByTokenSize(block.arguments)) {
+                for (chunk in splitStringByTokenSize(block.arguments.toString())) {
                     emit(AssistantMessageEvent.ToolCallDelta(index, chunk))
                 }
                 content[index] = block

@@ -5,6 +5,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ImageContent
@@ -44,7 +46,11 @@ class TokenEstimateTest {
             content = listOf(
                 TextContent("1234"),
                 // Re-serialized compact like JSON.stringify, so the space drops out.
-                ToolCall(id = "1", name = "get_weather", arguments = """{"city": "SF"}""")
+                ToolCall(
+                    id = "1",
+                    name = "get_weather",
+                    arguments = buildJsonObject { put("city", "SF") }
+                )
             ),
             api = "openai-completions",
             provider = "zai",

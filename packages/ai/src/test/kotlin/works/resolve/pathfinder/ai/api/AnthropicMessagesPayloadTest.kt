@@ -15,6 +15,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assume.assumeTrue
 import works.resolve.pathfinder.ai.AnthropicAllowedFallbackModel
 import works.resolve.pathfinder.ai.AssistantMessage
@@ -293,7 +294,7 @@ class AnthropicMessagesPayloadTest {
             content = listOf(
                 ThinkingContent("thoughts", "sig-1"),
                 TextContent("answer"),
-                ToolCall("toolu_1", "edit", """{"path":"/tmp"}""")
+                ToolCall("toolu_1", "edit", buildJsonObject { put("path", "/tmp") })
             ),
             api = "anthropic-messages",
             provider = "anthropic",
@@ -448,8 +449,8 @@ class AnthropicMessagesPayloadTest {
                 messages = listOf(
                     AssistantMessage(
                         content = listOf(
-                            ToolCall("toolu_1", "edit", "{}"),
-                            ToolCall("toolu_2", "read", "{}")
+                            ToolCall("toolu_1", "edit", JsonObject(emptyMap())),
+                            ToolCall("toolu_2", "read", JsonObject(emptyMap()))
                         ),
                         api = "anthropic-messages",
                         provider = "anthropic",
@@ -486,7 +487,7 @@ class AnthropicMessagesPayloadTest {
             Context(
                 messages = listOf(
                     AssistantMessage(
-                        content = listOf(ToolCall("toolu_orphan", "edit", "{}")),
+                        content = listOf(ToolCall("toolu_orphan", "edit", JsonObject(emptyMap()))),
                         api = "anthropic-messages",
                         provider = "anthropic",
                         model = "claude-sonnet-4-5",
@@ -540,7 +541,7 @@ class AnthropicMessagesPayloadTest {
         val foreign = AssistantMessage(
             content = listOf(
                 ThinkingContent("foreign thoughts"),
-                ToolCall("call|ABCdefGH" + "x".repeat(70), "edit", "{}")
+                ToolCall("call|ABCdefGH" + "x".repeat(70), "edit", JsonObject(emptyMap()))
             ),
             api = "openai-completions",
             provider = "openai",
@@ -561,7 +562,12 @@ class AnthropicMessagesPayloadTest {
     fun `cross-provider transform strips tool thought signature while normalizing id`() {
         val foreign = AssistantMessage(
             content = listOf(
-                ToolCall("call|foreign", "edit", "{}", thoughtSignature = "google-signature")
+                ToolCall(
+                    "call|foreign",
+                    "edit",
+                    JsonObject(emptyMap()),
+                    thoughtSignature = "google-signature"
+                )
             ),
             api = "google-generative-ai",
             provider = "google",
@@ -1241,7 +1247,15 @@ class AnthropicMessagesPayloadTest {
                 messages = listOf(
                     UserMessage.ofText("Use the echo tool to echo 'hello'"),
                     AssistantMessage(
-                        content = listOf(ToolCall(failingId, "echo", """{"message":"hello"}""")),
+                        content = listOf(
+                            ToolCall(
+                                failingId,
+                                "echo",
+                                buildJsonObject {
+                                    put("message", "hello")
+                                }
+                            )
+                        ),
                         api = "openai-responses",
                         provider = "github-copilot",
                         model = "gpt-5.2-codex",

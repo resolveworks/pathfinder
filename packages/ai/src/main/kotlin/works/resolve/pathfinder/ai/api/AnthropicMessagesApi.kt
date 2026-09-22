@@ -63,6 +63,7 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
+import works.resolve.pathfinder.ai.utils.parseStreamingJson
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
 import works.resolve.pathfinder.ai.utils.resolveTranscript
@@ -262,9 +263,8 @@ data class AnthropicMessagesOptions(
  * Anthropic Messages streaming adapter.
  *
  * Divergences from pi:
- * - pi repairs SSE data (parseJsonWithRepair) and streamed tool JSON
- *   (parseStreamingJson); here a malformed data payload is a protocol error
- *   and tool arguments accumulate as raw JSON strings.
+ * - pi repairs SSE event data with parseJsonWithRepair; here a malformed
+ *   data payload is a protocol error.
  * - pi's ambient ANTHROPIC_AUTH_TOKEN / ANTHROPIC_OAUTH_TOKEN env paths are
  *   reduced to ANTHROPIC_API_KEY.
  * - AbortSignal aborts map to coroutine cancellation, which propagates
@@ -1176,10 +1176,7 @@ internal fun convertMessages(
                                     "name",
                                     if (isOAuthToken) toClaudeCodeName(block.name) else block.name
                                 )
-                                put(
-                                    "input",
-                                    parseOrEmptyObject(block.arguments)
-                                )
+                                put("input", block.arguments)
                             }
                         )
 
@@ -1286,16 +1283,6 @@ private fun toolChangeBlock(type: String, toolName: String, isOAuthToken: Boolea
         )
     }
 
-private fun parseOrEmptyObject(arguments: String): JsonObject {
-    if (arguments.isBlank()) return JsonObject(emptyMap())
-    return try {
-        val parsed = lenientJson.parseToJsonElement(arguments)
-        parsed as? JsonObject ?: JsonObject(emptyMap())
-    } catch (_: Exception) {
-        JsonObject(emptyMap())
-    }
-}
-
 internal fun convertTools(
     tools: List<Tool>,
     isOAuthToken: Boolean,
@@ -1362,8 +1349,8 @@ internal class AnthropicStreamState(
         var id = ""
         var name = ""
 
-        /** pi seeds `arguments` from content_block_start input; kept as raw JSON here. */
-        var seedJson: String? = null
+        /** Parsed arguments; seeded from the content_block_start input object. */
+        var arguments: JsonObject = JsonObject(emptyMap())
         val partialJson = StringBuilder()
         override var built: Content? = null
     }
@@ -1455,7 +1442,7 @@ internal class AnthropicStreamState(
                 var blockName = contentBlock["name"].strOrNull() ?: ""
                 if (isOAuth) blockName = fromClaudeCodeName(blockName, tools)
                 name = blockName
-                (contentBlock.obj("input"))?.let { seedJson = it.toString() }
+                arguments = contentBlock.obj("input") ?: JsonObject(emptyMap())
             }
 
             // A pre-output fallback marker is expected; once output has begun
@@ -1508,6 +1495,7 @@ internal class AnthropicStreamState(
                 val tool = (blocks[blockIndex] as? Tool) ?: return emptyList()
                 val value = delta["partial_json"].strOrNull() ?: ""
                 tool.partialJson.append(value)
+                tool.arguments = parseStreamingJson(tool.partialJson.toString())
                 tool.built = null
                 listOf(AssistantMessageEvent.ToolCallDelta(blockIndex, value))
             }
@@ -1539,9 +1527,16 @@ internal class AnthropicStreamState(
                 )
             )
 
-            is Tool -> listOf(
-                AssistantMessageEvent.ToolCallEnd(blockIndex, toolCallOf(block), snapshot())
-            )
+            is Tool -> {
+                // The content_block_start seed input is discarded here: like
+                // upstream, final arguments come from re-parsing the accumulated
+                // partial JSON only.
+                block.arguments = parseStreamingJson(block.partialJson.toString())
+                block.built = null
+                listOf(
+                    AssistantMessageEvent.ToolCallEnd(blockIndex, toolCallOf(block), snapshot())
+                )
+            }
         }
     }
 
@@ -1608,9 +1603,7 @@ internal class AnthropicStreamState(
     private fun toolCallOf(block: Tool): ToolCall = ToolCall(
         id = block.id,
         name = block.name,
-        // Unlike pi, the streamed JSON is not parsed at stop; the raw string
-        // (seed or "{}" when blank) preserves partial snapshots.
-        arguments = block.partialJson.toString().ifBlank { block.seedJson ?: "{}" }
+        arguments = block.arguments
     )
 
     /** Anthropic doesn't provide total_tokens; compute from components. */

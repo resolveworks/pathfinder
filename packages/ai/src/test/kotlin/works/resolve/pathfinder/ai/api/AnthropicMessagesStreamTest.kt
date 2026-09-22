@@ -13,9 +13,11 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assume.assumeTrue
 import works.resolve.pathfinder.ai.AnthropicAllowedFallbackModel
 import works.resolve.pathfinder.ai.AssistantMessageEvent
@@ -318,10 +320,10 @@ class AnthropicMessagesStreamTest {
         val call = assertIs<ToolCall>(done.message.content[1])
         assertEquals("toolu_1", call.id)
         assertEquals("edit", call.name)
-        assertEquals("""{"path":1}""", call.arguments)
+        assertEquals(buildJsonObject { put("path", 1) }, call.arguments)
         val toolEnd = events.filterIsInstance<AssistantMessageEvent.ToolCallEnd>().single()
         assertEquals(1, toolEnd.contentIndex)
-        assertEquals("""{"path":1}""", toolEnd.toolCall.arguments)
+        assertEquals(buildJsonObject { put("path", 1) }, toolEnd.toolCall.arguments)
     }
 
     @Test
@@ -340,7 +342,10 @@ class AnthropicMessagesStreamTest {
                 transport
             ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         )
-        assertEquals("{}", assertIs<ToolCall>(done.message.content.single()).arguments)
+        assertEquals(
+            JsonObject(emptyMap()),
+            assertIs<ToolCall>(done.message.content.single()).arguments
+        )
     }
 
     @Test
@@ -378,7 +383,7 @@ class AnthropicMessagesStreamTest {
         val call = assertIs<ToolCall>(done.message.content.single())
         assertEquals("read", call.name)
         // Streamed partial JSON wins over the content_block_start seed.
-        assertEquals("""{"path":2}""", call.arguments)
+        assertEquals(buildJsonObject { put("path", 2) }, call.arguments)
         val body = Json.parseToJsonElement(
             transport.requests.single().body.decodeToString()
         ).jsonObject
@@ -389,7 +394,7 @@ class AnthropicMessagesStreamTest {
     }
 
     @Test
-    fun `tool arguments are seeded from content_block_start input`() = runTest {
+    fun `content_block_start seed input appears only in the start snapshot`() = runTest {
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(),
@@ -399,13 +404,19 @@ class AnthropicMessagesStreamTest {
             messageDelta(stopReason = "tool_use"),
             messageStop
         )
-        val done = assertIs<AssistantMessageEvent.Done>(
-            api(
-                transport
-            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
-        )
+        val events = api(
+            transport
+        ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList()
+        val start = events.filterIsInstance<AssistantMessageEvent.ToolCallStart>().single()
         assertEquals(
-            """{"path":"a.txt"}""",
+            buildJsonObject { put("path", "a.txt") },
+            assertIs<ToolCall>(start.partial.content.single()).arguments
+        )
+        // pi discards the seed at stop: arguments come from the accumulated
+        // partial JSON only, which is empty here.
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(
+            JsonObject(emptyMap()),
             assertIs<ToolCall>(done.message.content.single()).arguments
         )
     }

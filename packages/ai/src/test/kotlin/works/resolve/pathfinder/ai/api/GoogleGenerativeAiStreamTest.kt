@@ -9,9 +9,11 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.InputModality
@@ -162,7 +164,7 @@ class GoogleGenerativeAiStreamTest {
         val call = toolEnd.toolCall
         assertTrue(call.id.startsWith("bash_"), "generated id was ${call.id}")
         assertEquals("bash", call.name)
-        assertEquals("""{"command":"ls"}""", call.arguments)
+        assertEquals(buildJsonObject { put("command", "ls") }, call.arguments)
         val toolDelta = events.filterIsInstance<AssistantMessageEvent.ToolCallDelta>().single()
         assertEquals("""{"command":"ls"}""", toolDelta.delta)
 

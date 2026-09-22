@@ -10,9 +10,12 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
@@ -151,7 +154,13 @@ class MistralConversationsApiTest {
                             content = listOf(
                                 ThinkingContent("reason"),
                                 TextContent("answer"),
-                                ToolCall("abc123456", "lookup", """{"query":"pi"}""")
+                                ToolCall(
+                                    "abc123456",
+                                    "lookup",
+                                    buildJsonObject {
+                                        put("query", "pi")
+                                    }
+                                )
                             ),
                             api = model.api,
                             provider = model.provider,
@@ -200,7 +209,13 @@ class MistralConversationsApiTest {
                     messages = listOf(
                         AssistantMessage(
                             content = listOf(
-                                ToolCall("resp_abc|with-pipes-and-more", "lookup", """{"q":1}""")
+                                ToolCall(
+                                    "resp_abc|with-pipes-and-more",
+                                    "lookup",
+                                    buildJsonObject {
+                                        put("q", 1)
+                                    }
+                                )
                             ),
                             api = "openai-responses",
                             provider = "openai",
@@ -261,7 +276,7 @@ class MistralConversationsApiTest {
             listOf(
                 ThinkingContent("reason"),
                 TextContent("answer"),
-                ToolCall("abc123456", "lookup", """{"query":"pi"}""")
+                ToolCall("abc123456", "lookup", buildJsonObject { put("query", "pi") })
             ),
             message.content
         )
@@ -311,7 +326,7 @@ class MistralConversationsApiTest {
 
             val done = assertIs<AssistantMessageEvent.Done>(events.last())
             assertEquals(
-                listOf(ToolCall("abc123456", "lookup", """{"query":"pi"}""")),
+                listOf(ToolCall("abc123456", "lookup", buildJsonObject { put("query", "pi") })),
                 done.message.content
             )
             // One tool block: exactly one start and one end event.
@@ -343,8 +358,8 @@ class MistralConversationsApiTest {
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(
             listOf(
-                ToolCall("shared1", "lookup", "{\"q\":"),
-                ToolCall("shared1", "lookup", "\"x\"")
+                ToolCall("shared1", "lookup", JsonObject(emptyMap())),
+                ToolCall("shared1", "lookup", JsonObject(emptyMap()))
             ),
             done.message.content
         )
@@ -696,7 +711,9 @@ class MistralConversationsApiTest {
                 Context(
                     messages = listOf(
                         AssistantMessage(
-                            content = listOf(ToolCall("abc123456", "lookup", "{}")),
+                            content = listOf(
+                                ToolCall("abc123456", "lookup", JsonObject(emptyMap()))
+                            ),
                             api = model.api,
                             provider = model.provider,
                             model = model.id,
@@ -740,7 +757,7 @@ class MistralConversationsApiTest {
                             AssistantMessage(
                                 content = listOf(
                                     TextContent("partial"),
-                                    ToolCall("abc123456", "lookup", "{}")
+                                    ToolCall("abc123456", "lookup", JsonObject(emptyMap()))
                                 ),
                                 api = "openai-responses",
                                 provider = "openai",
@@ -751,7 +768,11 @@ class MistralConversationsApiTest {
                             AssistantMessage(
                                 content = listOf(
                                     TextContent("will call"),
-                                    ToolCall("resp_orphan|with-pipes", "lookup", "{}")
+                                    ToolCall(
+                                        "resp_orphan|with-pipes",
+                                        "lookup",
+                                        JsonObject(emptyMap())
+                                    )
                                 ),
                                 api = "openai-responses",
                                 provider = "openai",

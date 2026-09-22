@@ -5,6 +5,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.InputModality
@@ -91,7 +93,7 @@ class TransformMessagesTest {
                     ToolCall(
                         id = "call_123",
                         name = "bash",
-                        arguments = """{"command":"ls"}""",
+                        arguments = buildJsonObject { put("command", "ls") },
                         thoughtSignature =
                             """{"type":"reasoning.encrypted","id":"call_123","data":"encrypted"}"""
                     )
@@ -121,7 +123,7 @@ class TransformMessagesTest {
                     ToolCall(
                         id = "call_123|fc_123",
                         name = "read",
-                        arguments = """{"path":"README.md"}"""
+                        arguments = buildJsonObject { put("path", "README.md") }
                     )
                 )
             )
@@ -146,12 +148,12 @@ class TransformMessagesTest {
                     ToolCall(
                         id = "call_1|fc_1",
                         name = "read",
-                        arguments = """{"path":"README.md"}"""
+                        arguments = buildJsonObject { put("path", "README.md") }
                     ),
                     ToolCall(
                         id = "call_2|fc_2",
                         name = "bash",
-                        arguments = """{"command":"pwd"}"""
+                        arguments = buildJsonObject { put("command", "pwd") }
                     )
                 )
             ),

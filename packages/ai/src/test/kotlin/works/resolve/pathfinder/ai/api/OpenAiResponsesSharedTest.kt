@@ -280,7 +280,11 @@ class OpenAiResponsesSharedTest {
     fun `tool calls replay as function_call items with fc_ item ids`() {
         val assistant = AssistantMessage(
             content = listOf(
-                ToolCall(id = "call_1|fc_2", name = "edit", arguments = """{"a":1}""")
+                ToolCall(
+                    id = "call_1|fc_2",
+                    name = "edit",
+                    arguments = buildJsonObject { put("a", 1) }
+                )
             ),
             api = "openai-responses",
             provider = "openai",
@@ -303,7 +307,9 @@ class OpenAiResponsesSharedTest {
     @Test
     fun `non-fc item ids are dropped to avoid pairing validation`() {
         val assistant = AssistantMessage(
-            content = listOf(ToolCall(id = "call_1|ctc_2", name = "edit", arguments = "{}")),
+            content = listOf(
+                ToolCall(id = "call_1|ctc_2", name = "edit", arguments = JsonObject(emptyMap()))
+            ),
             api = "openai-responses",
             provider = "openai",
             model = "gpt-5-mini",
@@ -330,7 +336,11 @@ class OpenAiResponsesSharedTest {
         val rawId = "call_4VnzVawQXPB9MgYib7CiQFEY|$copilotItemId"
         val assistant = AssistantMessage(
             content = listOf(
-                ToolCall(id = rawId, name = "edit", arguments = """{"path":"a.css"}""")
+                ToolCall(
+                    id = rawId,
+                    name = "edit",
+                    arguments = buildJsonObject { put("path", "a.css") }
+                )
             ),
             api = "openai-responses",
             provider = "github-copilot",
@@ -437,7 +447,9 @@ class OpenAiResponsesSharedTest {
     @Test
     fun `orphaned tool calls get synthetic tool results`() {
         val assistant = AssistantMessage(
-            content = listOf(ToolCall(id = "call_1|fc_2", name = "edit", arguments = "{}")),
+            content = listOf(
+                ToolCall(id = "call_1|fc_2", name = "edit", arguments = JsonObject(emptyMap()))
+            ),
             api = "openai-responses",
             provider = "openai",
             model = "gpt-5-mini",
@@ -459,7 +471,12 @@ class OpenAiResponsesSharedTest {
         val assistant = AssistantMessage(
             content = listOf(
                 ThinkingContent("opaque", redacted = true),
-                ToolCall("foreign", "edit", "{}", thoughtSignature = "google-signature")
+                ToolCall(
+                    "foreign",
+                    "edit",
+                    JsonObject(emptyMap()),
+                    thoughtSignature = "google-signature"
+                )
             ),
             api = "google-generative-ai",
             provider = "google",
@@ -768,7 +785,13 @@ class OpenAiResponsesSharedTest {
         )
         val toolEnd = assertIs<AssistantMessageEvent.ToolCallEnd>(end.single())
         assertEquals("call_1|fc_1", toolEnd.toolCall.id)
-        assertEquals("""{"p":1,"q":2}""", toolEnd.toolCall.arguments)
+        assertEquals(
+            buildJsonObject {
+                put("p", 1)
+                put("q", 2)
+            },
+            toolEnd.toolCall.arguments
+        )
         s.onEvent(event("""{"type":"response.completed","response":{"status":"completed"}}"""))
         // Tool calls present: stop maps to toolUse.
         assertEquals(StopReason.TOOL_USE, s.stopReason)
@@ -801,7 +824,7 @@ class OpenAiResponsesSharedTest {
         val toolCall = assertIs<ToolCall>(output.content.single())
         assertEquals("call_test|fc_test", toolCall.id)
         assertEquals("lookup", toolCall.name)
-        assertEquals("""{"value":"hello"}""", toolCall.arguments)
+        assertEquals(buildJsonObject { put("value", "hello") }, toolCall.arguments)
         assertEquals("dynamic_tools", toolCall.namespace)
 
         val replayed = OpenAiResponsesShared.convertResponsesMessages(
@@ -1157,7 +1180,7 @@ class OpenAiResponsesSharedTest {
 
     @Test
     fun `replays grammar calls as custom tool call items`() {
-        fun grammarContext(arguments: String): TranscriptContext {
+        fun grammarContext(arguments: JsonObject): TranscriptContext {
             val assistant = AssistantMessage(
                 content = listOf(
                     ToolCall(id = "call_1|ctc_1", name = "sample_tool", arguments = arguments)
@@ -1177,7 +1200,12 @@ class OpenAiResponsesSharedTest {
         val options = OpenAiResponsesShared.ConvertResponsesMessagesOptions(
             grammarToolInputProperties = mapOf("sample_tool" to "payload")
         )
-        for (invalidArguments in listOf("{}", """{"payload":42}""")) {
+        for (invalidArguments in listOf(
+            JsonObject(emptyMap()),
+            buildJsonObject {
+                put("payload", 42)
+            }
+        )) {
             val failure = assertFailsWith<ConstrainedSamplingError> {
                 OpenAiResponsesShared.convertResponsesMessages(
                     model(id = "gpt-test"),
@@ -1194,7 +1222,7 @@ class OpenAiResponsesSharedTest {
 
         val messages = OpenAiResponsesShared.convertResponsesMessages(
             model(id = "gpt-test"),
-            grammarContext("""{"payload":"abc"}"""),
+            grammarContext(buildJsonObject { put("payload", "abc") }),
             setOf("openai"),
             options
         )
@@ -1212,7 +1240,7 @@ class OpenAiResponsesSharedTest {
     }
 
     @Test
-    fun `streams custom tool calls as string arguments`() {
+    fun `streams custom tool calls as json text deltas`() {
         val s = state(
             options = OpenAiResponsesShared.StreamProcessingOptions(
                 grammarToolInputProperties = mapOf("sample_tool" to "payload")
@@ -1243,7 +1271,7 @@ class OpenAiResponsesSharedTest {
         val toolCall = s.partialSnapshot().content.single() as ToolCall
         assertEquals("call_1|ctc_1", toolCall.id)
         assertEquals("sample_tool", toolCall.name)
-        assertEquals("{\"payload\":\"abc\"}", toolCall.arguments)
+        assertEquals(buildJsonObject { put("payload", "abc") }, toolCall.arguments)
         val deltas = allEvents.filterIsInstance<AssistantMessageEvent.ToolCallDelta>().joinToString(
             ""
         ) {
@@ -1272,7 +1300,7 @@ class OpenAiResponsesSharedTest {
         val end = assertIs<AssistantMessageEvent.ToolCallEnd>(events.last())
         assertEquals("call_test|ctc_test", end.toolCall.id)
         assertEquals("dynamic_tools", end.toolCall.namespace)
-        assertEquals("{\"input\":\"hello\"}", end.toolCall.arguments)
+        assertEquals(buildJsonObject { put("input", "hello") }, end.toolCall.arguments)
     }
 
     @Test
@@ -1387,7 +1415,7 @@ class OpenAiResponsesSharedTest {
                 ToolCall(
                     id = "call_custom|ctc_test",
                     name = "query",
-                    arguments = """{"input":"hello"}""",
+                    arguments = buildJsonObject { put("input", "hello") },
                     namespace = "dynamic_tools"
                 )
             ),
@@ -1424,7 +1452,7 @@ class OpenAiResponsesSharedTest {
                 ToolCall(
                     id = "call_test|fc_test",
                     name = "lookup",
-                    arguments = """{"value":"hello"}"""
+                    arguments = buildJsonObject { put("value", "hello") }
                 )
             ),
             api = "openai-responses",
