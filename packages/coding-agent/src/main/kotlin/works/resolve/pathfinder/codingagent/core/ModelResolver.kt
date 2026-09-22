@@ -131,8 +131,9 @@ data class ResolveModelScopeResult(
  * (matched case-insensitively against "provider/modelId" and the bare id),
  * else the best partial match (alias preferred over dated versions, latest
  * within each) — with an optional ":level" thinking suffix. Divergence: the
- * glob translation covers `*` and `?` only (no character classes, extglob,
- * or braces); stored patterns are plain references.
+ * glob translation covers `*` and `?` only, with minimatch's slash-free
+ * segment semantics (no character classes, extglob, braces, or `**`
+ * globstar); stored patterns are plain references.
  *
  * Public for the app layer, which resolves the stored patterns against its
  * own available-model snapshot to update a live session's scoped models
@@ -197,8 +198,8 @@ private fun globToRegex(pattern: String): Regex {
     val sb = StringBuilder()
     for (c in pattern) {
         when (c) {
-            '*' -> sb.append(".*")
-            '?' -> sb.append('.')
+            '*' -> sb.append("[^/]*")
+            '?' -> sb.append("[^/]")
             else -> sb.append(Regex.escape(c.toString()))
         }
     }
