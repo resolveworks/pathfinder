@@ -195,8 +195,13 @@ data class AgentLoopTurnUpdate(
 sealed class AgentEvent {
     object AgentStart : AgentEvent()
 
-    /** Terminal event carrying every message produced by this run, in source order. */
-    data class AgentEnd(val messages: List<Message>) : AgentEvent()
+    /**
+     * Terminal event carrying every message produced by this run, in source
+     * order. [willRetry] is null when emitted by the Agent itself; the owning
+     * session computes and sets it when re-emitting (abort-, retry-budget-,
+     * and last-assistant-retryability-aware, like pi's session).
+     */
+    data class AgentEnd(val messages: List<Message>, val willRetry: Boolean? = null) : AgentEvent()
 
     object TurnStart : AgentEvent()
 
