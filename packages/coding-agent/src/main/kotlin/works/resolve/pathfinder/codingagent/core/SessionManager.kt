@@ -9,6 +9,10 @@ import java.nio.file.Files
 import java.nio.file.StandardOpenOption
 import java.security.SecureRandom
 import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.time.Clock
@@ -142,6 +146,20 @@ data class BranchSummaryEntry(
     val usage: Usage? = null
 ) : SessionEntry()
 
+/**
+ * An entry whose `type` is not a ported kind (pi's usage, label,
+ * session_info, custom entries). pi indexes every parsed entry of any type
+ * as a raw object; the typed equivalent retains the original JSON,
+ * participates in the tree and the unknown-leaf fallback, persists back
+ * verbatim, and projects to nothing in the LLM context.
+ */
+data class RawEntry(
+    override val id: String,
+    override val parentId: String?,
+    override val timestamp: Long,
+    val json: JsonObject
+) : SessionEntry()
+
 /** pi's SessionTreeNode; labels are not ported. */
 data class SessionTreeNode(val entry: SessionEntry, val children: List<SessionTreeNode>)
 
@@ -246,8 +264,9 @@ data class SessionContext(
 /**
  * pi's sessionEntryToContextMessages: project one entry into LLM messages.
  * Message entries pass through; compaction and branch-summary entries
- * project to their wrapped summary messages; configuration entries project
- * nothing.
+ * project to their wrapped summary messages; configuration and raw
+ * entries project to nothing (pi's plain custom entries are display/state
+ * entries and do not participate in context).
  */
 fun sessionEntryToContextMessages(entry: SessionEntry): List<Message> = when (entry) {
     is MessageEntry -> listOf(entry.message)
@@ -265,7 +284,7 @@ fun sessionEntryToContextMessages(entry: SessionEntry): List<Message> = when (en
         emptyList()
     }
 
-    is ModelChangeEntry, is ThinkingLevelEntry -> emptyList()
+    is ModelChangeEntry, is ThinkingLevelEntry, is RawEntry -> emptyList()
 }
 
 /**
@@ -324,7 +343,8 @@ data class SessionInfo(
     val path: File,
     /** Header timestamp. */
     val createdAt: Long,
-    /** Max user/assistant message timestamp, else the header timestamp. */
+    /** Max user/assistant message timestamp (the entry's when the message
+     * lacks its own), when positive; else the header timestamp. */
     val modified: Long,
     /** Count of message entries (all roles). */
     val messageCount: Int,
@@ -337,8 +357,9 @@ data class SessionInfo(
 /**
  * JSONL v3 session codec, pi's session file format: line 0 is the session
  * header, then one entry per line with pi's exact field names. Entry
- * timestamps on the wire are pi's ISO-8601 UTC strings with exactly three
- * millisecond digits; internally entries carry epoch millis.
+ * timestamps encode as pi's ISO-8601 UTC strings with exactly three
+ * millisecond digits and decode like `new Date(...)` (see [parseIso]);
+ * internally entries carry epoch millis.
  *
  * Divergences from pi:
  * - `cwd` carries the session's working directory (a connected SSH remote,
@@ -349,13 +370,11 @@ data class SessionInfo(
  *   the persisted header stays immutable like pi's.
  * - Decode is permissive like pi's parseSessionEntryLine but entry payloads
  *   decode into typed [SessionEntry]s: any line that fails typed decode is
- *   skipped, and unknown entry `type`s are skipped (pi reads them as raw
- *   objects for extension entries; no extension entries exist here).
+ *   skipped. Unported entry `type`s decode as [RawEntry]s retained verbatim
+ *   like pi's raw objects; a raw line must carry a string `id` and a
+ *   parseable `timestamp` to index into the typed tree.
  * - Old "v4" files are unreadable (their first line is not a `session`
  *   header) and no migration exists, per AGENTS.md.
- * - Timestamps are parsed strictly (`Instant.parse`, exactly `.SSS` + `Z`);
- *   pi's `new Date(...)` accepts laxer shapes, but only current shapes are
- *   supported here.
  */
 internal object JsonlCodec {
     const val SESSION_VERSION = 3
@@ -372,12 +391,69 @@ internal object JsonlCodec {
     private val isoFormatter: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT)
 
+    private const val MILLIS_PER_DAY = 86_400_000L
+
+    /**
+     * ECMA-262 date-time parser for wire timestamps: accepts what
+     * `new Date(...)` accepts for the ISO forms — optional seconds,
+     * fractional seconds of any length, `Z`/`z` or `±HH:mm`/`±HHmm` zones
+     * (zoneless date-times read as local time, date-only as UTC), V8's
+     * end-of-month day rollover, and `24:00` midnight — and rejects what it
+     * rejects (out-of-range components, hour-only offsets, non-ISO shapes).
+     * Fractional digits past milliseconds truncate like `Date.getTime()`.
+     */
+    private val ECMA_DATE_TIME = Regex(
+        """(\d{4})-(\d{2})-(\d{2})(?:[Tt](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?([Zz]|[+-]\d{2}:?\d{2})?)?"""
+    )
+
     fun formatIso(millis: Long): String =
         isoFormatter.format(Instant.ofEpochMilli(millis).atZone(java.time.ZoneOffset.UTC))
 
-    fun parseIso(value: String): Long? = runCatching {
-        Instant.parse(value).toEpochMilli()
-    }.getOrNull()
+    fun parseIso(value: String): Long? {
+        val match = ECMA_DATE_TIME.matchEntire(value) ?: return null
+        val month = match.groupValues[2].toInt()
+        val day = match.groupValues[3].toInt()
+        if (month !in 1..12 || day !in 1..31) return null
+        val hasTime = match.groupValues[4].isNotEmpty()
+        val hour = if (hasTime) match.groupValues[4].toInt() else 0
+        val minute = if (hasTime) match.groupValues[5].toInt() else 0
+        val second = match.groupValues[6].takeIf { it.isNotEmpty() }?.toInt() ?: 0
+        val fractionMillis = match.groupValues[7].takeIf { it.isNotEmpty() }
+            ?.let { "${it}00".take(3).toInt() } ?: 0
+        if (minute !in 0..59 || second !in 0..59) return null
+        if (hour == 24) {
+            if (minute != 0 || second != 0 || fractionMillis != 0) return null
+        } else if (hour > 24) {
+            return null
+        }
+        // V8 rolls day overflow past the month's end instead of rejecting it.
+        val date = LocalDate.of(match.groupValues[1].toInt(), month, 1).plusDays((day - 1).toLong())
+        val zone = match.groupValues[8]
+        // hour 24 (validated to :00:00.000) rolls into the next day.
+        val millisOfDay =
+            hour * 3_600_000L + minute * 60_000L + second * 1_000L + fractionMillis
+        return when {
+            zone.equals("Z", ignoreCase = true) ->
+                date.toEpochDay() * MILLIS_PER_DAY + millisOfDay
+
+            zone.isNotEmpty() -> {
+                val sign = if (zone[0] == '-') -1L else 1L
+                val zoneHours = zone.substring(1, 3).toInt()
+                val zoneMinutes = zone.substring(3).removePrefix(":").toInt()
+                if (zoneHours > 23 || zoneMinutes > 59) return null
+                date.toEpochDay() * MILLIS_PER_DAY + millisOfDay -
+                    sign * (zoneHours * 3_600_000L + zoneMinutes * 60_000L)
+            }
+
+            // Zoneless date-times are local time like JS; date-only is UTC.
+            hasTime -> LocalDateTime.of(date, LocalTime.of(hour % 24, minute, second))
+                .plusDays((hour / 24).toLong())
+                .plusNanos(fractionMillis * 1_000_000L)
+                .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+            else -> date.toEpochDay() * MILLIS_PER_DAY
+        }
+    }
 
     /** pi's file name: the header timestamp with ':'/'.' replaced, then the session id. */
     fun sessionFileName(headerTimestampMillis: Long, sessionId: String): String =
@@ -391,51 +467,55 @@ internal object JsonlCodec {
         put("cwd", header.cwd)
     }.toString() + "\n"
 
-    fun encodeEntryLine(entry: SessionEntry): String = buildJsonObject {
-        put("id", entry.id)
-        put("parentId", entry.parentId)
-        put("timestamp", formatIso(entry.timestamp))
-        when (entry) {
-            is MessageEntry -> {
-                put("type", "message")
-                put("message", encodeMessage(entry.message))
-            }
-
-            is CompactionEntry -> {
-                put("type", "compaction")
-                put("summary", entry.summary)
-                put("firstKeptEntryId", entry.firstKeptEntryId)
-                put("tokensBefore", entry.tokensBefore)
-                entry.details?.let {
-                    putJsonObject("details") {
-                        put("readFiles", JsonArray(it.readFiles.map(::JsonPrimitive)))
-                        put("modifiedFiles", JsonArray(it.modifiedFiles.map(::JsonPrimitive)))
-                    }
+    fun encodeEntryLine(entry: SessionEntry): String {
+        // Raw entries re-serialize their original object verbatim.
+        if (entry is RawEntry) return entry.json.toString() + "\n"
+        return buildJsonObject {
+            put("id", entry.id)
+            put("parentId", entry.parentId)
+            put("timestamp", formatIso(entry.timestamp))
+            when (entry) {
+                is MessageEntry -> {
+                    put("type", "message")
+                    put("message", encodeMessage(entry.message))
                 }
-                entry.usage?.let { put("usage", encodeUsage(it)) }
-                entry.systemMessage?.let { put("systemMessage", encodeMessage(it)) }
-            }
 
-            is ModelChangeEntry -> {
-                put("type", "model_change")
-                put("provider", entry.provider)
-                put("modelId", entry.modelId)
-            }
+                is CompactionEntry -> {
+                    put("type", "compaction")
+                    put("summary", entry.summary)
+                    put("firstKeptEntryId", entry.firstKeptEntryId)
+                    put("tokensBefore", entry.tokensBefore)
+                    entry.details?.let {
+                        putJsonObject("details") {
+                            put("readFiles", JsonArray(it.readFiles.map(::JsonPrimitive)))
+                            put("modifiedFiles", JsonArray(it.modifiedFiles.map(::JsonPrimitive)))
+                        }
+                    }
+                    entry.usage?.let { put("usage", encodeUsage(it)) }
+                    entry.systemMessage?.let { put("systemMessage", encodeMessage(it)) }
+                }
 
-            is ThinkingLevelEntry -> {
-                put("type", "thinking_level_change")
-                put("thinkingLevel", entry.thinkingLevel)
-            }
+                is ModelChangeEntry -> {
+                    put("type", "model_change")
+                    put("provider", entry.provider)
+                    put("modelId", entry.modelId)
+                }
 
-            is BranchSummaryEntry -> {
-                put("type", "branch_summary")
-                put("fromId", entry.fromId)
-                put("summary", entry.summary)
-                entry.details?.let { put("details", it) }
-                entry.usage?.let { put("usage", encodeUsage(it)) }
+                is ThinkingLevelEntry -> {
+                    put("type", "thinking_level_change")
+                    put("thinkingLevel", entry.thinkingLevel)
+                }
+
+                is BranchSummaryEntry -> {
+                    put("type", "branch_summary")
+                    put("fromId", entry.fromId)
+                    put("summary", entry.summary)
+                    entry.details?.let { put("details", it) }
+                    entry.usage?.let { put("usage", encodeUsage(it)) }
+                }
             }
-        }
-    }.toString() + "\n"
+        }.toString() + "\n"
+    }
 
     /** One parsed line; null for blank, malformed, and unknown/skipped lines. */
     fun parseLine(line: String): Line? {
@@ -457,7 +537,7 @@ internal object JsonlCodec {
                 "message", "compaction", "model_change", "thinking_level_change",
                 "branch_summary" -> Line.Entry(decodeEntry(obj))
 
-                else -> null
+                else -> Line.Entry(decodeRawEntry(obj))
             }
         } catch (_: Exception) {
             null
@@ -473,7 +553,7 @@ internal object JsonlCodec {
                 id = id,
                 parentId = parentId,
                 timestamp = timestamp,
-                message = decodeMessage(obj["message"] ?: invalid())
+                message = decodeMessage(obj["message"] ?: invalid(), timestamp)
             )
 
             "compaction" -> CompactionEntry(
@@ -486,7 +566,7 @@ internal object JsonlCodec {
                 details = decodeDetails(obj["details"]),
                 usage = obj["usage"]?.let(::decodeUsage),
                 systemMessage = obj["systemMessage"]?.let {
-                    decodeMessage(it) as? SystemMessage ?: invalid()
+                    decodeMessage(it, timestamp) as? SystemMessage ?: invalid()
                 }
             )
 
@@ -517,6 +597,17 @@ internal object JsonlCodec {
 
             else -> invalid("unknown entry type $type")
         }
+    }
+
+    /**
+     * Any other well-formed entry object, pi's raw retention: only the tree
+     * keys are typed; the rest of the line stays opaque.
+     */
+    private fun decodeRawEntry(obj: JsonObject): SessionEntry {
+        val id = obj.string("id") ?: invalid()
+        val parentId = (obj["parentId"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val timestamp = obj.string("timestamp")?.let(::parseIso) ?: invalid()
+        return RawEntry(id, parentId, timestamp, obj)
     }
 
     private fun decodeDetails(
@@ -589,8 +680,7 @@ internal object JsonlCodec {
             put("provider", message.provider)
             put("model", message.model)
             putJsonObject("usage") { putUsage(message.usage) }
-            // pi serializes the lowercase wire value.
-            put("stopReason", message.stopReason.name.lowercase())
+            put("stopReason", encodeStopReason(message.stopReason))
             message.errorMessage?.let { put("errorMessage", it) }
             message.rawStopReason?.let { put("rawStopReason", it) }
             message.responseId?.let { put("responseId", it) }
@@ -610,7 +700,39 @@ internal object JsonlCodec {
         }
     }
 
-    fun decodeMessage(element: kotlinx.serialization.json.JsonElement): Message {
+    /** pi's StopReason wire strings (types.ts union): camelCase. */
+    private fun encodeStopReason(reason: StopReason): String = when (reason) {
+        StopReason.PENDING -> "pending"
+        StopReason.STOP -> "stop"
+        StopReason.LENGTH -> "length"
+        StopReason.TOOL_USE -> "toolUse"
+        StopReason.ERROR -> "error"
+        StopReason.ABORTED -> "aborted"
+        StopReason.DEFERRED -> "deferred"
+    }
+
+    private fun decodeStopReason(value: String): StopReason? = when (value) {
+        "pending" -> StopReason.PENDING
+        "stop" -> StopReason.STOP
+        "length" -> StopReason.LENGTH
+        "toolUse" -> StopReason.TOOL_USE
+        "error" -> StopReason.ERROR
+        "aborted" -> StopReason.ABORTED
+        "deferred" -> StopReason.DEFERRED
+        else -> null
+    }
+
+    /**
+     * A message lacking its own `timestamp` decodes with the entry's: pi
+     * keeps it absent and falls back to the entry timestamp only when
+     * computing session activity; the typed message cannot be absent, so
+     * the entry timestamp is stamped here — the same instant pi's fallback
+     * resolves to.
+     */
+    fun decodeMessage(
+        element: kotlinx.serialization.json.JsonElement,
+        entryTimestamp: Long
+    ): Message {
         val obj = element as? JsonObject ?: invalid()
         return when (val role = obj.string("role")) {
             "system" -> SystemMessage(
@@ -622,12 +744,12 @@ internal object JsonlCodec {
                         ?.map { ToolReference((it as JsonObject).string("name") ?: invalid()) }
                         ?: invalid()
                 },
-                timestamp = obj.number("timestamp")?.toLong() ?: invalid()
+                timestamp = obj.number("timestamp")?.toLong() ?: entryTimestamp
             )
 
             "user" -> UserMessage(
                 content = decodeContentList(obj["content"]),
-                timestamp = obj.number("timestamp")?.toLong() ?: invalid()
+                timestamp = obj.number("timestamp")?.toLong() ?: entryTimestamp
             )
 
             "assistant" -> AssistantMessage(
@@ -636,21 +758,13 @@ internal object JsonlCodec {
                 provider = obj.string("provider") ?: invalid(),
                 model = obj.string("model") ?: invalid(),
                 usage = decodeUsage(obj["usage"] ?: invalid()),
-                // pi files carry lowercase wire values; old Pathfinder
-                // files carried the enum name.
-                stopReason = obj.string("stopReason")
-                    ?.let {
-                        runCatching {
-                            StopReason.valueOf(it.uppercase())
-                        }.getOrNull()
-                    }
-                    ?: invalid(),
+                stopReason = obj.string("stopReason")?.let(::decodeStopReason) ?: invalid(),
                 errorMessage = obj.string("errorMessage"),
                 rawStopReason = obj.string("rawStopReason"),
                 responseId = obj.string("responseId"),
                 responseModel = obj.string("responseModel"),
                 endTurn = obj["endTurn"]?.let { (it as JsonPrimitive).content.toBooleanStrict() },
-                timestamp = obj.number("timestamp")?.toLong() ?: invalid()
+                timestamp = obj.number("timestamp")?.toLong() ?: entryTimestamp
             )
 
             "toolResult" -> ToolResultMessage(
@@ -662,7 +776,7 @@ internal object JsonlCodec {
                 isError =
                     obj["isError"]?.let { (it as JsonPrimitive).content.toBooleanStrict() }
                         ?: invalid(),
-                timestamp = obj.number("timestamp")?.toLong() ?: invalid()
+                timestamp = obj.number("timestamp")?.toLong() ?: entryTimestamp
             )
 
             else -> invalid("unknown message role $role")
@@ -1281,7 +1395,10 @@ class SessionManager private constructor(
             }
             var header: JsonlCodec.SessionHeader? = null
             val entries = ArrayList<SessionEntry>()
-            for (line in text.lineSequence()) {
+            // pi splits on \n only; a stray \r inside a line is JSON
+            // whitespace, not a line break — a \r-joined pair is one
+            // unparsable line, skipped whole.
+            for (line in text.split('\n')) {
                 val parsed = JsonlCodec.parseLine(line) ?: continue
                 if (header == null) {
                     // Header-first validation: a non-header first valid
@@ -1433,7 +1550,7 @@ class SessionManager private constructor(
                 if (message !is UserMessage && message !is AssistantMessage) {
                     continue
                 }
-                lastActivity = maxOf(lastActivity ?: Long.MIN_VALUE, message.timestamp)
+                lastActivity = maxOf(lastActivity ?: 0L, message.timestamp)
                 val content = when (message) {
                     is UserMessage -> message.content
                     is AssistantMessage -> message.content
@@ -1448,11 +1565,15 @@ class SessionManager private constructor(
                 }
             }
             val sessionHeader = header ?: return null
+            // pi falls back to the file mtime when the header timestamp is
+            // unreadable; that is unreachable here — the header decode
+            // requires a parseable timestamp — so modified bottoms out at
+            // the header time.
             return SessionInfo(
                 id = sessionHeader.id,
                 path = file,
                 createdAt = sessionHeader.timestamp,
-                modified = lastActivity ?: sessionHeader.timestamp,
+                modified = lastActivity?.takeIf { it > 0 } ?: sessionHeader.timestamp,
                 messageCount = messageCount,
                 firstMessage = firstMessage ?: "(no messages)",
                 allMessagesText = allMessages.joinToString(" ")
