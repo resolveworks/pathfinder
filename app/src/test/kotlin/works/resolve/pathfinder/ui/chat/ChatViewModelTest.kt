@@ -29,6 +29,8 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -633,7 +635,11 @@ internal class ChatViewModelTest : ChatHarnessTest() {
                 content = listOf(
                     ThinkingContent("Weather is external; use the tool."),
                     TextContent("Checking the weather."),
-                    ToolCall(id = "call-1", name = "get_weather", arguments = "{}")
+                    ToolCall(
+                        id = "call-1",
+                        name = "get_weather",
+                        arguments = JsonObject(emptyMap())
+                    )
                 ),
                 api = testModel.api,
                 provider = "zai",
@@ -729,15 +735,20 @@ internal class ChatViewModelTest : ChatHarnessTest() {
                 ToolCall(
                     id = "call-1",
                     name = BraveWebSearchTool.NAME,
-                    arguments = """{"query":"kotlin flow"}"""
+                    arguments = buildJsonObject { put("query", "kotlin flow") }
                 ),
                 ToolCall(
                     id = "call-2",
                     name = WebFetchTool.NAME,
-                    arguments = """{"url":"https://example.com"}"""
+                    arguments = buildJsonObject { put("url", "https://example.com") }
                 ),
-                // Spec'd tool with malformed arguments: title falls back to the bare name.
-                ToolCall(id = "call-3", name = WebFetchTool.NAME, arguments = "not json")
+                // Spec'd tool with a missing key argument: title falls back
+                // to the bare name.
+                ToolCall(
+                    id = "call-3",
+                    name = WebFetchTool.NAME,
+                    arguments = buildJsonObject { put("other", true) }
+                )
             ),
             api = testModel.api,
             provider = "zai",
@@ -751,12 +762,13 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         val rows = vm.uiState.value.messages.filterIsInstance<TranscriptRow.Tool>()
         assertEquals(listOf("call-1", "call-2", "call-3"), rows.map { it.call.id })
         assertEquals(
-            // Rows carry each call's arguments as-is; titles parse at render,
-            // malformed arguments (call-3) falling back to the bare name.
+            // Rows carry each call's arguments as-is; titles read the key
+            // argument at render, a missing one (call-3) falling back to
+            // the bare name.
             listOf(
-                """{"query":"kotlin flow"}""",
-                """{"url":"https://example.com"}""",
-                "not json"
+                buildJsonObject { put("query", "kotlin flow") },
+                buildJsonObject { put("url", "https://example.com") },
+                buildJsonObject { put("other", true) }
             ),
             rows.map { it.call.arguments }
         )
@@ -778,7 +790,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         val settled = vm.uiState.value.messages
             .filterIsInstance<TranscriptRow.Tool>()
             .single { it.call.id == "call-1" }
-        assertEquals("""{"query":"kotlin flow"}""", settled.call.arguments)
+        assertEquals(buildJsonObject { put("query", "kotlin flow") }, settled.call.arguments)
 
         vm.closeForTest()
     }

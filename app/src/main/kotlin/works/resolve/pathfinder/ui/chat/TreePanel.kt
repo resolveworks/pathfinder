@@ -165,7 +165,7 @@ private fun TreeRow.searchText(): String = when (val rowBody = body) {
     is TreeRowBody.NoContent -> ""
 
     is TreeRowBody.Tool ->
-        rowBody.name + " " + (rowBody.call?.arguments ?: "")
+        rowBody.name + " " + (rowBody.call?.arguments?.toString() ?: "")
 }.lowercase()
 
 /** One guide cell per indent level. */

@@ -53,6 +53,8 @@ import com.mikepenz.markdown.model.rememberStreamingMarkdownState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Content
@@ -63,7 +65,6 @@ import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.int
-import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.codingagent.core.tools.BashTool
 import works.resolve.pathfinder.codingagent.core.tools.EditTool
@@ -401,25 +402,24 @@ internal fun editDiff(result: ToolResultMessage): String? {
 /**
  * Row title, in pi's renderCall grammar: tool name (or the `$` prompt for
  * bash) followed by the key argument, plain concatenation. pi's read range
- * and bash timeout suffixes are ported as-is. A missing spec, malformed
- * arguments, or a missing/empty key argument leave the bare tool name.
+ * and bash timeout suffixes are ported as-is. A missing spec or a
+ * missing/empty key argument leaves the bare tool name.
  */
 @Composable
 internal fun toolCallTitle(call: ToolCall): String {
-    val parsed = remember(call.id, call.arguments) {
-        runCatching { lenientJson.parseToJsonElement(call.arguments) }.getOrNull() as? JsonObject
-    }
     return when (call.name) {
         BashTool.NAME -> {
-            val command = parsed?.string("command")?.takeIf { it.isNotEmpty() } ?: return call.name
-            val timeout = parsed?.int("timeout")
+            val command =
+                call.arguments.string("command")?.takeIf { it.isNotEmpty() } ?: return call.name
+            val timeout = call.arguments.int("timeout")
             "$ " + command + (if (timeout != null) " (timeout ${timeout}s)" else "")
         }
 
         ReadTool.NAME -> {
-            val path = parsed?.string("path")?.takeIf { it.isNotEmpty() } ?: return call.name
-            val offset = parsed?.int("offset")
-            val limit = parsed?.int("limit")
+            val path =
+                call.arguments.string("path")?.takeIf { it.isNotEmpty() } ?: return call.name
+            val offset = call.arguments.int("offset")
+            val limit = call.arguments.int("limit")
             val range = if (offset == null && limit == null) {
                 ""
             } else {
@@ -430,17 +430,19 @@ internal fun toolCallTitle(call: ToolCall): String {
         }
 
         EditTool.NAME, WriteTool.NAME -> {
-            val path = parsed?.string("path")?.takeIf { it.isNotEmpty() } ?: return call.name
+            val path =
+                call.arguments.string("path")?.takeIf { it.isNotEmpty() } ?: return call.name
             call.name + " " + path
         }
 
         BraveWebSearchTool.NAME -> {
-            val query = parsed?.string("query")?.takeIf { it.isNotEmpty() } ?: return call.name
+            val query =
+                call.arguments.string("query")?.takeIf { it.isNotEmpty() } ?: return call.name
             stringResource(R.string.tool_title_searched_for, query)
         }
 
         WebFetchTool.NAME -> {
-            val url = parsed?.string("url")?.takeIf { it.isNotEmpty() } ?: return call.name
+            val url = call.arguments.string("url")?.takeIf { it.isNotEmpty() } ?: return call.name
             stringResource(R.string.tool_title_fetched, url)
         }
 
@@ -706,7 +708,7 @@ private fun ConversationContentThinkingPreview() {
                     ToolCall(
                         id = "t1",
                         name = "web_search",
-                        arguments = """{"query":"arithmetic"}"""
+                        arguments = buildJsonObject { put("query", "arithmetic") }
                     ),
                     ToolResultMessage(
                         toolCallId = "t1",

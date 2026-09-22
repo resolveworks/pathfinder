@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.ui.chat
 
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import works.resolve.pathfinder.ai.ToolCall
@@ -55,7 +57,7 @@ class TreePanelLogicTest {
                     ToolCall(
                         id = "t1",
                         name = "web_search",
-                        arguments = """{"query":"kotlin compose"}"""
+                        arguments = buildJsonObject { put("query", "kotlin compose") }
                     )
                 )
             ),

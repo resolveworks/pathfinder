@@ -649,7 +649,7 @@ class AgentTest {
         runTest {
             val tool = fakeTool("get_weather")
             val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
-                content = listOf(ToolCall("call-1", "get_weather", "{}"))
+                content = listOf(ToolCall("call-1", "get_weather", JsonObject(emptyMap())))
             )
             var call = 0
             val agent = agent(
@@ -726,7 +726,7 @@ class AgentTest {
             }
         }
         val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
-            content = listOf(ToolCall("call-1", "delayed_tool", "{}"))
+            content = listOf(ToolCall("call-1", "delayed_tool", JsonObject(emptyMap())))
         )
         var call = 0
         val agent = agent(
@@ -797,8 +797,8 @@ class AgentTest {
         }
         val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
             content = listOf(
-                ToolCall("call-1", "settled_tool", "{}"),
-                ToolCall("call-2", "slow_tool", "{}")
+                ToolCall("call-1", "settled_tool", JsonObject(emptyMap())),
+                ToolCall("call-2", "slow_tool", JsonObject(emptyMap()))
             )
         )
         var call = 0
