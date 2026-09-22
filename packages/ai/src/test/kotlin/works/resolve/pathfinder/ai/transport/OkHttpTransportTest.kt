@@ -17,7 +17,6 @@ import kotlinx.coroutines.withTimeout
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
-import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
 
 class OkHttpTransportTest {
 
@@ -75,7 +74,7 @@ class OkHttpTransportTest {
     }
 
     @Test
-    fun `non-2xx surfaces as ProviderHttpException with capped body and headers`() {
+    fun `non-2xx surfaces as ProviderHttpException with full body and headers`() {
         val server = MockWebServer()
         server.enqueue(
             MockResponse()
@@ -89,7 +88,9 @@ class OkHttpTransportTest {
         }
         assertEquals(429, error.status)
         assertEquals("1200", error.header("retry-after-ms"))
-        assertEquals(MAX_PROVIDER_ERROR_BODY_CHARS, error.body.length)
+        // The transport captures the whole body like pi's `response.text()`;
+        // truncation for display is the error-body normalizer's job.
+        assertEquals("x".repeat(10_000), error.body)
         assertTrue(works.resolve.pathfinder.ai.utils.ProviderRetry().isRetryable(error))
         server.shutdown()
     }

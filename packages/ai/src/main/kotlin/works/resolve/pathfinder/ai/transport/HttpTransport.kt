@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.Flow
  *
  * [post] returns after response headers are received; collecting
  * [TransportResponse.events] reads the body. Non-2xx responses throw
- * [ProviderHttpException] with status, headers, and the bounded error body;
+ * [ProviderHttpException] with status, headers, and the full error body;
  * transport-level failures throw [NetworkException]. Implementations must
  * never log headers, auth values, or body content.
  */

@@ -249,7 +249,12 @@ internal fun catalogAuthResolver(
 /** Bounded handoff buffer between the network stream and the agent loop collector. */
 private const val STREAM_BUFFER_CAPACITY = 64
 
-/** Finite per-request timeout (covers headers through stream end via the call timeout). */
+/**
+ * Finite per-request deadline covering DNS through response headers — the
+ * phase pi's SDK `timeout` and codex's header-phase signal cover, at the same
+ * 300s default. Streamed body reads are idle-capped by the shared client's
+ * read timeout instead.
+ */
 private const val REQUEST_TIMEOUT_MS = 5L * 60 * 1000
 
 /** Minimal retry budget chosen by the app (pi provider-retry defaults to 0);

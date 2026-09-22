@@ -44,6 +44,7 @@ class PathfinderApplication : Application() {
     private val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .readTimeout(HTTP_IDLE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .build()
     }
 
@@ -188,6 +189,16 @@ class PathfinderApplication : Application() {
     private companion object {
         const val SESSIONS_DIRECTORY = "sessions"
         const val CONNECT_TIMEOUT_SECONDS = 30L
+
+        /**
+         * Inter-read idle cap for response headers and streamed bodies,
+         * shared by every user of the client. The analog of the undici
+         * dispatcher (headersTimeout/bodyTimeout both 300s) that pi installs
+         * process-wide; OkHttp applies it per read op, so a stream whose gaps
+         * stay under the limit never times out, and silence beyond it fails
+         * like pi's bodyTimeout.
+         */
+        const val HTTP_IDLE_TIMEOUT_MS = 300_000L
     }
 }
 

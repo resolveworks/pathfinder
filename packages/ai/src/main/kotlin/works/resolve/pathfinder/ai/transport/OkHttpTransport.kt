@@ -19,16 +19,17 @@ import okhttp3.Response
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
-import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
 
 /**
  * [HttpStreamingTransport] over OkHttp and okhttp-sse. Never logs the bearer
  * token, headers, or message content.
  *
  * Two-phase design mirroring pi's fetch-then-parse adapters: the HTTP phase is
- * owned here via a plain [Callback]; non-2xx bodies are captured (capped
- * at [MAX_PROVIDER_ERROR_BODY_CHARS]) with status/headers available for retry
- * classification before any SSE machinery runs. Only a 2xx response is handed
+ * owned here via a plain [Callback]; non-2xx bodies are captured in full (pi
+ * reads `response.text()` in full; display truncation with its
+ * `... [truncated N chars]` suffix happens in the shared error-body
+ * normalizer) with status/headers available for retry classification before
+ * any SSE machinery runs. Only a 2xx response is handed
  * to [EventSources.processResponse], which frames the stream (UTF-8, CR/LF,
  * comments, BOM, multiline data) so only complete `data:` payloads cross this
  * boundary. This split is required, not stylistic: once okhttp-sse starts
@@ -50,6 +51,21 @@ import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
  * the residual buffer at EOF (Codex's #9047 fix); because framing lives
  * below this boundary here, no parity workaround is attempted. Pinned by
  * OkHttpTransportTest's unterminated-terminal-frame probe.
+ *
+ * Timeouts mirror pi's two layers. The per-request
+ * [TransportRequest.timeoutMs] is the deadline pi's adapters hand to the
+ * provider SDKs, and every one of those covers DNS through response headers
+ * only: the OpenAI and Anthropic SDKs clear their fetch timeout when `fetch()`
+ * resolves, and codex cleans its `AbortSignal.timeout` after headers.
+ * okhttp-sse's `RealEventSource.processResponse` cancels `Call.timeout()` at
+ * the same point, so the timeout set here already has exactly that header-phase
+ * scope for every API alike — no per-API distinction is needed. Streamed body
+ * reads carry no whole-request deadline; their inter-read idle cap is the
+ * client's readTimeout, the analog of the undici dispatcher `bodyTimeout`
+ * (300s by default) that pi installs process-wide. Divergence (accepted):
+ * pi's mistral adapter alone threads its timeout signal into the body
+ * reader, capping that stream's total duration; here the body stays under
+ * the idle-only cap.
  */
 class OkHttpTransport(private val client: OkHttpClient = OkHttpClient()) : HttpStreamingTransport {
 
@@ -114,19 +130,12 @@ class OkHttpTransport(private val client: OkHttpClient = OkHttpClient()) : HttpS
             object : Callback {
                 override fun onResponse(call: Call, response: Response) {
                     if (!response.isSuccessful) {
-                        // Read at most ~4x the char cap (worst-case UTF-8) so a
-                        // huge error body is never fully buffered just to be
-                        // truncated.
-                        val readLimit = MAX_PROVIDER_ERROR_BODY_CHARS.toLong() * 4
-                        // Trim before truncating so the captured body matches
-                        // the shared error-body normalizer's convention.
+                        // Full body like pi's `await response.text()`; the
+                        // shared error-body normalizer trims and truncates for
+                        // display, and retry classification sees the same body
+                        // pi's adapters parse.
                         val errorBody = try {
-                            val source = response.body.source()
-                            source.request(readLimit)
-                            val buffered = source.buffer
-                            buffered.readUtf8(minOf(buffered.size, readLimit))
-                                .trim()
-                                .take(MAX_PROVIDER_ERROR_BODY_CHARS)
+                            response.body.string().trim()
                         } catch (_: IOException) {
                             ""
                         }
