@@ -12,6 +12,7 @@ import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.MessageRole
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.ProviderStreamException
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
@@ -536,10 +537,34 @@ object GoogleShared {
         return toolChoice?.let { mapToolChoice(it) }
     }
 
-    /** Maps a Gemini `FinishReason` wire string to a [StopReason]; anything but STOP/MAX_TOKENS is an error. */
+    /**
+     * Maps a Gemini `FinishReason` wire string to a [StopReason]. STOP and
+     * MAX_TOKENS are the success reasons; the SDK's remaining enumerated
+     * reasons are provider errors reported at stream end; any other value
+     * throws mid-stream, like pi's exhaustive switch over the SDK enum.
+     */
     fun mapStopReason(reason: String): StopReason = when (reason) {
         "STOP" -> StopReason.STOP
+
         "MAX_TOKENS" -> StopReason.LENGTH
-        else -> StopReason.ERROR
+
+        "FINISH_REASON_UNSPECIFIED",
+        "SAFETY",
+        "RECITATION",
+        "LANGUAGE",
+        "OTHER",
+        "BLOCKLIST",
+        "PROHIBITED_CONTENT",
+        "SPII",
+        "MALFORMED_FUNCTION_CALL",
+        "IMAGE_SAFETY",
+        "UNEXPECTED_TOOL_CALL",
+        "TOO_MANY_TOOL_CALLS",
+        "IMAGE_PROHIBITED_CONTENT",
+        "NO_IMAGE",
+        "IMAGE_RECITATION",
+        "IMAGE_OTHER" -> StopReason.ERROR
+
+        else -> throw ProviderStreamException("Unhandled stop reason: $reason")
     }
 }

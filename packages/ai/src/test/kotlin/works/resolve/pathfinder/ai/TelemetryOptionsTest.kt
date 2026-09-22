@@ -22,7 +22,6 @@ import works.resolve.pathfinder.ai.api.buildGoogleOptions
 import works.resolve.pathfinder.ai.api.buildMistralOptions
 import works.resolve.pathfinder.ai.api.buildOpenAICodexResponsesOptions
 import works.resolve.pathfinder.ai.api.buildOpenAiResponsesOptions
-import works.resolve.pathfinder.ai.api.toMistralOptions
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
@@ -88,12 +87,6 @@ class TelemetryOptionsTest {
         )
         assertSame(telemetry, buildGoogleOptions(model, context, options).telemetryContext)
         assertSame(telemetry, buildMistralOptions(model, context, options).telemetryContext)
-    }
-
-    @Test
-    fun `telemetryContext survives the mistral manual completions conversion by identity`() {
-        val options = SimpleStreamOptions(telemetryContext = telemetry).toStreamOptions(null)
-        assertSame(telemetry, toMistralOptions(model, options).telemetryContext)
     }
 
     @Test

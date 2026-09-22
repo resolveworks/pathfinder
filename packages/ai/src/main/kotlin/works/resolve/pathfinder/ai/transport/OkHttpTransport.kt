@@ -60,12 +60,13 @@ import okhttp3.sse.EventSources
  * okhttp-sse's `RealEventSource.processResponse` cancels `Call.timeout()` at
  * the same point, so the timeout set here already has exactly that header-phase
  * scope for every API alike — no per-API distinction is needed. Streamed body
- * reads carry no whole-request deadline; their inter-read idle cap is the
- * client's readTimeout, the analog of the undici dispatcher `bodyTimeout`
- * (300s by default) that pi installs process-wide. Divergence (accepted):
- * pi's mistral adapter alone threads its timeout signal into the body
- * reader, capping that stream's total duration; here the body stays under
- * the idle-only cap.
+ * reads carry no whole-request deadline at this layer; their inter-read idle
+ * cap is the client's readTimeout, the analog of the undici dispatcher
+ * `bodyTimeout` (300s by default) that pi installs process-wide. pi's mistral
+ * adapter alone threads its timeout signal into the body reader, capping that
+ * stream's total duration; the mistral adapter reproduces that cap with a
+ * `withTimeout` around its whole exchange, so no transport-level support is
+ * needed.
  */
 class OkHttpTransport(private val client: OkHttpClient = OkHttpClient()) : HttpStreamingTransport {
 

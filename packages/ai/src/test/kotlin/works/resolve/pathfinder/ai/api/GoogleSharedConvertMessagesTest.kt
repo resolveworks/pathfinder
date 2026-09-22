@@ -684,7 +684,13 @@ class GoogleSharedConvertToolsTest {
         assertEquals(StopReason.LENGTH, GoogleShared.mapStopReason("MAX_TOKENS"))
         assertEquals(StopReason.ERROR, GoogleShared.mapStopReason("SAFETY"))
         assertEquals(StopReason.ERROR, GoogleShared.mapStopReason("MALFORMED_FUNCTION_CALL"))
-        assertEquals(StopReason.ERROR, GoogleShared.mapStopReason("WHATEVER"))
+        assertEquals(StopReason.ERROR, GoogleShared.mapStopReason("TOO_MANY_TOOL_CALLS"))
+        assertEquals(StopReason.ERROR, GoogleShared.mapStopReason("IMAGE_OTHER"))
+        // pi's exhaustive switch throws mid-stream for values outside the SDK enum.
+        val failure = assertFailsWith<works.resolve.pathfinder.ai.ProviderStreamException> {
+            GoogleShared.mapStopReason("WHATEVER")
+        }
+        assertEquals("Unhandled stop reason: WHATEVER", failure.message)
     }
 
     @Test
