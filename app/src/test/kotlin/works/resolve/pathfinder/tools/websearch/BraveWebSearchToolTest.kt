@@ -12,11 +12,14 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.utils.validateToolArguments
 
 class BraveWebSearchToolTest {
 
@@ -61,26 +64,38 @@ class BraveWebSearchToolTest {
         assertTrue(tool.promptSnippet.contains("Search the web"))
     }
 
+    private fun BraveWebSearchTool.prepare(arguments: JsonObject): JsonObject =
+        validateToolArguments(
+            definition,
+            ToolCall(id = "t1", name = definition.name, arguments = arguments)
+        )
+
     @Test
-    fun `validation rejects missing and mistyped query`() {
+    fun `schema validation rejects missing query and coerces mistyped ones`() {
         val tool = tool()
-        assertFailsWith<IllegalArgumentException> { tool.validateArguments(args()) }
-        assertFailsWith<IllegalArgumentException> {
-            tool.validateArguments(buildJsonObject { put("query", 5) })
-        }
-        tool.validateArguments(args(query = "  "))
+        val missing = assertFailsWith<IllegalArgumentException> { tool.prepare(args()) }
+        assertTrue(missing.message!!.contains("must have required properties query"))
+        // pi coerces a numeric query to a string instead of rejecting it.
+        assertEquals(
+            "5",
+            tool.prepare(buildJsonObject { put("query", 5) })["query"]!!.jsonPrimitive.content
+        )
+        tool.prepare(args(query = "  "))
     }
 
     @Test
-    fun `validation rejects invalid freshness and accepts valid ones`() {
+    fun `schema validation rejects invalid freshness and accepts valid ones`() {
         val tool = tool()
-        assertFailsWith<IllegalArgumentException> {
-            tool.validateArguments(args(query = "q", freshness = "po"))
+        val invalid = assertFailsWith<IllegalArgumentException> {
+            tool.prepare(args(query = "q", freshness = "po"))
         }
+        assertTrue(
+            invalid.message!!.contains("must be equal to one of the allowed values")
+        )
         for (f in BraveWebSearchTool.FRESHNESS_VALUES) {
-            tool.validateArguments(args(query = "q", freshness = f))
+            tool.prepare(args(query = "q", freshness = f))
         }
-        tool.validateArguments(args(query = "q"))
+        tool.prepare(args(query = "q"))
     }
 
     @Test
@@ -88,7 +103,7 @@ class BraveWebSearchToolTest {
         server.enqueue(
             MockResponse().setBody("""{"web":{"results":[]}}""")
         )
-        tool().execute("t1", tool().validateArguments(args(query = "kotlin coroutines")), {})
+        tool().execute("t1", tool().prepare(args(query = "kotlin coroutines")), {})
 
         val recorded = server.takeRequest()
         assertEquals("GET", recorded.method)
@@ -105,7 +120,7 @@ class BraveWebSearchToolTest {
     @Test
     fun `includes freshness parameter when provided`() = runBlocking<Unit> {
         server.enqueue(MockResponse().setBody("""{"web":{"results":[]}}"""))
-        tool().execute("t1", tool().validateArguments(args(query = "q", freshness = "pw")), {})
+        tool().execute("t1", tool().prepare(args(query = "q", freshness = "pw")), {})
         assertTrue(server.takeRequest().path!!.contains("freshness=pw"))
     }
 
@@ -123,7 +138,7 @@ class BraveWebSearchToolTest {
                     """.trimIndent()
                 )
             )
-            val result = tool().execute("t1", tool().validateArguments(args(query = "q")), {})
+            val result = tool().execute("t1", tool().prepare(args(query = "q")), {})
             assertEquals(
                 "- [First](https://a.example): Desc one\n" +
                     "- [Second](https://b.example)\n" +
@@ -136,11 +151,11 @@ class BraveWebSearchToolTest {
     @Test
     fun `no results yields chosen message`() = runBlocking<Unit> {
         server.enqueue(MockResponse().setBody("""{"web":{"results":[]}}"""))
-        var result = tool().execute("t1", tool().validateArguments(args(query = "nothing")), {})
+        var result = tool().execute("t1", tool().prepare(args(query = "nothing")), {})
         assertEquals("No results found for \"nothing\".", resultText(result))
 
         server.enqueue(MockResponse().setBody("{}"))
-        result = tool().execute("t2", tool().validateArguments(args(query = "nothing")), {})
+        result = tool().execute("t2", tool().prepare(args(query = "nothing")), {})
         assertEquals("No results found for \"nothing\".", resultText(result))
         assertEquals("{}", result.details.toString())
     }
@@ -148,7 +163,7 @@ class BraveWebSearchToolTest {
     @Test
     fun `non-2xx response is returned as text content`() = runBlocking<Unit> {
         server.enqueue(MockResponse().setResponseCode(429).setBody("rate limited"))
-        val result = tool().execute("t1", tool().validateArguments(args(query = "q")), {})
+        val result = tool().execute("t1", tool().prepare(args(query = "q")), {})
         assertEquals("Search failed (429): rate limited", resultText(result))
         assertEquals("{}", result.details.toString())
     }
@@ -156,13 +171,13 @@ class BraveWebSearchToolTest {
     @Test
     fun `non-2xx body is capped and empty body falls back to status text`() = runBlocking<Unit> {
         server.enqueue(MockResponse().setResponseCode(500).setBody("x".repeat(10_000)))
-        var text = resultText(tool().execute("t1", tool().validateArguments(args(query = "q")), {}))
+        var text = resultText(tool().execute("t1", tool().prepare(args(query = "q")), {}))
         assertTrue(text.startsWith("Search failed (500): x"))
         assertTrue(text.length < 5000)
         assertTrue(text.contains("truncated"))
 
         server.enqueue(MockResponse().setResponseCode(503).setBody(""))
-        text = resultText(tool().execute("t2", tool().validateArguments(args(query = "q")), {}))
+        text = resultText(tool().execute("t2", tool().prepare(args(query = "q")), {}))
         // OkHttp supplies a reason phrase for the status code.
         assertTrue(text.startsWith("Search failed (503): "))
     }
@@ -170,7 +185,7 @@ class BraveWebSearchToolTest {
     @Test
     fun `missing api key returns stable message without a request`() = runBlocking<Unit> {
         key = null
-        val result = tool().execute("t1", tool().validateArguments(args(query = "q")), {})
+        val result = tool().execute("t1", tool().prepare(args(query = "q")), {})
         assertEquals(BraveWebSearchTool.MISSING_KEY_MESSAGE, resultText(result))
         assertEquals(0, server.requestCount)
     }
@@ -182,7 +197,7 @@ class BraveWebSearchToolTest {
         val tool = BraveWebSearchTool(client, { key }, url)
         runBlocking {
             assertFailsWith<java.io.IOException> {
-                tool.execute("t1", tool.validateArguments(args(query = "q")), {})
+                tool.execute("t1", tool.prepare(args(query = "q")), {})
             }
         }
     }
@@ -199,7 +214,7 @@ class BraveWebSearchToolTest {
             // while the request is dispatched (single-threaded event loop would
             // otherwise never start the call).
             val job = async(Dispatchers.IO) {
-                tool().execute("t1", tool().validateArguments(args(query = "q")), {})
+                tool().execute("t1", tool().prepare(args(query = "q")), {})
             }
             // Deterministically wait until the request is in flight before canceling.
             assertTrue(server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS) != null)

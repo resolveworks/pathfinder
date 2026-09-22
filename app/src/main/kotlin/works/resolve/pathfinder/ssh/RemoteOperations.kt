@@ -1,13 +1,16 @@
 package works.resolve.pathfinder.ssh
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.withTimeout
 import org.connectbot.sshlib.SessionExit
 import org.connectbot.sshlib.SftpClient
 import org.connectbot.sshlib.SftpOpenFlag
 import org.connectbot.sshlib.SftpResult
 import org.connectbot.sshlib.SftpStatusCode
+import works.resolve.pathfinder.ai.utils.jsNumber
 import works.resolve.pathfinder.codingagent.core.tools.BashOperations
 import works.resolve.pathfinder.codingagent.core.tools.EditOperations
 import works.resolve.pathfinder.codingagent.core.tools.IMAGE_TYPE_SNIFF_BYTES
@@ -57,16 +60,47 @@ private suspend fun connect(provider: SshConnectionProvider): SshConnection = tr
     throw OperationsException(connectionFailureMessage(e.detail))
 }
 
+private const val MAX_TIMEOUT_MS = 2_147_483_647L
+
+private const val MAX_TIMEOUT_SECONDS = "2147483.647"
+
+/**
+ * pi's `resolveTimeoutMs`, which the local shell operations run inside
+ * `exec`: validate the raw seconds value, then enforce it as a deadline.
+ * Expiry fails with pi's `timeout:<seconds>` message so the shell renders
+ * "Command timed out after N seconds" with the partial output; a genuine
+ * cancellation is not a timeout and propagates unchanged. Closing the
+ * cancelled scope's channel is the remote-kill analogue of pi's
+ * `killProcessTree`.
+ */
+internal suspend fun <T> withBashTimeout(timeout: Double?, block: suspend () -> T): T {
+    if (timeout == null) {
+        return block()
+    }
+    if (!timeout.isFinite() || timeout <= 0) {
+        throw IllegalStateException("Invalid timeout: must be a finite number of seconds")
+    }
+    val timeoutMs = timeout * 1000
+    if (timeoutMs > MAX_TIMEOUT_MS) {
+        throw IllegalStateException("Invalid timeout: maximum is $MAX_TIMEOUT_SECONDS seconds")
+    }
+    return try {
+        withTimeout(timeoutMs.toLong()) { block() }
+    } catch (e: TimeoutCancellationException) {
+        throw OperationsException("timeout:${jsNumber(timeout)}")
+    }
+}
+
 /**
  * Bash operations over the process-wide SSH connection, following pi's
  * ssh.ts extension: the command runs wrapped in `cd {cwd} && {command}`.
  *
- * [timeout] is left to the shell's `withTimeout` (category-3 adaptation):
- * this implementation performs no timeout handling of its own, and the
- * resulting cancellation closes the channel. Unlike pi's local shell, which
- * kills the process tree, remote termination is server-side best effort on
- * channel close. A channel that closes without `exit-status` or
- * `exit-signal` completes with no exit code, which the shell rejects.
+ * The raw `timeout` is validated and enforced here (pi's local shell
+ * operations own it; category-3 adaptation): expiry cancels the session —
+ * unlike pi's local shell, which kills the process tree, remote termination
+ * is server-side best effort on channel close — and surfaces as pi's
+ * `timeout:<seconds>` failure. A channel that closes without `exit-status`
+ * or `exit-signal` completes with no exit code, which the shell rejects.
  */
 class RemoteBashOperations(private val provider: SshConnectionProvider) : BashOperations {
 
@@ -75,7 +109,7 @@ class RemoteBashOperations(private val provider: SshConnectionProvider) : BashOp
         cwd: String,
         onData: (ByteArray) -> Unit,
         timeout: Double?
-    ): Int? {
+    ): Int? = withBashTimeout(timeout) {
         val connection = connect(provider)
         val session = connection.client.openSession()
             ?: throw OperationsException("SSH session channel could not be opened")
@@ -114,7 +148,7 @@ class RemoteBashOperations(private val provider: SshConnectionProvider) : BashOp
                 }
             }
             val exit = it.exitInfo.await()
-            return when (exit) {
+            when (exit) {
                 is SessionExit.Status -> exit.code.toInt()
                 is SessionExit.Signal -> 128 + posixSignalNumber(exit.signalName)
                 null -> null

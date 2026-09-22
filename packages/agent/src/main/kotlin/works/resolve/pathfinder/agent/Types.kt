@@ -140,15 +140,13 @@ interface AgentTool {
     val promptGuidelines: List<String> get() = emptyList()
 
     /**
-     * Validates raw parsed tool-call arguments against [definition.parameters]
-     * and may return a normalized copy. Instead of pi's TypeBox/JSON-Schema
-     * validation, each tool owns typed decoding/validation and throws on
-     * failure; the loop catches that and converts it to an error tool result.
-     *
-     * Pi's optional `prepareArguments` compatibility shim for legacy
-     * JS-extension tools (types.ts) is deliberately unported.
+     * pi's optional compatibility shim for raw tool-call arguments before
+     * schema validation (types.ts); must return an object that satisfies
+     * [definition.parameters]. Only the edit tool declares one, absorbing
+     * models that send `edits` as a JSON string or a single object, or
+     * legacy top-level `oldText`/`newText`.
      */
-    fun validateArguments(arguments: JsonObject): JsonObject
+    val prepareArguments: ((JsonObject) -> JsonObject)? get() = null
 
     /**
      * Execute the tool call, throwing on failure instead of encoding errors
@@ -225,7 +223,7 @@ sealed class AgentEvent {
 
     /**
      * [arguments] is the raw parsed JSON of the assistant call; validated
-     * arguments are used only for execution and in [ToolExecutionUpdate].
+     * arguments are used only for execution.
      */
     data class ToolExecutionStart(
         val toolCallId: String,
@@ -236,6 +234,7 @@ sealed class AgentEvent {
     data class ToolExecutionUpdate(
         val toolCallId: String,
         val toolName: String,
+        /** The call's raw parsed arguments, like pi. */
         val arguments: JsonObject,
         val partialResult: AgentToolResult
     ) : AgentEvent()

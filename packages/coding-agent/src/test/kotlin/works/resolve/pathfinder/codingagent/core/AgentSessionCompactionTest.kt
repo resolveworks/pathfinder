@@ -68,8 +68,6 @@ class AgentSessionCompactionTest {
                 )
                 override val label = "Large result"
 
-                override fun validateArguments(arguments: JsonObject) = arguments
-
                 override suspend fun execute(
                     toolCallId: String,
                     arguments: JsonObject,

@@ -4,14 +4,16 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
-import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.utils.validateToolArguments
 
 class WebFetchToolTest {
 
@@ -22,6 +24,11 @@ class WebFetchToolTest {
         error?.let { throw it }
         page
     }
+
+    private fun validateArguments(arguments: JsonObject): JsonObject = validateToolArguments(
+        tool.definition,
+        ToolCall(id = "call-1", name = WebFetchTool.NAME, arguments = arguments)
+    )
 
     private fun resultText(result: AgentToolResult): String =
         (result.content.single() as TextContent).text
@@ -51,36 +58,37 @@ class WebFetchToolTest {
     }
 
     @Test
-    fun `validation rejects missing url`() {
-        assertFailsWith<IllegalArgumentException> { tool.validateArguments(args()) }
-            .also { assertTrue(it.message!!.contains("missing required argument 'url'")) }
-    }
-
-    @Test
-    fun `validation rejects non-string url`() {
-        assertFailsWith<IllegalArgumentException> {
-            tool.validateArguments(buildJsonObject { put("url", 3) })
+    fun `schema validation rejects missing url with pi's message`() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            validateArguments(args())
         }
+        assertTrue(error.message!!.startsWith("Validation failed for tool \"web_fetch\""))
+        assertTrue(error.message!!.contains("must have required properties url"))
     }
 
     @Test
-    fun `validation rejects invalid non-http and relative urls`() {
+    fun `schema validation coerces a numeric url to a string`() {
+        val validated = validateArguments(buildJsonObject { put("url", 3) })
+        assertEquals("3", validated["url"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `execute rejects invalid non-http and relative urls`() {
         for (url in listOf("not a url", "ftp://example.com/", "/relative/path", "example.com")) {
             assertFailsWith<IllegalArgumentException>("expected rejection of '$url'") {
-                tool.validateArguments(args(url))
+                runBlocking { tool.execute("call-1", args(url)) {} }
             }
         }
     }
 
     @Test
-    fun `validation accepts absolute http and https urls`() {
+    fun `execute accepts absolute http and https urls`() {
         for (url in listOf(
             "https://example.com/",
             "http://example.com/path?q=1",
             "HTTPS://EXAMPLE.COM/"
         )) {
-            val validated = tool.validateArguments(args(url))
-            assertSame(validated["url"], validated["url"])
+            runBlocking { tool.execute("call-1", args(url)) {} }
         }
     }
 

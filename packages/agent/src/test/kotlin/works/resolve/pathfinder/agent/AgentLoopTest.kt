@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -97,15 +98,15 @@ class AgentLoopTest {
     private class FakeTool(
         override val definition: Tool = Tool("my_tool", "test tool", buildJsonObject {}),
         override val executionMode: ToolExecutionMode? = null,
-        val validate: (JsonObject) -> JsonObject = { it },
+        val prepare: ((JsonObject) -> JsonObject)? = null,
         val executeImpl: suspend (String, JsonObject, AgentToolUpdateCallback) -> AgentToolResult =
             { _, _, _ -> AgentToolResult(listOf(TextContent("ok"))) }
     ) : AgentTool {
         override val label = definition.name
 
-        val executedCalls = mutableListOf<Pair<String, JsonObject>>()
+        override val prepareArguments = prepare
 
-        override fun validateArguments(arguments: JsonObject): JsonObject = validate(arguments)
+        val executedCalls = mutableListOf<Pair<String, JsonObject>>()
 
         override suspend fun execute(
             toolCallId: String,
@@ -320,7 +321,7 @@ class AgentLoopTest {
         runTest {
             val tool = FakeTool(
                 Tool("my_tool", "d", buildJsonObject {}),
-                validate = { args ->
+                prepare = { args ->
                     if (args.containsKey("x")) {
                         args
                     } else {
@@ -580,8 +581,10 @@ class AgentLoopTest {
     }
 
     @Test
-    fun `validator rejection message becomes the error result`() = runTest {
-        val tool = FakeTool(validate = { throw IllegalArgumentException("bad args") })
+    fun `prepareArguments rejection message becomes the error result`() = runTest {
+        val tool = FakeTool(
+            prepare = { throw IllegalArgumentException("bad args") }
+        )
         val events = mutableListOf<AgentEvent>()
         val streamFn = scriptedStream(
             toolCallAssistant(ToolCall("c1", "my_tool", JsonObject(emptyMap()))),
@@ -596,6 +599,124 @@ class AgentLoopTest {
         val end = events.filterIsInstance<AgentEvent.ToolExecutionEnd>().single()
         assertTrue(end.isError)
         assertEquals("bad args", (end.result.content.single() as TextContent).text)
+        assertTrue(tool.executedCalls.isEmpty())
+    }
+
+    private val readLikeSchema: JsonObject = buildJsonObject {
+        put("type", "object")
+        put(
+            "properties",
+            buildJsonObject {
+                put(
+                    "path",
+                    buildJsonObject {
+                        put("type", "string")
+                    }
+                )
+                put(
+                    "limit",
+                    buildJsonObject {
+                        put("type", "number")
+                    }
+                )
+            }
+        )
+        put("required", JsonArray(listOf(JsonPrimitive("path"))))
+    }
+
+    @Test
+    fun `schema validation coerces a numeric path argument and executes the tool`() = runTest {
+        val tool = FakeTool(Tool("read", "d", readLikeSchema))
+        val events = mutableListOf<AgentEvent>()
+        val streamFn = scriptedStream(
+            toolCallAssistant(
+                ToolCall("c1", "read", buildJsonObject { put("path", 42) })
+            ),
+            assistant("done")
+        )
+        runAgentLoop(
+            listOf(UserMessage.ofText("q")),
+            toolContext(tool),
+            AgentLoopConfig(model, streamFn = streamFn)
+        ) { events.add(it) }
+
+        val end = events.filterIsInstance<AgentEvent.ToolExecutionEnd>().single()
+        assertFalse(end.isError)
+        val executedArguments = tool.executedCalls.single().second
+        assertEquals(JsonPrimitive("42"), executedArguments["path"])
+        // Raw arguments stay untouched on the call.
+        val start = events.filterIsInstance<AgentEvent.ToolExecutionStart>().single()
+        assertEquals(JsonPrimitive(42), start.arguments["path"])
+    }
+
+    @Test
+    fun `uncoercible numeric string fails with pi's validation message`() = runTest {
+        val tool = FakeTool(Tool("read", "d", readLikeSchema))
+        val events = mutableListOf<AgentEvent>()
+        val streamFn = scriptedStream(
+            toolCallAssistant(
+                ToolCall(
+                    "c1",
+                    "read",
+                    buildJsonObject {
+                        put("path", "a.txt")
+                        put("limit", "abc")
+                    }
+                )
+            ),
+            assistant("done")
+        )
+        val result = runAgentLoop(
+            listOf(UserMessage.ofText("q")),
+            toolContext(tool),
+            AgentLoopConfig(model, streamFn = streamFn)
+        ) { events.add(it) }
+
+        val end = events.filterIsInstance<AgentEvent.ToolExecutionEnd>().single()
+        assertTrue(end.isError)
+        assertEquals(
+            "Validation failed for tool \"read\":\n" +
+                "  - limit: must be number\n\n" +
+                "Received arguments:\n" +
+                "{\n" +
+                "  \"path\": \"a.txt\",\n" +
+                "  \"limit\": \"abc\"\n" +
+                "}",
+            (end.result.content.single() as TextContent).text
+        )
+        assertTrue(tool.executedCalls.isEmpty())
+        // The failure teaches the model: the tool result spawns a follow-up turn.
+        assertEquals(2, typeLabels(events).count { it == "TurnStart" })
+        assertEquals(4, result.size)
+    }
+
+    @Test
+    fun `missing required property fails with pi's multi-line message`() = runTest {
+        val tool = FakeTool(Tool("read", "d", readLikeSchema))
+        val events = mutableListOf<AgentEvent>()
+        val streamFn = scriptedStream(
+            toolCallAssistant(
+                ToolCall("c1", "read", buildJsonObject { put("limit", 5) })
+            ),
+            assistant("done")
+        )
+        runAgentLoop(
+            listOf(UserMessage.ofText("q")),
+            toolContext(tool),
+            AgentLoopConfig(model, streamFn = streamFn)
+        ) { events.add(it) }
+
+        val end = events.filterIsInstance<AgentEvent.ToolExecutionEnd>().single()
+        assertTrue(end.isError)
+        assertEquals(
+            "Validation failed for tool \"read\":\n" +
+                "  - path: must have required properties path\n\n" +
+                "Received arguments:\n" +
+                "{\n" +
+                "  \"limit\": 5\n" +
+                "}",
+            (end.result.content.single() as TextContent).text
+        )
         assertTrue(tool.executedCalls.isEmpty())
     }
 

@@ -79,27 +79,6 @@ class BraveWebSearchTool(
         "Use web_search when the user asks you to look up current information, facts, or content from the web."
     )
 
-    override fun validateArguments(arguments: JsonObject): JsonObject {
-        val query = arguments["query"] as? JsonPrimitive
-        when {
-            arguments["query"] == null ->
-                throw IllegalArgumentException("web_search: missing required argument 'query'")
-
-            query == null || !query.isString ->
-                throw IllegalArgumentException("web_search: 'query' must be a string")
-        }
-        val freshness = arguments["freshness"]
-        if (freshness != null) {
-            val value = (freshness as? JsonPrimitive)?.takeIf { it.isString }?.content
-            if (value == null || value !in FRESHNESS_VALUES) {
-                throw IllegalArgumentException(
-                    "web_search: 'freshness' must be one of ${FRESHNESS_VALUES.joinToString("/")}"
-                )
-            }
-        }
-        return arguments
-    }
-
     override suspend fun execute(
         toolCallId: String,
         arguments: JsonObject,

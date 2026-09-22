@@ -14,7 +14,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -510,9 +511,9 @@ class AgentTest {
     }
 
     private fun fakeTool(name: String): AgentTool = object : AgentTool {
-        override val definition = Tool(name, "fake $name", JsonPrimitive("object"))
+        override val definition =
+            Tool(name, "fake $name", buildJsonObject { put("type", "object") })
         override val label = name
-        override fun validateArguments(arguments: JsonObject) = arguments
         override suspend fun execute(
             toolCallId: String,
             arguments: JsonObject,
@@ -640,9 +641,9 @@ class AgentTest {
         runTest {
             val toolStarted = CompletableDeferred<Unit>()
             val tool = object : AgentTool {
-                override val definition = Tool("slow_tool", "slow tool", JsonPrimitive("object"))
+                override val definition =
+                    Tool("slow_tool", "slow tool", buildJsonObject { put("type", "object") })
                 override val label = "slow_tool"
-                override fun validateArguments(arguments: JsonObject) = arguments
                 override suspend fun execute(
                     toolCallId: String,
                     arguments: JsonObject,
@@ -824,9 +825,14 @@ class AgentTest {
         lateinit var delayedUpdate: AgentToolUpdateCallback
         val tool = object : AgentTool {
             override val definition =
-                Tool("delayed_tool", "captures progress callbacks", JsonPrimitive("object"))
+                Tool(
+                    "delayed_tool",
+                    "captures progress callbacks",
+                    buildJsonObject {
+                        put("type", "object")
+                    }
+                )
             override val label = "delayed_tool"
-            override fun validateArguments(arguments: JsonObject) = arguments
             override suspend fun execute(
                 toolCallId: String,
                 arguments: JsonObject,
@@ -880,9 +886,14 @@ class AgentTest {
         lateinit var settledUpdate: AgentToolUpdateCallback
         val settledTool = object : AgentTool {
             override val definition =
-                Tool("settled_tool", "settles immediately", JsonPrimitive("object"))
+                Tool(
+                    "settled_tool",
+                    "settles immediately",
+                    buildJsonObject {
+                        put("type", "object")
+                    }
+                )
             override val label = "settled_tool"
-            override fun validateArguments(arguments: JsonObject) = arguments
             override suspend fun execute(
                 toolCallId: String,
                 arguments: JsonObject,
@@ -894,9 +905,8 @@ class AgentTest {
         }
         val slowTool = object : AgentTool {
             override val definition =
-                Tool("slow_tool", "keeps the run active", JsonPrimitive("object"))
+                Tool("slow_tool", "keeps the run active", buildJsonObject { put("type", "object") })
             override val label = "slow_tool"
-            override fun validateArguments(arguments: JsonObject) = arguments
             override suspend fun execute(
                 toolCallId: String,
                 arguments: JsonObject,

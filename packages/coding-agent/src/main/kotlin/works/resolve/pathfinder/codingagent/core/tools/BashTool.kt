@@ -2,11 +2,9 @@ package works.resolve.pathfinder.codingagent.core.tools
 
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -46,24 +44,6 @@ class BashToolDetails(val truncation: TruncationResult?, val fullOutputPath: Str
  */
 const val BASH_UPDATE_THROTTLE_MS = 100L
 
-private const val MAX_TIMEOUT_MS = 2_147_483_647L
-
-private const val MAX_TIMEOUT_SECONDS = "2147483.647"
-
-private fun resolveTimeoutMs(timeout: Double?): Long? {
-    if (timeout == null) {
-        return null
-    }
-    if (!timeout.isFinite() || timeout <= 0) {
-        throw IllegalStateException("Invalid timeout: must be a finite number of seconds")
-    }
-    val timeoutMs = timeout * 1000
-    if (timeoutMs > MAX_TIMEOUT_MS) {
-        throw IllegalStateException("Invalid timeout: maximum is $MAX_TIMEOUT_SECONDS seconds")
-    }
-    return timeoutMs.toLong()
-}
-
 /**
  * The bash tool shell.
  *
@@ -72,14 +52,14 @@ private fun resolveTimeoutMs(timeout: Double?): Long? {
  *   detection and the env/spawn-hook machinery are unported).
  * - pi's AbortSignal is coroutine cancellation. Upstream's local operations
  *   kill the process tree and the shell converts that into a rejection whose
- *   message carries the partial output; here cancellation (and timeout, via
- *   `withTimeout`) is caught, the accumulated output snapshotted, and pi's
- *   exact "Command aborted"/"Command timed out after N seconds" error thrown
- *   instead — a plain CancellationException cannot carry the partial-output
- *   payload. Operations may also fail with pi's "aborted"/"timeout:N"
- *   messages; those are detected identically to upstream.
- * - Timeout validation (pi's `resolveTimeoutMs`, inside the local
- *   operations) happens in the shell, with pi's messages.
+ *   message carries the partial output; here cancellation is caught, the
+ *   accumulated output snapshotted, and pi's exact "Command aborted" error
+ *   thrown instead — a plain CancellationException cannot carry the
+ *   partial-output payload. Operations may also fail with pi's
+ *   "aborted"/"timeout:N" messages; those are detected identically to
+ *   upstream.
+ * - Like pi's shell, the raw `timeout` value is forwarded to the operations,
+ * which own validation and enforcement (see [BashOperations.exec]).
  * - The session-environment feature (PI_* env, its guideline bullet) is
  *   unported: bash contributes its prompt snippet but no guidelines.
  */
@@ -123,14 +103,6 @@ class BashTool internal constructor(private val cwd: String, private val options
 
     override val promptSnippet: String = "Execute bash commands (ls, grep, find, etc.)"
 
-    override fun validateArguments(arguments: JsonObject): JsonObject {
-        requireString(arguments, "command")
-        arguments.double("timeout")?.let { timeout ->
-            require(timeout.isFinite()) { "bash: 'timeout' must be a number" }
-        }
-        return arguments
-    }
-
     override suspend fun execute(
         toolCallId: String,
         arguments: JsonObject,
@@ -140,7 +112,6 @@ class BashTool internal constructor(private val cwd: String, private val options
             arguments.str("command")
                 ?: throw IllegalArgumentException("bash: missing required argument 'command'")
         val timeout = arguments.double("timeout")
-        val timeoutMs = resolveTimeoutMs(timeout)
 
         val output =
             OutputAccumulator(
@@ -270,19 +241,7 @@ class BashTool internal constructor(private val cwd: String, private val options
             try {
                 val exitCode: Int?
                 try {
-                    val timeoutSeconds = timeout
-                    exitCode = if (timeoutMs != null) {
-                        withTimeout(timeoutMs) {
-                            options.operations.exec(command, cwd, handleData, timeoutSeconds)
-                        }
-                    } else {
-                        options.operations.exec(command, cwd, handleData, timeoutSeconds)
-                    }
-                } catch (err: TimeoutCancellationException) {
-                    val (text) = formatOutput(finishOutput(), "")
-                    throw IllegalStateException(
-                        appendStatus(text, "Command timed out after ${jsNumber(timeout)} seconds")
-                    )
+                    exitCode = options.operations.exec(command, cwd, handleData, timeout)
                 } catch (err: CancellationException) {
                     val (text) = formatOutput(finishOutput(), "")
                     throw IllegalStateException(appendStatus(text, "Command aborted"))

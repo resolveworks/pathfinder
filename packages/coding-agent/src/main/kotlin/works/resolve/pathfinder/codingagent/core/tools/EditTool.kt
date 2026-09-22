@@ -38,7 +38,8 @@ private fun isSingleEditInput(value: Any?): Boolean {
 }
 
 /**
- * pi's `prepareArguments` compatibility shims, run during validation:
+ * pi's `prepareArguments` compatibility shims, run by the agent loop before
+ * schema validation:
  * - some models send `edits` as a JSON string instead of an array
  * - some send a single edit object instead of a one-element array
  * - legacy calls carry top-level `oldText`/`newText` instead of `edits`
@@ -86,10 +87,11 @@ private fun validateEditInput(input: JsonObject): List<Edit> {
         )
     }
     return editsArray.mapIndexed { index, element ->
-        val edit = element as? JsonObject
-            ?: throw IllegalArgumentException(
-                "edits[$index] must be an object with oldText and newText strings"
-            )
+        val edit =
+            element as? JsonObject
+                ?: throw IllegalArgumentException(
+                    "edits[$index] must be an object with oldText and newText strings"
+                )
         val oldText = edit.str("oldText")
         val newText = edit.str("newText")
         if (oldText == null || newText == null) {
@@ -199,19 +201,7 @@ class EditTool internal constructor(private val cwd: String, private val options
             "Do not pad with large unchanged regions."
     )
 
-    override fun validateArguments(arguments: JsonObject): JsonObject {
-        val prepared = prepareEditArguments(arguments)
-        requireString(prepared, "path")
-        val edits = prepared["edits"]
-        if (edits == null) {
-            throw IllegalArgumentException("missing required argument 'edits'")
-        }
-        if (edits !is JsonArray) {
-            throw IllegalArgumentException("'edits' must be an array")
-        }
-        validateEditInput(prepared)
-        return prepared
-    }
+    override val prepareArguments: ((JsonObject) -> JsonObject)? = ::prepareEditArguments
 
     override suspend fun execute(
         toolCallId: String,
