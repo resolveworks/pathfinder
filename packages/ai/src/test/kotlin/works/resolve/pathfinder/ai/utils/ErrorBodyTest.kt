@@ -203,8 +203,10 @@ class ErrorBodyTest {
             """Mistral API error (403): {"message":"blocked by gateway"}""",
             api.formatMistralError(httpError(403, """{"message":"blocked by gateway"}"""))
         )
+        // No reason phrase on the transport (HTTP/2): pi's MistralHttpError
+        // falls back to the status-line composition.
         assertEquals(
-            "Mistral API error (403): 403 status code (no body)",
+            "Mistral API error (403): Request failed with status 403",
             api.formatMistralError(httpError(403, ""))
         )
     }

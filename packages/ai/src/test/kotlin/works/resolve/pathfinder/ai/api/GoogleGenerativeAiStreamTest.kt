@@ -5,10 +5,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -338,7 +341,12 @@ class GoogleGenerativeAiStreamTest {
         val body = Json.parseToJsonElement(
             transport.requests.single().body.decodeToString()
         ).jsonObject
-        assertEquals("be brief", body["systemInstruction"]!!.jsonPrimitive.content)
+        // The SDK expands a string systemInstruction config into a user
+        // Content on the wire (tContent → contentToMldev).
+        assertEquals(
+            """{"parts":[{"text":"be brief"}],"role":"user"}""",
+            body["systemInstruction"].toString()
+        )
         assertTrue(body.containsKey("tools"))
         assertEquals(
             "ANY",
@@ -552,6 +560,125 @@ class GoogleGenerativeAiStreamTest {
     }
 
     @Test
+    fun `caller supplied api key header is not overridden by the derived one`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
+        api(transport).stream(
+            model.copy(headers = mapOf("X-Model" to "m")),
+            context,
+            GoogleGenerativeAiApi.GoogleOptions(
+                apiKey = "derived-key",
+                headers = mapOf("X-Goog-Api-Key" to "caller-key")
+            )
+        ).toList()
+
+        val headers = transport.requests.single().headers
+        // Exactly one key header, the caller's — the SDK's auth only adds its
+        // derived key when none is present (case-insensitive).
+        val keyHeaders = headers.filterKeys { it.lowercase() == "x-goog-api-key" }
+        assertEquals(1, keyHeaders.size, "duplicate key headers: $headers")
+        assertEquals("caller-key", keyHeaders.values.single())
+    }
+
+    @Test
+    fun `model supplied api key header suppresses the derived one`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
+        api(transport).stream(
+            model.copy(headers = mapOf("x-goog-api-key" to "model-key")),
+            context,
+            GoogleGenerativeAiApi.GoogleOptions(apiKey = "derived-key")
+        ).toList()
+        assertEquals("model-key", transport.requests.single().headers["x-goog-api-key"])
+    }
+
+    @Test
+    fun `unknown finish reason fails mid stream`() = runTest {
+        // pi's exhaustive FinishReason switch throws for values outside the
+        // SDK enum, so the stream stops at the offending chunk.
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"candidates":[{"content":{"parts":[{"text":"a"}]}}]}""",
+                """{"candidates":[{"finishReason":"SOME_NEW_REASON"}]}""",
+                """{"candidates":[{"content":{"parts":[{"text":"after"}]},"finishReason":"STOP"}]}"""
+            )
+        )
+        val events = events(transport)
+        val error = assertIs<AssistantMessageEvent.Error>(events.last())
+        assertEquals("Unhandled stop reason: SOME_NEW_REASON", error.error.errorMessage)
+        assertEquals("SOME_NEW_REASON", error.error.rawStopReason)
+        // The chunk after the unknown reason was never consumed.
+        assertTrue(
+            events.filterIsInstance<AssistantMessageEvent.TextDelta>().map { it.delta } ==
+                listOf("a"),
+            "stream must stop at the unknown finish reason"
+        )
+    }
+
+    @Test
+    fun `empty finish reason counts as absent`() = runTest {
+        // pi's truthiness guard (`if (candidate?.finishReason)`) skips "",
+        // leaving the stream pending.
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"candidates":[{"content":{"parts":[{"text":"a"}]},"finishReason":""}]}"""
+            )
+        )
+        val events = events(transport)
+        val error = assertIs<AssistantMessageEvent.Error>(events.last())
+        assertEquals("Google stream ended without a finish reason", error.error.errorMessage)
+        assertNull(error.error.rawStopReason)
+    }
+
+    @Test
+    fun `generated tool call ids use per call wall time`() = runTest {
+        // pi reads Date.now() per generated id, so two calls in one stream
+        // carry different timestamps once the clock moves.
+        val clock = TickingClock(1_770_000_000_000L)
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"candidates":[{"content":{"parts":[
+                    {"functionCall":{"name":"a","args":{}}},
+                    {"functionCall":{"name":"b","args":{}}}
+                    ]},"finishReason":"STOP"}]}"""
+            )
+        )
+        val calls = GoogleGenerativeAiApi(
+            transport,
+            works.resolve.pathfinder.ai.utils.ProviderRetry(sleep = {
+            }, clock = FakeClock(0L), random = { 0.0 }),
+            clock = clock
+        ).stream(model, context, GoogleGenerativeAiApi.GoogleOptions(apiKey = "k"))
+            .toList()
+            .filterIsInstance<AssistantMessageEvent.ToolCallEnd>()
+            .map { it.toolCall }
+
+        val stamps = calls.map { it.id.split("_")[1].toLong() }
+        assertEquals(2, calls.size)
+        assertTrue(stamps[0] != stamps[1], "ids shared one timestamp: ${calls.map { it.id }}")
+    }
+
+    @Test
+    fun `empty generationConfig is still serialized`() = runTest {
+        // The SDK always serializes the config object, so the wire carries
+        // "generationConfig": {} even with nothing to configure.
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
+        api(transport).stream(
+            model.copy(reasoning = false),
+            context,
+            GoogleGenerativeAiApi.GoogleOptions(apiKey = "k")
+        ).toList()
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
+        assertEquals(JsonObject(emptyMap()), body["generationConfig"])
+    }
+
+    @Test
     fun `explicit request headers override the default User-Agent`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
@@ -609,5 +736,12 @@ class GoogleGenerativeAiStreamTest {
         assertEquals(0, done.message.usage.output)
         assertEquals(0, done.message.usage.reasoning)
         assertEquals(12, done.message.usage.totalTokens)
+    }
+
+    /** Advances one millisecond on every read, exposing per-call clock use. */
+    private class TickingClock(startEpochMs: Long) : Clock {
+        private var current = startEpochMs
+
+        override fun now(): Instant = Instant.fromEpochMilliseconds(current++)
     }
 }

@@ -543,6 +543,66 @@ class MistralConversationsApiTest {
     }
 
     @Test
+    fun `streamed text and thinking deltas are surrogate sanitized`() = runTest {
+        // pi applies sanitizeSurrogates to every streamed delta before
+        // appending: lone surrogates vanish, valid pairs survive, and a
+        // thinking delta reduced to nothing opens no block at all.
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"id":"r","choices":[{"index":0,"finish_reason":null,
+                   "delta":{"content":"a\uD800b"}}]}""",
+                """{"id":"r","choices":[{"index":0,"finish_reason":null,
+                   "delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"\uD83D"}]}]}}]}""",
+                """{"id":"r","choices":[{"index":0,"finish_reason":null,
+                   "delta":{"content":[{"type":"text","text":"ok\uD83D\uDE00"}]}}]}""",
+                terminalEvent(),
+                "[DONE]"
+            )
+        )
+        val events = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        // The thinking delta sanitized to nothing, so it neither opens a
+        // block nor breaks the open text one.
+        assertEquals(listOf(TextContent("abok\uD83D\uDE00")), done.message.content)
+        assertTrue(events.none { it is AssistantMessageEvent.ThinkingStart })
+    }
+
+    @Test
+    fun `bodyless http errors use the status line reason`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueError(401, "", statusText = "Unauthorized")
+        val error = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+            .last()
+        val errorEvent = assertIs<AssistantMessageEvent.Error>(error)
+        assertEquals(StopReason.ERROR, errorEvent.error.stopReason)
+        assertEquals("Mistral API error (401): Unauthorized", errorEvent.error.errorMessage)
+    }
+
+    @Test
+    fun `timeout expiry mid body ends as an error event not cancellation`() = runTest {
+        // pi threads its AbortSignal.timeout into the body reader, capping the
+        // whole exchange; expiry surfaces as TimeoutError, an error event.
+        val transport = FakeTransport()
+        transport.enqueueHangingResponse(
+            """{"id":"r","choices":[{"index":0,"finish_reason":null,
+               "delta":{"content":"partial"}}]}"""
+        )
+        val events = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test", timeoutMs = 5))
+            .toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.last())
+        assertEquals(StopReason.ERROR, error.reason)
+        assertEquals("The operation was aborted due to timeout", error.error.errorMessage)
+        // Deltas received before expiry survive in the error snapshot.
+        assertEquals(listOf(TextContent("partial")), error.error.content)
+    }
+
+    @Test
     fun `preserves raw finish reasons for successful stops`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(terminalEvent("stop"), "[DONE]"))

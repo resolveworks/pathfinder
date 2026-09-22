@@ -2,8 +2,10 @@ package works.resolve.pathfinder.ai.api
 
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -170,32 +172,6 @@ internal fun buildMistralOptions(
     )
 }
 
-internal fun toMistralOptions(model: Model, options: OpenAiCompletionsOptions): MistralOptions {
-    val useReasoning = model.reasoning && options.reasoningEffort != null
-    return MistralOptions(
-        apiKey = options.apiKey,
-        sessionId = options.sessionId,
-        temperature = options.temperature,
-        maxTokens = options.maxTokens,
-        timeoutMs = options.timeoutMs,
-        maxRetries = options.maxRetries,
-        maxRetryDelayMs = options.maxRetryDelayMs,
-        env = options.env,
-        headers = options.headers,
-        promptMode = if (useReasoning && usesPromptModeReasoning(model)) {
-            MistralPromptMode.REASONING
-        } else {
-            null
-        },
-        reasoningEffort = if (useReasoning && usesReasoningEffort(model)) {
-            mapReasoningEffort(model, options.reasoningEffort)
-        } else {
-            null
-        },
-        telemetryContext = options.telemetryContext
-    )
-}
-
 /**
  * Native Mistral Chat Completions streaming adapter.
  *
@@ -209,12 +185,6 @@ class MistralConversationsApi(
     private val transport: HttpStreamingTransport,
     private val clock: Clock = Clock.System
 ) : ChatApi {
-
-    fun stream(
-        model: Model,
-        context: TranscriptContext,
-        options: OpenAiCompletionsOptions
-    ): Flow<AssistantMessageEvent> = stream(model, context, toMistralOptions(model, options))
 
     fun stream(
         model: Model,
@@ -248,50 +218,78 @@ class MistralConversationsApi(
 
             val url = model.baseUrl.trimEnd('/') + "/v1/chat/completions"
             val (bearerToken, headers) = buildMistralHeaders(model, apiKey, options)
+            val timeoutMs = options.timeoutMs ?: DEFAULT_TIMEOUT_MS
             val request = TransportRequest(
                 url = url,
                 bearerToken = bearerToken,
                 headers = headers,
                 body = payload.toString().toByteArray(Charsets.UTF_8),
-                timeoutMs = options.timeoutMs ?: DEFAULT_TIMEOUT_MS
+                timeoutMs = timeoutMs
             )
 
-            val response = try {
-                transport.post(request)
-            } catch (error: ProviderHttpException) {
-                options.onResponse?.invoke(
-                    ProviderResponse(error.status, headersToRecord(error.headers)),
-                    model
-                )
-                throw error
-            }
-            options.onResponse?.invoke(
-                ProviderResponse(response.status, headersToRecord(response.headers)),
-                model
-            )
-
-            emit(AssistantMessageEvent.Start(state.snapshot()))
-
+            // Alone among pi's adapters, mistral threads its
+            // AbortSignal.timeout into the body reader, so the deadline caps
+            // the whole exchange — request plus streamed body — not just the
+            // header phase the transport enforces. Expiry throws the signal's
+            // TimeoutError reason, which surfaces below as a terminal error
+            // event (Node's DOMException message), never as cancellation.
+            // Failures are re-thrown outside the withTimeout: crossing its
+            // boundary triggers kotlinx's stack-trace recovery, which
+            // re-parents the copy's cause and would bury the platform failure
+            // the error formatter reads.
+            var exchangeFailure: Exception? = null
             try {
-                response.events.collect { event ->
-                    processSseEvent(event, model, state).forEach { emit(it) }
-                    if (state.done) throw DoneSentinel()
+                withTimeout(timeoutMs) {
+                    try {
+                        val response = try {
+                            transport.post(request)
+                        } catch (error: ProviderHttpException) {
+                            options.onResponse?.invoke(
+                                ProviderResponse(error.status, headersToRecord(error.headers)),
+                                model
+                            )
+                            throw error
+                        }
+                        options.onResponse?.invoke(
+                            ProviderResponse(response.status, headersToRecord(response.headers)),
+                            model
+                        )
+
+                        emit(AssistantMessageEvent.Start(state.snapshot()))
+
+                        try {
+                            response.events.collect { event ->
+                                processSseEvent(event, model, state).forEach { emit(it) }
+                                if (state.done) throw DoneSentinel()
+                            }
+                        } catch (_: DoneSentinel) {
+                            // Stop consuming promptly after [DONE]; cancelling the
+                            // collector closes the transport call.
+                        }
+
+                        state.finishOpenBlocks().forEach { emit(it) }
+
+                        if (state.stopReason == StopReason.PENDING) {
+                            throw ProviderStreamException(
+                                "Mistral stream ended without a finish reason"
+                            )
+                        }
+                        if (state.stopReason == StopReason.ERROR) {
+                            throw ProviderStreamException(
+                                state.errorMessage ?: "An unknown error occurred"
+                            )
+                        }
+
+                        emit(AssistantMessageEvent.Done(state.stopReason, state.snapshot()))
+                    } catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        exchangeFailure = error
+                    }
                 }
-            } catch (_: DoneSentinel) {
-                // Stop consuming promptly after [DONE]; cancelling the
-                // collector closes the transport call.
+            } catch (error: TimeoutCancellationException) {
+                throw ProviderStreamException(TIMEOUT_EXPIRED_MESSAGE)
             }
-
-            state.finishOpenBlocks().forEach { emit(it) }
-
-            if (state.stopReason == StopReason.PENDING) {
-                throw ProviderStreamException("Mistral stream ended without a finish reason")
-            }
-            if (state.stopReason == StopReason.ERROR) {
-                throw ProviderStreamException(state.errorMessage ?: "An unknown error occurred")
-            }
-
-            emit(AssistantMessageEvent.Done(state.stopReason, state.snapshot()))
+            exchangeFailure?.let { throw it }
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             val finalMessage = state.snapshot().copy(
@@ -361,7 +359,7 @@ class MistralConversationsApi(
         if (delta != null) {
             when (val content = delta["content"]) {
                 is JsonPrimitive -> if (content != JsonNull) {
-                    events += state.appendText(content.content)
+                    events += state.appendText(sanitizeSurrogates(content.content))
                 }
 
                 is JsonArray -> for (item in content) {
@@ -373,10 +371,17 @@ class MistralConversationsApi(
                                 ?.filter { it.isNotEmpty() }
                                 ?.joinToString("")
                                 ?: ""
-                            if (deltaText.isNotEmpty()) events += state.appendThinking(deltaText)
+                            // pi sanitizes before the emptiness check, so a
+                            // delta reduced to nothing opens no block.
+                            val thinkingDelta = sanitizeSurrogates(deltaText)
+                            if (thinkingDelta.isNotEmpty()) {
+                                events += state.appendThinking(thinkingDelta)
+                            }
                         }
 
-                        "text" -> events += state.appendText(obj["text"].strOrNull() ?: "")
+                        "text" -> events += state.appendText(
+                            sanitizeSurrogates(obj["text"].strOrNull() ?: "")
+                        )
                     }
                 }
 
@@ -439,7 +444,12 @@ class MistralConversationsApi(
                     MAX_PROVIDER_ERROR_BODY_CHARS
                 )}"
             } else {
-                "Mistral API error (${error.status}): ${error.message}"
+                // pi's MistralHttpError message is the status-line reason
+                // phrase, falling back to the status when the transport
+                // carried none (HTTP/2).
+                val reason = error.statusText?.takeIf { it.isNotEmpty() }
+                    ?: "Request failed with status ${error.status}"
+                "Mistral API error (${error.status}): $reason"
             }
         }
 
@@ -518,6 +528,9 @@ class MistralConversationsApi(
 
         /** pi's AbortSignal.timeout default. */
         const val DEFAULT_TIMEOUT_MS = 60_000L
+
+        /** Node's TimeoutError DOMException message, which pi's abort reason carries. */
+        const val TIMEOUT_EXPIRED_MESSAGE = "The operation was aborted due to timeout"
     }
 }
 

@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
@@ -55,8 +57,8 @@ import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
-import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strOrNull
+import works.resolve.pathfinder.ai.utils.truthyString
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
@@ -146,11 +148,18 @@ class GoogleGenerativeAiApi(
         val baseUrl = model.baseUrl.trim().trimEnd('/').ifBlank { DEFAULT_BASE_URL }
         val url = "$baseUrl/models/${model.id}:streamGenerateContent?alt=sse"
 
-        val headers = mergeHeaders(
+        // The SDK's Node auth appends its derived key header only when none
+        // is present (case-insensitive); a caller-supplied one wins.
+        val mergedHeaders = mergeHeaders(
             mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), model.headers),
             options.headers
-        ).filterValues { it != null }
-            .mapValues { it.value!! } + mapOf("x-goog-api-key" to apiKey)
+        ).filterValues { it != null }.mapValues { it.value!! }
+        val headers =
+            if (mergedHeaders.keys.any { it.equals("x-goog-api-key", ignoreCase = true) }) {
+                mergedHeaders
+            } else {
+                mergedHeaders + ("x-goog-api-key" to apiKey)
+            }
 
         // onPayload is suspend, so the plan is built inside the flow, at
         // collection time.
@@ -243,7 +252,7 @@ internal object GoogleStreamEngine {
         model: Model,
         plan: Plan
     ): Flow<AssistantMessageEvent> = flow {
-        val state = State(model, clock.now().toEpochMilliseconds())
+        val state = State(model, clock)
         try {
             // Retries cover only the request, never the SSE stream.
             //
@@ -326,7 +335,11 @@ internal object GoogleStreamEngine {
      * functionCall parts close any open block and emit a complete tool call
      * (start, delta of the raw args JSON, end).
      */
-    private class State(private val model: Model, private val timestampMs: Long) {
+    private class State(private val model: Model, private val clock: Clock) {
+        // pi fixes the message timestamp at stream start; only tool-call ids
+        // re-read the wall clock.
+        private val timestampMs = clock.now().toEpochMilliseconds()
+
         private val content = mutableListOf<Content>()
         private var currentText: StringBuilder? = null
         private var currentTextSignature: String? = null
@@ -397,7 +410,7 @@ internal object GoogleStreamEngine {
                 events += processPart(part)
             }
 
-            candidate.str("finishReason")?.let { reason ->
+            candidate.truthyString("finishReason")?.let { reason ->
                 rawStopReason = reason
                 stopReason = GoogleShared.mapStopReason(reason)
                 if (content.any { it is ToolCall } && stopReason == StopReason.STOP) {
@@ -475,7 +488,8 @@ internal object GoogleStreamEngine {
                 val needsNewId = providedId.isNullOrEmpty() ||
                     content.any { it is ToolCall && it.id == providedId }
                 val toolCallId = if (needsNewId) {
-                    nextToolCallId(name, timestampMs)
+                    // pi reads Date.now() per generated id, not the stream-start time.
+                    nextToolCallId(name, clock.now().toEpochMilliseconds())
                 } else {
                     providedId!!
                 }
@@ -565,9 +579,10 @@ internal fun buildGoogleOptions(
  *
  * Wire shape: where pi hands `config` to the `@google/genai` SDK, Pathfinder
  * writes the documented GenerateContentRequest REST shape directly —
- * `contents`, `systemInstruction` (string), `tools`, `toolConfig` at the top
+ * `contents`, `systemInstruction` (a Content object, as the SDK's
+ * `tContent` expands a string config), `tools`, `toolConfig` at the top
  * level, and `temperature`/`maxOutputTokens`/`thinkingConfig` nested in
- * `generationConfig`.
+ * `generationConfig` (always serialized, like the SDK, even when empty).
  */
 object GoogleRequest {
 
@@ -632,9 +647,21 @@ object GoogleRequest {
         val systemInstruction =
             if (initialSystemMessage != null) getSystemMessageText(initialSystemMessage) else ""
         if (systemInstruction.isNotEmpty()) {
-            request["systemInstruction"] = JsonPrimitive(
-                sanitizeSurrogates(systemInstruction)
-            )
+            // The SDK expands the string config into a user Content
+            // (`tContent` → `contentToMldev`), so the wire carries the object.
+            request["systemInstruction"] = buildJsonObject {
+                put(
+                    "parts",
+                    buildJsonArray {
+                        add(
+                            buildJsonObject {
+                                put("text", sanitizeSurrogates(systemInstruction))
+                            }
+                        )
+                    }
+                )
+                put("role", "user")
+            }
         }
         if (currentTools.isNotEmpty()) {
             request["tools"] = GoogleShared.convertTools(currentTools, false, supportsStrictMode)!!
@@ -666,9 +693,9 @@ object GoogleRequest {
             else -> null
         }
         thinkingConfig?.let { generationConfig["thinkingConfig"] = it }
-        if (generationConfig.isNotEmpty()) {
-            request["generationConfig"] = JsonObject(generationConfig)
-        }
+        // The SDK always serializes the config object, so an empty one still
+        // emits `"generationConfig": {}`.
+        request["generationConfig"] = JsonObject(generationConfig)
 
         return JsonObject(request)
     }
