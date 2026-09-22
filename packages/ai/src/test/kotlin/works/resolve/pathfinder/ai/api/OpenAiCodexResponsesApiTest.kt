@@ -35,6 +35,7 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelCost
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
+import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
@@ -478,6 +479,17 @@ class OpenAiCodexResponsesApiTest {
     fun `missing api key is an error without a request`() = runTest {
         val transport = FakeTransport()
         val events = api(transport).stream(model, context, OpenAICodexResponsesOptions()).toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.single())
+        assertEquals("No API key for provider: openai-codex", error.error.errorMessage)
+        assertTrue(transport.requests.isEmpty())
+    }
+
+    @Test
+    fun `streamSimple without an api key is an error without a request`() = runTest {
+        val transport = FakeTransport()
+        val events = api(transport)
+            .streamSimple(model, context, SimpleStreamOptions())
+            .toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.single())
         assertEquals("No API key for provider: openai-codex", error.error.errorMessage)
         assertTrue(transport.requests.isEmpty())

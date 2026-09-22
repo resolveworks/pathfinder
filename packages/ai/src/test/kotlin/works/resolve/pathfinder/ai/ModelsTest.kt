@@ -1,21 +1,29 @@
 package works.resolve.pathfinder.ai
 
+import kotlin.test.Test
+import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ProviderAuthException
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TranscriptContext
+import works.resolve.pathfinder.ai.Usage
+import works.resolve.pathfinder.ai.auth.ModelsError
+import works.resolve.pathfinder.ai.auth.ModelsErrorCode
 import works.resolve.pathfinder.ai.testing.TestCatalogs
 
 class ModelsTest {
@@ -64,17 +72,168 @@ class ModelsTest {
                     id = "prov",
                     name = "Provider",
                     baseUrl = "https://example.test",
+                    // Auth resolves so the failure is the missing API dispatch,
+                    // which pi checks after applyAuth.
+                    authResolver = { _, _ -> ResolvedAuth("resolved-key") },
                     models = listOf(model(), unsupported),
                     apis = mapOf("openai-completions" to api)
                 )
             )
         )
-        val error = runCatching {
-            registry.stream(unsupported, Context(messages = emptyList()))
-        }.exceptionOrNull()
-        assertTrue(error is IllegalArgumentException)
-        assertTrue(error!!.message!!.contains("no API implementation for 'anthropic-messages'"))
+
+        val events = registry.stream(unsupported, Context(messages = emptyList())).toList()
+
+        assertEquals(1, events.size)
+        val error = assertIs<AssistantMessageEvent.Error>(events.single())
+        assertEquals(StopReason.ERROR, error.reason)
+        assertEquals(
+            "Provider prov has no API implementation for \"anthropic-messages\"",
+            error.error.errorMessage
+        )
+        assertEquals(Usage(), error.error.usage)
         assertEquals(0, api.calls)
+    }
+
+    @Test
+    fun unknownProviderSurfacesAsTerminalErrorEvent() = runTest {
+        val registry = Models(emptyList())
+        val alien = model().copy(provider = "alien")
+
+        val events = registry.stream(alien, Context(messages = emptyList())).toList()
+
+        val error = assertIs<AssistantMessageEvent.Error>(events.single())
+        assertEquals("Unknown provider: alien", error.error.errorMessage)
+        assertEquals(Usage(), error.error.usage)
+    }
+
+    @Test
+    fun adapterSetupThrowBecomesTerminalErrorEvent() = runTest {
+        val api = object : ChatApi {
+            var calls = 0
+
+            override fun streamSimple(
+                model: Model,
+                context: TranscriptContext,
+                options: SimpleStreamOptions
+            ): Flow<AssistantMessageEvent> {
+                calls += 1
+                throw ProviderAuthException("No API key for provider: ${model.provider}")
+            }
+        }
+        val registry = Models(
+            listOf(
+                Provider(
+                    id = "prov",
+                    name = "Provider",
+                    baseUrl = "https://example.test",
+                    authResolver = { _, _ -> ResolvedAuth("resolved-key") },
+                    models = listOf(model()),
+                    apiId = "openai-completions",
+                    api = api
+                )
+            )
+        )
+
+        val events = registry.stream(model(), Context(messages = emptyList())).toList()
+
+        assertEquals(1, api.calls)
+        val error = assertIs<AssistantMessageEvent.Error>(events.single())
+        assertEquals("No API key for provider: prov", error.error.errorMessage)
+    }
+
+    @Test
+    fun checkAuthPropagatesCredentialStoreReadFailure() = runTest {
+        val registry = Models(
+            listOf(
+                Provider(
+                    id = "prov",
+                    name = "Provider",
+                    baseUrl = "https://example.test",
+                    authResolver = { _, _ ->
+                        throw ModelsError(
+                            ModelsErrorCode.AUTH,
+                            "Credential store read failed for prov",
+                            IllegalStateException("store unavailable")
+                        )
+                    },
+                    models = listOf(model()),
+                    apiId = "openai-completions",
+                    api = RecordingApi()
+                )
+            )
+        )
+
+        val error = assertFailsWith<ModelsError> { registry.checkAuth("prov") }
+        assertEquals(ModelsErrorCode.AUTH, error.code)
+        assertEquals("Credential store read failed for prov: store unavailable", error.message)
+    }
+
+    @Test
+    fun checkAuthPropagatesApiKeyCheckFailure() = runTest {
+        val registry = Models(
+            listOf(
+                Provider(
+                    id = "prov",
+                    name = "Provider",
+                    baseUrl = "https://example.test",
+                    authResolver = { _, _ ->
+                        throw ModelsError(
+                            ModelsErrorCode.AUTH,
+                            "API key auth check failed for provider prov",
+                            IllegalStateException("check refused")
+                        )
+                    },
+                    models = listOf(model()),
+                    apiId = "openai-completions",
+                    api = RecordingApi()
+                )
+            )
+        )
+
+        val error = assertFailsWith<ModelsError> { registry.checkAuth("prov") }
+        assertEquals(ModelsErrorCode.AUTH, error.code)
+        assertEquals("API key auth check failed for provider prov: check refused", error.message)
+    }
+
+    @Test
+    fun completeSimpleNeverResolvesWithoutATerminalEvent() = runTest {
+        val api = object : ChatApi {
+            override fun streamSimple(
+                model: Model,
+                context: TranscriptContext,
+                options: SimpleStreamOptions
+            ): Flow<AssistantMessageEvent> = flow {
+                emit(
+                    AssistantMessageEvent.Start(
+                        AssistantMessage(
+                            content = emptyList(),
+                            api = model.api,
+                            provider = model.provider,
+                            model = model.id
+                        )
+                    )
+                )
+            }
+        }
+        val registry = Models(
+            listOf(
+                Provider(
+                    id = "prov",
+                    name = "Provider",
+                    baseUrl = "https://example.test",
+                    authResolver = { _, _ -> ResolvedAuth("resolved-key") },
+                    models = listOf(model()),
+                    apiId = "openai-completions",
+                    api = api
+                )
+            )
+        )
+
+        assertFailsWith<TimeoutCancellationException> {
+            withTimeout(1_000) {
+                registry.completeSimple(model(), Context(messages = emptyList()))
+            }
+        }
     }
 
     @Test
@@ -86,7 +245,15 @@ class ModelsTest {
                     id = "prov",
                     name = "Provider",
                     baseUrl = "https://example.test",
-                    authResolver = { _, _ -> throw IllegalStateException("keystore exploded") },
+                    authResolver = { _, _ ->
+                        // What resolveProviderAuth produces for a failing
+                        // key resolution: the cause detail stays in the message.
+                        throw ModelsError(
+                            ModelsErrorCode.AUTH,
+                            "API key auth failed for provider prov",
+                            IllegalStateException("keystore exploded")
+                        )
+                    },
                     models = listOf(model()),
                     apiId = "openai-completions",
                     api = api
@@ -104,10 +271,10 @@ class ModelsTest {
         assertEquals("m1", error.error.model)
         assertEquals(StopReason.ERROR, error.error.stopReason)
         assertTrue(error.error.timestamp > 0)
-        // Safe generic message: no exception text.
-        val message = error.error.errorMessage
-        assertTrue(message!!.contains("Failed to resolve stored credential"))
-        assertTrue(!message.contains("keystore exploded"))
+        assertEquals(
+            "API key auth failed for provider prov: keystore exploded",
+            error.error.errorMessage
+        )
         assertEquals(0, api.calls)
     }
 
@@ -133,7 +300,7 @@ class ModelsTest {
         assertEquals(1, events.size)
         val error = events.single() as AssistantMessageEvent.Error
         assertEquals(StopReason.ERROR, error.reason)
-        assertTrue(error.error.errorMessage!!.contains("Provider 'prov' is not configured"))
+        assertEquals("Provider is not configured: prov", error.error.errorMessage)
         assertEquals(0, api.calls)
     }
 
@@ -156,20 +323,9 @@ class ModelsTest {
         val events = registry.stream(model(), Context(messages = emptyList())).toList()
 
         assertEquals(1, events.size)
-        assertTrue(events.single() is AssistantMessageEvent.Error)
+        val error = events.single() as AssistantMessageEvent.Error
+        assertEquals("Provider is not configured: prov", error.error.errorMessage)
         assertEquals(0, api.calls)
-    }
-
-    @Test
-    fun unknownProviderThrows() {
-        val registry = Models(emptyList())
-        val alien = model().copy(provider = "alien")
-        try {
-            registry.stream(alien, Context(messages = emptyList()))
-            throw AssertionError("Expected IllegalArgumentException")
-        } catch (error: IllegalArgumentException) {
-            assertTrue("Unknown provider" in (error.message ?: ""))
-        }
     }
 
     @Test
@@ -230,7 +386,7 @@ class ModelsTest {
 
         assertEquals(1, events.size)
         val error = events.single() as AssistantMessageEvent.Error
-        assertTrue(error.error.errorMessage!!.contains("Provider 'prov' is not configured"))
+        assertEquals("Provider is not configured: prov", error.error.errorMessage)
         assertEquals(0, api.calls)
     }
 
@@ -308,7 +464,7 @@ class ModelsTest {
     }
 
     @Test
-    fun cloudflareExplicitKeyAndEnvResolveToHeaderAuthOnly() = runTest {
+    fun cloudflareExplicitKeyResolvesToHeaderAuthAndKeepsTheExplicitKey() = runTest {
         val entry = TestCatalogs.CLOUDFLARE
         var storeReads = 0
         val api = RecordingApi()
@@ -355,7 +511,10 @@ class ModelsTest {
 
         assertEquals(0, storeReads)
         assertTrue(events.single() is AssistantMessageEvent.Done)
-        assertEquals(null, api.lastApiKey)
+        // pi's applyAuth precedence (`options.apiKey ?? auth.apiKey`): the
+        // explicit request key still flows to the adapter even when the
+        // resolution consumed it into auth headers.
+        assertEquals("explicit-cf-key", api.lastApiKey)
         assertEquals(
             mapOf(
                 "cf-aig-authorization" to "Bearer explicit-cf-key",

@@ -75,17 +75,17 @@ class ModelsRegistryTest {
             Context(messages = listOf(UserMessage.ofText("hi")))
         ).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.single())
-        assertTrue("Provider 'zai' is not configured" in (error.error.errorMessage ?: ""))
+        assertTrue("Provider is not configured: zai" in (error.error.errorMessage ?: ""))
     }
 
     @Test
-    fun `unknown provider or model throws`() {
+    fun `unknown provider surfaces as error event`() = runTest {
         val transport = FakeTransport()
         val models = models(transport)
-        assertFailsWithMessage<IllegalArgumentException>("Unknown provider") {
-            val alien = TestCatalogs.GLM_4_7.copy(provider = "nope")
-            models.stream(alien, Context(messages = emptyList()))
-        }
+        val alien = TestCatalogs.GLM_4_7.copy(provider = "nope")
+        val events = models.stream(alien, Context(messages = emptyList())).toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.single())
+        assertTrue("Unknown provider: nope" in (error.error.errorMessage ?: ""))
         assertTrue(models.getModel("zai", "nope") == null, "unknown model id is not in the catalog")
     }
 
@@ -99,21 +99,5 @@ class ModelsRegistryTest {
             provider.models.map { it.id }
         )
         assertEquals("glm-5.3", models.getModel("zai", "glm-5.3")!!.id)
-    }
-
-    private inline fun <reified T : Throwable> assertFailsWithMessage(
-        fragment: String,
-        block: () -> Unit
-    ) {
-        try {
-            block()
-            throw AssertionError("Expected ${T::class.simpleName} but call succeeded")
-        } catch (error: Throwable) {
-            if (error::class != T::class) throw error
-            assertTrue(
-                fragment in (error.message ?: ""),
-                "expected '$fragment' in: ${error.message}"
-            )
-        }
     }
 }

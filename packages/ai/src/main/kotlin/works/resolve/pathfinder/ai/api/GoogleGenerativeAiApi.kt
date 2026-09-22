@@ -19,6 +19,7 @@ import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.ProviderAuthException
 import works.resolve.pathfinder.ai.ProviderResponse
 import works.resolve.pathfinder.ai.ProviderStreamException
 import works.resolve.pathfinder.ai.SimpleStreamOptions
@@ -72,8 +73,6 @@ import works.resolve.pathfinder.telemetry.TelemetryContext
  * Divergences from pi (also see [GoogleShared] and [GoogleStreamEngine]):
  * - `options.fetch` has no Kotlin counterpart; requests go through the
  *   injected [HttpStreamingTransport].
- * - pi's streamSimple throws synchronously for a missing API key; here the
- *   failure is a terminal Error event, per the ChatApi contract.
  * - The User-Agent is [getPiUserAgent]; only its platform-string details
  *   differ from pi's.
  */
@@ -188,8 +187,14 @@ class GoogleGenerativeAiApi(
         model: Model,
         context: TranscriptContext,
         options: SimpleStreamOptions
-    ): Flow<works.resolve.pathfinder.ai.AssistantMessageEvent> =
-        stream(model, context, buildGoogleOptions(model, context, options))
+    ): Flow<works.resolve.pathfinder.ai.AssistantMessageEvent> {
+        // pi's google streamSimple throws synchronously for a missing API key
+        // (the ChatApi contract); the full stream() encodes the same failure
+        // as a terminal error event instead.
+        options.apiKey
+            ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
+        return stream(model, context, buildGoogleOptions(model, context, options))
+    }
 
     private companion object {
         /** The `@google/genai` SDK default endpoint for the Gemini API. */
