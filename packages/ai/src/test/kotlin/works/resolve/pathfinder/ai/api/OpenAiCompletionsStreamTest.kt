@@ -25,13 +25,17 @@ import org.junit.Assume.assumeTrue
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
+import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
 import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.GrammarFormat
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.SimpleToolChoice
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
+import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
@@ -597,7 +601,28 @@ class OpenAiCompletionsStreamTest {
     }
 
     @Test
-    fun `json error event mid-stream keeps partial content`() = runTest {
+    fun `error chunks are skipped mid-stream and a later finish reason completes`() = runTest {
+        // pi has no chunk.error handling in the stream loop: the error event
+        // is just another chunk without choices.
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"content":"partial"}}]}""",
+                """{"error":{"message":"upstream overloaded","type":"server_error"}}""",
+                """{"choices":[{"delta":{"content":"!"},"finish_reason":"stop"}]}""",
+                "[DONE]"
+            )
+        )
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(StopReason.STOP, done.reason)
+        assertEquals("partial!", assertIs<TextContent>(done.message.content.single()).text)
+    }
+
+    @Test
+    fun `stream ending after an error chunk fails without finish reason`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(
             sse(
@@ -610,7 +635,7 @@ class OpenAiCompletionsStreamTest {
         ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals(StopReason.ERROR, error.reason)
-        assertTrue("upstream overloaded" in (error.error.errorMessage ?: ""))
+        assertEquals("Stream ended without finish_reason", error.error.errorMessage)
         assertEquals("partial", assertIs<TextContent>(error.error.content.single()).text)
     }
 
@@ -1230,6 +1255,35 @@ class OpenAiCompletionsStreamTest {
     }
 
     @Test
+    fun `x-initiator derives from the normalized transcript`() = runTest {
+        // The raw transcript ends with a mid-conversation system message; the
+        // normalized transcript collapses it into the leading prompt, leaving
+        // the user message last, so X-Initiator is user, not agent.
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]")
+        )
+        val copilot = model.copy(
+            provider = "github-copilot",
+            baseUrl = "https://api.individual.githubcopilot.com"
+        )
+        val ctx = normalizeContext(
+            Context(
+                systemPrompt = "base",
+                messages = listOf(
+                    UserMessage.ofText("hi"),
+                    SystemMessage(content = listOf(TextContent("extra")))
+                )
+            )
+        )
+        api(transport)
+            .stream(copilot, ctx, OpenAiCompletionsOptions(apiKey = "tok"))
+            .take(1)
+            .toList()
+        assertEquals("user", transport.requests.single().headers["X-Initiator"])
+    }
+
+    @Test
     fun `opencode-go reasoning delta is stored under the reasoning_content signature`() = runTest {
         val goModel = model.copy(provider = "opencode-go")
         val transport = FakeTransport()
@@ -1565,6 +1619,60 @@ class OpenAiCompletionsStreamTest {
         assertEquals("call_1", toolCall.id)
         assertEquals("read", toolCall.name)
         assertEquals(buildJsonObject { put("path", "README.md") }, toolCall.arguments)
+    }
+
+    @Test
+    fun `custom tool call input accumulates json deltas and raw arguments`() = runTest {
+        val grammarTool = Tool(
+            name = "run_query",
+            description = "Runs a query",
+            parameters = Json.parseToJsonElement(
+                """{"type":"object","properties":{"input":{"type":"string"}},"required":["input"]}"""
+            ),
+            constrainedSampling = ConstrainedSamplingConfig.Grammar(
+                mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/")
+            )
+        )
+        val grammarModel = model.copy(
+            compat = model.compat.copy(supportsOpenAIGrammarTools = true)
+        )
+        val grammarContext = normalizeContext(
+            Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(grammarTool))
+        )
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"custom","custom":{"name":"run_query"}}]}}]}""",
+                """{"choices":[{"delta":{"tool_calls":[{"index":0,"custom":{"input":"select "}}]}}]}""",
+                """{"choices":[{"delta":{"tool_calls":[{"index":0,"custom":{"input":"1;"}}]}}]}""",
+                """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
+                "[DONE]"
+            )
+        )
+        val events = api(
+            transport
+        ).stream(grammarModel, grammarContext, OpenAiCompletionsOptions(apiKey = "test-key"))
+            .toList()
+        // Deltas carry the JSON-encoded view built around the raw fragments;
+        // the scaffold delta carries an empty input fragment.
+        assertEquals(
+            listOf("", """{"input":"select """, "1;", "\"}"),
+            events.filterIsInstance<AssistantMessageEvent.ToolCallDelta>().map { it.delta }
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(StopReason.TOOL_USE, done.reason)
+        val call = assertIs<ToolCall>(done.message.content.single())
+        assertEquals("call_1", call.id)
+        assertEquals("run_query", call.name)
+        assertEquals(buildJsonObject { put("input", "select 1;") }, call.arguments)
+        // The declared grammar tool reached the wire as a custom tool.
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
+        assertEquals(
+            "custom",
+            body["tools"]!!.jsonArray[0].jsonObject["type"]!!.jsonPrimitive.content
+        )
     }
 
     // ---------------------------------------------------------------------

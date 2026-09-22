@@ -24,6 +24,7 @@ import works.resolve.pathfinder.ai.CacheControlFormat
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
 import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.GrammarFormat
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.StopReason
@@ -47,6 +48,21 @@ class OpenAiCompletionsPayloadTest {
     private val openaiModel = TestCatalogs.GPT_4O
     private val schema = Json.parseToJsonElement(
         """{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"""
+    )
+
+    private fun grammarTool() = Tool(
+        name = "run_query",
+        description = "Runs a query",
+        parameters = Json.parseToJsonElement(
+            """{"type":"object","properties":{"input":{"type":"string"}},"required":["input"]}"""
+        ),
+        constrainedSampling = ConstrainedSamplingConfig.Grammar(
+            mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/")
+        )
+    )
+
+    private fun grammarModel() = model.copy(
+        compat = model.compat.copy(supportsOpenAIGrammarTools = true)
     )
 
     private fun body(
@@ -180,6 +196,38 @@ class OpenAiCompletionsPayloadTest {
     }
 
     @Test
+    fun `grammar tool serialized as custom grammar tool when compat enables it`() {
+        val b = body(
+            normalizeContext(
+                Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(grammarTool()))
+            ),
+            model = grammarModel()
+        )
+        assertEquals(
+            Json.parseToJsonElement(
+                """{"type":"custom","custom":{"name":"run_query","description":"Runs a query",""" +
+                    """"format":{"type":"grammar","grammar":{"syntax":"lark","definition":"start: /[a-z]+/"}}}}"""
+            ),
+            b["tools"]!!.jsonArray.single()
+        )
+    }
+
+    @Test
+    fun `grammar tool falls back to plain function tool without grammar support`() {
+        val b = body(
+            normalizeContext(
+                Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(grammarTool()))
+            )
+        )
+        val converted = b["tools"]!!.jsonArray.single().jsonObject
+        assertEquals("function", converted["type"]!!.jsonPrimitive.content)
+        assertEquals(
+            "run_query",
+            converted["function"]!!.jsonObject["name"]!!.jsonPrimitive.content
+        )
+    }
+
+    @Test
     fun `tool history without active tools sends empty tools array`() {
         val context = normalizeContext(
             Context(
@@ -253,6 +301,40 @@ class OpenAiCompletionsPayloadTest {
             Json.parseToJsonElement(
                 function.toString()
             ).jsonObject["arguments"]!!.jsonPrimitive.content
+        )
+    }
+
+    @Test
+    fun `grammar tool call replays as custom tool call with raw input`() {
+        val b = body(
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ToolCall(
+                                    "call_1",
+                                    "run_query",
+                                    buildJsonObject { put("input", "select 1;") }
+                                )
+                            ),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2"
+                        ),
+                        ToolResultMessage("call_1", "run_query", listOf(TextContent("ok")))
+                    ),
+                    tools = listOf(grammarTool())
+                )
+            ),
+            model = grammarModel()
+        )
+        assertEquals(
+            Json.parseToJsonElement(
+                """{"id":"call_1","type":"custom",""" +
+                    """"custom":{"name":"run_query","input":"select 1;"}}"""
+            ),
+            b["messages"]!!.jsonArray[0].jsonObject["tool_calls"]!!.jsonArray[0]
         )
     }
 
@@ -508,7 +590,10 @@ class OpenAiCompletionsPayloadTest {
             )
         val messages = b["messages"]!!.jsonArray
         assertEquals(1, messages.size)
-        assertEquals("hi", messages[0].jsonObject["content"]!!.jsonPrimitive.content)
+        assertEquals(
+            Json.parseToJsonElement("""[{"type":"text","text":"hi"}]"""),
+            messages[0].jsonObject["content"]
+        )
     }
 
     @Test
@@ -544,7 +629,11 @@ class OpenAiCompletionsPayloadTest {
         assertEquals("system", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
         assertEquals("a\uD83D\uDC00", messages[0].jsonObject["content"]!!.jsonPrimitive.content)
         assertEquals("user", messages[1].jsonObject["role"]!!.jsonPrimitive.content)
-        assertEquals("a\uD83D\uDC00", messages[1].jsonObject["content"]!!.jsonPrimitive.content)
+        assertEquals(
+            "a\uD83D\uDC00",
+            messages[1].jsonObject["content"]!!.jsonArray[0].jsonObject["text"]!!
+                .jsonPrimitive.content
+        )
     }
 
     @Test
@@ -615,6 +704,52 @@ class OpenAiCompletionsPayloadTest {
             content[1].jsonObject["image_url"]!!.jsonObject["url"]!!
                 .jsonPrimitive.content
         assertEquals("data:image/png;base64,aGVsbG8=", imageUrl)
+    }
+
+    @Test
+    fun `user content preserves interleaved text image text order`() {
+        val b = body(
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage(
+                            listOf(
+                                TextContent("before"),
+                                ImageContent(data = "aGVsbG8=", mimeType = "image/png"),
+                                TextContent("after")
+                            )
+                        )
+                    )
+                )
+            ),
+            model = TestCatalogs.GPT_4O
+        )
+        val content = b["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
+        assertEquals(
+            listOf("text", "image_url", "text"),
+            content.map { it.jsonObject["type"]!!.jsonPrimitive.content }
+        )
+        assertEquals("before", content[0].jsonObject["text"]!!.jsonPrimitive.content)
+        assertEquals("after", content[2].jsonObject["text"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `text-only user content array stays an array of parts`() {
+        val b = body(
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage(listOf(TextContent("hi"), TextContent("there")))
+                    )
+                )
+            )
+        )
+        assertEquals(
+            Json.parseToJsonElement(
+                """[{"type":"text","text":"hi"},{"type":"text","text":"there"}]"""
+            ),
+            b["messages"]!!.jsonArray[0].jsonObject["content"]
+        )
     }
 
     @Test
@@ -918,8 +1053,11 @@ class OpenAiCompletionsPayloadTest {
         val messages = b["messages"]!!.jsonArray
         assertEquals(1, messages.size)
         assertEquals(
-            "what is this?(image omitted: model does not support images)",
-            messages[0].jsonObject["content"]!!.jsonPrimitive.content
+            Json.parseToJsonElement(
+                """[{"type":"text","text":"what is this?"},""" +
+                    """{"type":"text","text":"(image omitted: model does not support images)"}]"""
+            ),
+            messages[0].jsonObject["content"]
         )
     }
 
@@ -1356,7 +1494,10 @@ class OpenAiCompletionsPayloadTest {
             model = openrouterAnthropic
         )
         val messages = b["messages"]!!.jsonArray
-        assertEquals("Read the file", messages[1].jsonObject["content"]!!.jsonPrimitive.content)
+        assertEquals(
+            Json.parseToJsonElement("""[{"type":"text","text":"Read the file"}]"""),
+            messages[1].jsonObject["content"]
+        )
         val toolMessage = messages.last().jsonObject
         assertEquals("tool", toolMessage["role"]!!.jsonPrimitive.content)
         assertEquals(
@@ -1380,7 +1521,11 @@ class OpenAiCompletionsPayloadTest {
         )
         val messages = b["messages"]!!.jsonArray
         assertEquals("System prompt", messages[0].jsonObject["content"]!!.jsonPrimitive.content)
-        assertEquals("Hello", messages.last().jsonObject["content"]!!.jsonPrimitive.content)
+        assertEquals(
+            "Hello",
+            messages.last().jsonObject["content"]!!.jsonArray[0].jsonObject["text"]!!
+                .jsonPrimitive.content
+        )
         assertNull(cacheControlOf(b["tools"]!!.jsonArray[0]))
     }
 
@@ -1399,7 +1544,11 @@ class OpenAiCompletionsPayloadTest {
         )
         val messages = b["messages"]!!.jsonArray
         assertEquals("System prompt", messages[0].jsonObject["content"]!!.jsonPrimitive.content)
-        assertEquals("Hello", messages.last().jsonObject["content"]!!.jsonPrimitive.content)
+        assertEquals(
+            "Hello",
+            messages.last().jsonObject["content"]!!.jsonArray[0].jsonObject["text"]!!
+                .jsonPrimitive.content
+        )
         assertNull(cacheControlOf(b["tools"]!!.jsonArray[0]))
     }
 
