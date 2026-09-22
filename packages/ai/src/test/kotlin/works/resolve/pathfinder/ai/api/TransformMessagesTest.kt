@@ -50,7 +50,8 @@ class TransformMessagesTest {
         api = "openai-responses",
         provider = "github-copilot",
         model = "gpt-5",
-        stopReason = StopReason.TOOL_USE
+        stopReason = StopReason.TOOL_USE,
+        timestamp = 1_000L
     )
 
     @Test
@@ -129,13 +130,43 @@ class TransformMessagesTest {
             )
         )
 
+        val before = System.currentTimeMillis()
         val result = transformMessages(messages, model, anthropicNormalizeToolCallId)
+        val after = System.currentTimeMillis()
         val lastMessage = assertIs<ToolResultMessage>(result.last())
 
         assertEquals("call_123_fc_123", lastMessage.toolCallId)
         assertEquals("read", lastMessage.toolName)
         assertTrue(lastMessage.isError)
         assertEquals(listOf(TextContent("No result provided")), lastMessage.content)
+        // Synthetic results carry their own wall-clock stamp (pi: Date.now()),
+        // never the interrupting or source message's timestamp.
+        assertTrue(lastMessage.timestamp in before..after, "${lastMessage.timestamp}")
+    }
+
+    @Test
+    fun `synthetic results for interrupted tool calls are stamped with wall clock`() {
+        val model = makeCopilotClaudeModel()
+        val messages: List<Message> = listOf(
+            makeAssistantMessage(
+                listOf(
+                    ToolCall(
+                        id = "call_9|fc_9",
+                        name = "bash",
+                        arguments = buildJsonObject { put("command", "ls") }
+                    )
+                )
+            ),
+            UserMessage.ofText("stop, do something else", timestamp = 2_000L)
+        )
+
+        val before = System.currentTimeMillis()
+        val result = transformMessages(messages, model, anthropicNormalizeToolCallId)
+        val after = System.currentTimeMillis()
+
+        val synthetic = result.filterIsInstance<ToolResultMessage>().single { it.isError }
+        assertEquals("call_9_fc_9", synthetic.toolCallId)
+        assertTrue(synthetic.timestamp in before..after, "${synthetic.timestamp}")
     }
 
     @Test
@@ -164,7 +195,9 @@ class TransformMessagesTest {
             )
         )
 
+        val before = System.currentTimeMillis()
         val result = transformMessages(messages, model, anthropicNormalizeToolCallId)
+        val after = System.currentTimeMillis()
         val syntheticResults = result.filterIsInstance<ToolResultMessage>().filter { it.isError }
 
         assertEquals(1, syntheticResults.size)
@@ -172,6 +205,7 @@ class TransformMessagesTest {
         assertEquals("call_2_fc_2", synthetic.toolCallId)
         assertEquals("bash", synthetic.toolName)
         assertEquals(listOf(TextContent("No result provided")), synthetic.content)
+        assertTrue(synthetic.timestamp in before..after, "${synthetic.timestamp}")
     }
 
     @Test
