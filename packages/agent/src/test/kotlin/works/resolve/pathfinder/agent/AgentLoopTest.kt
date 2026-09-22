@@ -15,6 +15,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import works.resolve.pathfinder.ai.AssistantMessage
@@ -22,10 +23,12 @@ import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
@@ -1005,5 +1008,215 @@ class AgentLoopTest {
         assertEquals(2, llmCalls)
         assertEquals(1, prepareCalls)
         assertEquals("first prompt\n\nsecond prompt", secondTurnSystemPrompt)
+    }
+
+    @Test
+    fun `thinking level OFF from prepareNextTurn clears reasoning for the next turn`() = runTest {
+        val capturedOptions = mutableListOf<SimpleStreamOptions>()
+        var call = 0
+        val streamFn = StreamFn { _, _, options ->
+            capturedOptions.add(options)
+            call++
+            val message =
+                if (call == 1) {
+                    toolCallAssistant(ToolCall("c1", "my_tool", JsonObject(emptyMap())))
+                } else {
+                    assistant("done")
+                }
+            flowOf(AssistantMessageEvent.Done(message.stopReason, message))
+        }
+
+        runAgentLoop(
+            listOf(UserMessage.ofText("q")),
+            toolContext(FakeTool()),
+            AgentLoopConfig(
+                model,
+                options = SimpleStreamOptions(reasoning = ThinkingLevel.HIGH),
+                streamFn = streamFn,
+                prepareNextTurn = { AgentLoopTurnUpdate(thinkingLevel = ModelThinkingLevel.OFF) }
+            )
+        ) { }
+
+        assertEquals(
+            listOf<ThinkingLevel?>(ThinkingLevel.HIGH, null),
+            capturedOptions.map { it.reasoning }
+        )
+    }
+
+    @Test
+    fun `abort during tool execution runs one more turn ending with the aborted assistant message`() =
+        runTest {
+            val toolStarted = CompletableDeferred<Unit>()
+            val tool = FakeTool(
+                executeImpl = { _, _, _ ->
+                    toolStarted.complete(Unit)
+                    awaitCancellation()
+                }
+            )
+            var prepareCalls = 0
+            var streamCalls = 0
+            val streamFn = StreamFn { _, _, _ ->
+                streamCalls++
+                flowOf(
+                    AssistantMessageEvent.Done(
+                        StopReason.TOOL_USE,
+                        toolCallAssistant(ToolCall("c1", "my_tool", JsonObject(emptyMap())))
+                    )
+                )
+            }
+            val config = AgentLoopConfig(
+                model,
+                streamFn = streamFn,
+                prepareNextTurn = {
+                    prepareCalls++
+                    null
+                }
+            )
+
+            val events = mutableListOf<AgentEvent>()
+            val mutex = Mutex()
+            var rethrown = false
+            val job = backgroundScope.launch {
+                try {
+                    runAgentLoop(
+                        listOf(UserMessage.ofText("q")),
+                        toolContext(tool),
+                        config
+                    ) { event ->
+                        mutex.withLock { events.add(event) }
+                    }
+                } catch (e: CancellationException) {
+                    rethrown = true
+                }
+            }
+            toolStarted.await()
+            job.cancel()
+            job.join()
+
+            assertTrue(rethrown)
+            // The extra turn fails at the provider boundary without a request.
+            assertEquals(1, streamCalls)
+            assertEquals(1, prepareCalls)
+            assertEquals(
+                listOf(
+                    "AgentStart", "TurnStart",
+                    "MessageStart", "MessageEnd", // prompt
+                    "MessageStart", "MessageEnd", // tool-call assistant
+                    "ToolExecutionStart", "ToolExecutionEnd",
+                    "MessageStart", "MessageEnd", // aborted tool result
+                    "TurnEnd", "TurnStart",
+                    "MessageStart", "MessageEnd", // aborted assistant
+                    "TurnEnd", "AgentEnd"
+                ),
+                typeLabels(events)
+            )
+
+            val abortedEnd = events.filterIsInstance<AgentEvent.ToolExecutionEnd>().single()
+            assertTrue(abortedEnd.isError)
+            assertEquals(
+                "Operation aborted",
+                (abortedEnd.result.content.single() as TextContent).text
+            )
+
+            val aborted = (events[13] as AgentEvent.MessageEnd).message as AssistantMessage
+            assertEquals(StopReason.ABORTED, aborted.stopReason)
+            assertEquals("Request was aborted", aborted.errorMessage)
+            assertTrue(aborted.content.isEmpty())
+            assertEquals(model.api, aborted.api)
+            assertEquals(model.provider, aborted.provider)
+            assertEquals(model.id, aborted.model)
+
+            val abortedTurnEnd = events[14] as AgentEvent.TurnEnd
+            assertEquals(aborted, abortedTurnEnd.message)
+            assertTrue(abortedTurnEnd.toolResults.isEmpty())
+
+            val agentEnd = events.last() as AgentEvent.AgentEnd
+            assertEquals(aborted, agentEnd.messages.last())
+            assertEquals(4, agentEnd.messages.size)
+            assertNull(agentEnd.willRetry)
+        }
+
+    @Test
+    fun `stream completing without a terminal event finalizes the materialized partial`() =
+        runTest {
+            val streamFn = StreamFn { _, _, _ ->
+                flowOf(
+                    AssistantMessageEvent.Start(assistant("")),
+                    AssistantMessageEvent.TextDelta(0, "partial ")
+                )
+            }
+
+            val events = mutableListOf<AgentEvent>()
+            val result = runAgentLoop(
+                listOf(UserMessage.ofText("q")),
+                AgentContext(messages = emptyList()),
+                AgentLoopConfig(model, streamFn = streamFn)
+            ) { events.add(it) }
+
+            val finalized = result.last() as AssistantMessage
+            assertEquals("partial ", (finalized.content.single() as TextContent).text)
+            val finalizedEnd = events.filterIsInstance<AgentEvent.MessageEnd>().last()
+            assertEquals(finalized, finalizedEnd.message)
+            val finalizedTurnEnd = events.filterIsInstance<AgentEvent.TurnEnd>().single()
+            assertEquals(finalized, finalizedTurnEnd.message)
+            assertTrue(events.last() is AgentEvent.AgentEnd)
+
+            // A stream that never started finalizes the pre-allocated empty output.
+            val emptyEvents = mutableListOf<AgentEvent>()
+            val emptyResult = runAgentLoop(
+                listOf(UserMessage.ofText("q")),
+                AgentContext(messages = emptyList()),
+                AgentLoopConfig(model, streamFn = StreamFn { _, _, _ -> flowOf() })
+            ) { emptyEvents.add(it) }
+
+            val empty = emptyResult.last() as AssistantMessage
+            assertTrue(empty.content.isEmpty())
+            assertEquals(model.api, empty.api)
+            assertEquals(model.provider, empty.provider)
+            assertEquals(model.id, empty.model)
+            assertEquals(
+                listOf(
+                    "AgentStart",
+                    "TurnStart",
+                    "MessageStart",
+                    "MessageEnd", // prompt
+                    "MessageStart",
+                    "MessageEnd", // empty assistant
+                    "TurnEnd",
+                    "AgentEnd"
+                ),
+                typeLabels(emptyEvents)
+            )
+        }
+
+    @Test
+    fun `assistant prompt is declared and emitted like any other message`() = runTest {
+        val final = assistant("done")
+        val streamFn = scriptedStream(final)
+        val prompt = assistant("previous answer")
+
+        val events = mutableListOf<AgentEvent>()
+        val result = runAgentLoop(
+            listOf(prompt),
+            AgentContext(messages = emptyList()),
+            AgentLoopConfig(model, streamFn = streamFn)
+        ) { events.add(it) }
+
+        assertEquals(listOf<Message>(prompt, final), result)
+        assertEquals(prompt, (events[2] as AgentEvent.MessageStart).message)
+        assertEquals(prompt, (events[3] as AgentEvent.MessageEnd).message)
+        assertEquals(
+            listOf(
+                "AgentStart",
+                "TurnStart",
+                "MessageStart",
+                "MessageEnd",
+                "MessageStart",
+                "MessageEnd",
+                "TurnEnd",
+                "AgentEnd"
+            ),
+            typeLabels(events)
+        )
     }
 }

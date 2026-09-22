@@ -65,6 +65,7 @@ class Agent(
     @Volatile
     private var activeJob: Job? = null
 
+    /** Set by the AgentEnd reduction; read by [prompt] to skip synthesized lifecycle for aborts the loop already terminated. */
     private var sawAgentEnd = false
 
     /**
@@ -240,11 +241,21 @@ class Agent(
                 }
             }
         } catch (e: CancellationException) {
-            withContext(NonCancellable) { handleRunFailure(aborted = true) }
+            // Abort adaptation: pi's loop always completes its terminal
+            // lifecycle before an abort becomes visible and `prompt()`
+            // resolves; this port rethrows, so the synthesized lifecycle
+            // covers only cancellations the loop could not terminate itself
+            // (for example during a run's first emits).
+            if (!sawAgentEnd) {
+                withContext(NonCancellable) { handleRunFailure(aborted = true) }
+            }
             throw e
         } catch (e: Exception) {
-            // Ordinary failures are reduced into state rather than rethrown;
-            // the run resolves normally.
+            // pi awaits its failure handler unconditionally when the loop
+            // throws — even after agent_end was emitted, so a listener
+            // throwing during agent_end produces a second message lifecycle
+            // and a second agent_end — and the run then resolves normally
+            // rather than rethrowing.
             withContext(NonCancellable) { handleRunFailure(aborted = false, cause = e) }
         } finally {
             activeJob = null
@@ -345,9 +356,9 @@ class Agent(
     /**
      * Synthesize the terminal lifecycle for a run that failed at this
      * boundary: one ABORTED/ERROR assistant message carried through
-     * message_start/end, turn_end, and agent_end. Skipped when the low-level
-     * loop already emitted AgentEnd — the normal case for aborts and provider
-     * errors, whose partial output the loop commits itself.
+     * message_start/end, turn_end, and agent_end. Runs unconditionally when
+     * the loop throws, like pi's failure handler — including after the loop
+     * already emitted agent_end.
      *
      * Message shape matches pi (empty text content, zeroed usage); the error
      * text is sanitized because raw exception messages can embed request
@@ -358,8 +369,6 @@ class Agent(
      * start-of-run snapshot.
      */
     private suspend fun handleRunFailure(aborted: Boolean, cause: Throwable? = null) {
-        if (sawAgentEnd) return
-
         val failure = AssistantMessage(
             content = listOf(TextContent("")),
             api = model.api,

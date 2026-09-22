@@ -18,10 +18,12 @@ import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Message
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
+import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.TranscriptContext
@@ -49,7 +51,8 @@ import works.resolve.pathfinder.ai.utils.toToolDeclaration
  * cancellation cannot be swallowed without corrupting structured concurrency,
  * so the loop first terminates exactly like pi — partial assistant output
  * finalized with stopReason ABORTED, started tool calls finalized with error
- * results, turn_end/agent_end emitted — and then rethrows the
+ * results, the aborted batch's follow-up turn with its abort-finalized
+ * assistant message, turn_end/agent_end emitted — and then rethrows the
  * [CancellationException] to the caller.
  */
 suspend fun runAgentLoop(
@@ -58,10 +61,6 @@ suspend fun runAgentLoop(
     config: AgentLoopConfig,
     emit: suspend (AgentEvent) -> Unit
 ): List<Message> {
-    prompts.forEach { prompt ->
-        require(prompt !is AssistantMessage) { "Prompts must be user or toolResult messages" }
-    }
-
     val initialMessages = declareToolChanges(context, prompts, config.clock)
     val newMessages = initialMessages.toMutableList()
     val llmMessages = (context.messages + initialMessages).toMutableList()
@@ -135,8 +134,10 @@ private suspend fun runLoop(
                     config = config.copy(
                         model = nextModel ?: config.model,
                         options = config.options.copy(
-                            reasoning = nextThinkingLevel?.toThinkingLevelOrNull()
-                                ?: config.options.reasoning
+                            reasoning = nextTurnReasoning(
+                                config.options.reasoning,
+                                nextThinkingLevel
+                            )
                         )
                     )
                 }
@@ -196,18 +197,33 @@ private suspend fun runLoop(
                 // pi on abort: every started call finalizes — completed results
                 // are kept, in-flight and queued ones become "Operation aborted"
                 // error results — and the turn still ends with turn_end carrying
-                // whatever settled.
-                toolResults.addAll(
+                // whatever settled. pi then runs one more loop iteration whose
+                // provider request fails immediately on the aborted signal; see
+                // [emitAbortedFinalTurn].
+                val recoveredBatch =
                     withContext(NonCancellable) {
                         recoverAbortedToolBatch(toolCalls, progress, config, emit)
                     }
-                )
+                toolResults.addAll(recoveredBatch.messages)
                 for (result in toolResults) {
                     llmMessages.add(result)
                     newMessages.add(result)
                 }
                 withContext(NonCancellable) {
                     emit(AgentEvent.TurnEnd(message, toolResults.toList()))
+                    if (!recoveredBatch.terminate) {
+                        emitAbortedFinalTurn(
+                            completedTurn = PrepareNextTurnContext(
+                                message = message,
+                                toolResults = toolResults.toList(),
+                                context = context.copy(messages = llmMessages.toList()),
+                                newMessages = newMessages.toList()
+                            ),
+                            config = config,
+                            newMessages = newMessages,
+                            emit = emit
+                        )
+                    }
                     emit(AgentEvent.AgentEnd(newMessages.toList()))
                 }
                 throw cancellation
@@ -232,6 +248,86 @@ private suspend fun runLoop(
             return
         }
     }
+}
+
+/**
+ * pi's prepareNextTurn reasoning mapping: an absent level keeps the configured
+ * one, while "off" clears it.
+ */
+private fun nextTurnReasoning(current: ThinkingLevel?, level: ModelThinkingLevel?): ThinkingLevel? =
+    when (level) {
+        null -> current
+        ModelThinkingLevel.OFF -> null
+        else -> level.toThinkingLevelOrNull()
+    }
+
+/**
+ * The final turn pi runs after an aborted tool batch: the next iteration's
+ * provider request fails immediately on the aborted signal, and its finalized
+ * output arrives as a terminal error event — empty content, stopReason
+ * ABORTED, errorMessage "Request was aborted" — so the run ends through the
+ * loop's normal aborted-message branch and the transcript keeps that message.
+ *
+ * pi invokes prepareNextTurn first (with the aborted signal) and applies its
+ * update — including a model switch, which the provider's pre-allocated
+ * output inherits — before emitting turn_start and any prepared messages.
+ *
+ * Adaptation: pi's loop keeps running synchronously after the abort signal
+ * fires, so its hook merely observes the signal; coroutine cancellation
+ * cannot be merely observed, so the caller runs this tail under
+ * [NonCancellable] — the hook is invoked exactly once more and runs to
+ * completion, consulting the owning session's abort state itself the way
+ * pi's hooks consult the signal rather than coroutine cancellation. The
+ * tail never reaches a provider, so the aborted message is materialized the
+ * same way an aborted stream materializes its fold: an empty assistant
+ * message copied to stopReason ABORTED with the abort error message.
+ */
+private suspend fun emitAbortedFinalTurn(
+    completedTurn: PrepareNextTurnContext,
+    config: AgentLoopConfig,
+    newMessages: MutableList<Message>,
+    emit: suspend (AgentEvent) -> Unit
+) {
+    var context = completedTurn.context
+    var llmMessages = context.messages.toMutableList()
+    var preparedMessages: List<Message> = emptyList()
+    var turnConfig = config
+    val update = config.prepareNextTurn?.invoke(completedTurn)
+    if (update != null) {
+        update.context?.let { refreshed ->
+            context = refreshed
+            llmMessages = refreshed.messages.toMutableList()
+        }
+        preparedMessages = update.messages ?: emptyList()
+        val nextModel = update.model
+        val nextThinkingLevel = update.thinkingLevel
+        if (nextModel != null || nextThinkingLevel != null) {
+            turnConfig = config.copy(
+                model = nextModel ?: config.model,
+                options = config.options.copy(
+                    reasoning = nextTurnReasoning(config.options.reasoning, nextThinkingLevel)
+                )
+            )
+        }
+    }
+
+    emit(AgentEvent.TurnStart)
+    context = context.copy(messages = llmMessages.toList())
+    for (message in declareToolChanges(context, preparedMessages, turnConfig.clock)) {
+        emit(AgentEvent.MessageStart(message))
+        emit(AgentEvent.MessageEnd(message))
+        llmMessages.add(message)
+        newMessages.add(message)
+    }
+
+    val aborted = turnConfig.emptyAssistantMessage().copy(
+        stopReason = StopReason.ABORTED,
+        errorMessage = ABORT_ERROR_MESSAGE
+    )
+    emit(AgentEvent.MessageStart(aborted))
+    emit(AgentEvent.MessageEnd(aborted))
+    newMessages.add(aborted)
+    emit(AgentEvent.TurnEnd(aborted))
 }
 
 /**
@@ -390,10 +486,10 @@ private suspend fun streamAssistantResponse(
         }
         return aborted
     }
-    var message = finalMessage
-        // The StreamFn contract guarantees a terminal Done/Error event; a
-        // stream that completes without one is a contract violation.
-        ?: throw IllegalStateException("Provider stream completed without a terminal event")
+    // pi falls back to `response.result()` when the source ends without a
+    // terminal event; the fold's materialized state is that result here, and
+    // a stream that never started finalizes the pre-allocated empty output.
+    val message = finalMessage ?: fold.materialize() ?: config.emptyAssistantMessage()
     if (!started) {
         // Setup/auth failures can arrive before any Start event; the message
         // still needs a message_start before message_end.
@@ -517,16 +613,18 @@ private class ToolBatchProgress {
 /**
  * Finalizes an aborted tool batch: emits the missing tool_execution_end events
  * ("Operation aborted" for calls that never settled) and the tool-result
- * message pairs in source order, returning the full result list for the
- * terminal turn_end.
+ * message pairs in source order, returning the settled results for the
+ * terminal turn_end together with the batch's terminate verdict — pi's
+ * post-abort batch still ends the run when every settled result terminates.
  */
 private suspend fun recoverAbortedToolBatch(
     toolCalls: List<ToolCall>,
     progress: ToolBatchProgress,
     config: AgentLoopConfig,
     emit: suspend (AgentEvent) -> Unit
-): List<ToolResultMessage> {
+): ExecutedToolCallBatch {
     val messages = mutableListOf<ToolResultMessage>()
+    val finalizedCalls = mutableListOf<FinalizedToolCallOutcome>()
     for (toolCall in progress.startedToolCalls(toolCalls)) {
         val outcome = progress.outcome(toolCall.id)
             ?: FinalizedToolCallOutcome(
@@ -534,6 +632,7 @@ private suspend fun recoverAbortedToolBatch(
                 result = createErrorToolResult(OPERATION_ABORTED),
                 isError = true
             )
+        finalizedCalls.add(outcome)
         if (!progress.isEnded(toolCall.id)) {
             emitToolExecutionEnd(outcome, emit, progress)
         }
@@ -543,7 +642,10 @@ private suspend fun recoverAbortedToolBatch(
             }
         messages.add(toolResultMessage)
     }
-    return messages
+    return ExecutedToolCallBatch(
+        messages = messages,
+        terminate = shouldTerminateToolBatch(finalizedCalls)
+    )
 }
 
 /**

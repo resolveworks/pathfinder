@@ -636,6 +636,118 @@ class AgentTest {
     }
 
     @Test
+    fun `abort during tool execution commits the aborted assistant message and sets errorMessage`() =
+        runTest {
+            val toolStarted = CompletableDeferred<Unit>()
+            val tool = object : AgentTool {
+                override val definition = Tool("slow_tool", "slow tool", JsonPrimitive("object"))
+                override val label = "slow_tool"
+                override fun validateArguments(arguments: JsonObject) = arguments
+                override suspend fun execute(
+                    toolCallId: String,
+                    arguments: JsonObject,
+                    onUpdate: AgentToolUpdateCallback
+                ): AgentToolResult {
+                    toolStarted.complete(Unit)
+                    awaitCancellation()
+                }
+            }
+            val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
+                content = listOf(ToolCall("call-1", "slow_tool", JsonObject(emptyMap())))
+            )
+            var prepareCalls = 0
+            val agent = Agent(
+                model,
+                null,
+                SimpleStreamOptions(),
+                tools = listOf(tool)
+            ) { _, _, _ -> flowOf(AssistantMessageEvent.Done(StopReason.TOOL_USE, toolUse)) }
+            agent.prepareNextTurnWithContext = {
+                prepareCalls++
+                null
+            }
+
+            val events = CopyOnWriteArrayList<AgentEvent>()
+            agent.attachEventSink { events.add(it) }
+
+            val job = launch { agent.prompt(listOf(UserMessage.ofText("run tool"))) }
+            toolStarted.await()
+            agent.abort()
+            job.join()
+
+            // The session hook fired for the aborted run's extra turn.
+            assertEquals(1, prepareCalls)
+            assertEquals(2, events.count { it is AgentEvent.TurnStart })
+            assertEquals(1, events.count { it is AgentEvent.AgentEnd })
+            assertNull((events.last() as AgentEvent.AgentEnd).willRetry)
+
+            val state = agent.state.value
+            assertFalse(state.isStreaming)
+            assertEquals("Request was aborted", state.errorMessage)
+            val aborted = state.messages.last() as AssistantMessage
+            assertEquals(StopReason.ABORTED, aborted.stopReason)
+            assertEquals("Request was aborted", aborted.errorMessage)
+        }
+
+    /**
+     * pi's runWithLifecycle awaits its failure handler for every loop throw,
+     * including after agent_end: a listener throwing during agent_end gets a
+     * second message lifecycle and a second agent_end, and the prompt still
+     * resolves.
+     */
+    @Test
+    fun `listener failure after agent_end emits pi's second lifecycle`() = runTest {
+        val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
+        var agentEnds = 0
+        agent.attachEventSink { event ->
+            if (event is AgentEvent.AgentEnd) {
+                agentEnds++
+                if (agentEnds == 1) throw IllegalStateException("sink boom")
+            }
+        }
+
+        val events = CopyOnWriteArrayList<AgentEvent>()
+        val secondAgentEnd = CompletableDeferred<Unit>()
+        var seenEnds = 0
+        val collector = launch {
+            agent.events.collect { event ->
+                events.add(event)
+                if (event is AgentEvent.AgentEnd) {
+                    seenEnds++
+                    if (seenEnds == 2) secondAgentEnd.complete(Unit)
+                }
+            }
+        }
+        yield() // subscribe before the run starts
+
+        agent.prompt(listOf(UserMessage.ofText("hi")))
+        secondAgentEnd.await() // buffered delivery: drain before cancelling
+        collector.cancelAndJoin()
+
+        assertEquals(2, agentEnds)
+        assertEquals(2, events.count { it is AgentEvent.AgentEnd })
+        assertEquals(
+            listOf(
+                "AgentStart", "TurnStart",
+                "MessageStart", "MessageEnd", // user
+                "MessageStart", "MessageUpdate", "MessageEnd", // assistant
+                "TurnEnd", "AgentEnd",
+                "MessageStart", "MessageEnd", // synthesized failure
+                "TurnEnd", "AgentEnd"
+            ),
+            events.map { it::class.simpleName }
+        )
+
+        val state = agent.state.value
+        assertFalse(state.isStreaming)
+        assertEquals(4, state.messages.size)
+        val failure = state.messages.last() as AssistantMessage
+        assertEquals(StopReason.ERROR, failure.stopReason)
+        assertEquals("Unexpected error (IllegalStateException)", failure.errorMessage)
+        assertEquals("Unexpected error (IllegalStateException)", state.errorMessage)
+    }
+
+    @Test
     fun `successful run end clears seeded pending tool calls`() = runTest {
         val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
         agent.processEvent(AgentEvent.ToolExecutionStart("call-1", "t", JsonObject(emptyMap())))
