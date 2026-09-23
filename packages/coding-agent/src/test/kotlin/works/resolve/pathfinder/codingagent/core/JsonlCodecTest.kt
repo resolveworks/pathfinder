@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
@@ -148,7 +149,10 @@ class JsonlCodecTest {
 
     @Test
     fun `assistant wire shape matches pi files`() {
-        // pi serializes lowercase stop reasons and omits zero reasoning.
+        // pi serializes lowercase stop reasons. Its optional `reasoning` is
+        // written whenever the provider reported one (explicit 0 included)
+        // and omitted only when undefined; the typed Usage folds undefined
+        // into 0, so the codec omits zero.
         val entry = MessageEntry(
             "m",
             null,
@@ -311,5 +315,37 @@ class JsonlCodecTest {
             )
         )
         assertNull(JsonlCodec.parseLine("""{"type":"session","version":3,"id":"a","cwd":""}"""))
+    }
+
+    @Test
+    fun `system sections roundtrip their three states`() {
+        // A section entry is absent, explicitly null (removes the section on
+        // replay), or a string — all three survive a roundtrip.
+        val entry = MessageEntry(
+            "m",
+            null,
+            0L,
+            SystemMessage(
+                content = listOf(TextContent("prompt")),
+                sections = linkedMapOf("keep" to "value", "drop" to null),
+                timestamp = 1L
+            )
+        )
+        val line = JsonlCodec.encodeEntryLine(entry).trimEnd()
+        assertTrue("\"sections\":{\"keep\":\"value\",\"drop\":null}" in line)
+        val decoded = assertIs<SystemMessage>((roundtripEntry(entry) as MessageEntry).message)
+        assertEquals(mapOf("keep" to "value", "drop" to null), decoded.sections)
+
+        // Omit-when-null: a message without sections keeps the key off the wire.
+        val plain = MessageEntry(
+            "m",
+            null,
+            0L,
+            SystemMessage(content = listOf(TextContent("prompt")), timestamp = 1L)
+        )
+        assertTrue("sections" !in JsonlCodec.encodeEntryLine(plain))
+        assertNull(
+            assertIs<SystemMessage>((roundtripEntry(plain) as MessageEntry).message).sections
+        )
     }
 }

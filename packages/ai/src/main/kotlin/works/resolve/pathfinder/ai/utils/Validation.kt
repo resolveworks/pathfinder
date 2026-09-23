@@ -7,7 +7,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.doubleOrNull
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 
@@ -135,24 +134,10 @@ private fun schemaTypes(schema: JsonObject): List<String>? = when (val type = sc
 
 // --- JSON type matching (pi's matchesJsonType) ---
 
-/** Numeric content of a non-string primitive; string-encoded numbers yield null (TS `typeof`). */
-private fun JsonElement.numberPrimitive(): Double? =
-    (this as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull
-
-/** Boolean content of a non-string primitive; string-encoded booleans yield null. */
-private fun JsonElement.booleanPrimitive(): Boolean? =
-    (this as? JsonPrimitive)?.takeIf { !it.isString }?.let { primitive ->
-        when (primitive.content) {
-            "true" -> true
-            "false" -> false
-            else -> null
-        }
-    }
-
 private fun matchesJsonType(value: JsonElement, type: String): Boolean = when (type) {
-    "number" -> value.numberPrimitive() != null
-    "integer" -> value.numberPrimitive()?.let { it.isFinite() && it == floor(it) } == true
-    "boolean" -> value.booleanPrimitive() != null
+    "number" -> value.strictDoubleOrNull() != null
+    "integer" -> value.strictDoubleOrNull()?.let { it.isFinite() && it == floor(it) } == true
+    "boolean" -> value.strictBooleanOrNull() != null
     "string" -> value is JsonPrimitive && value.isString
     "null" -> value is JsonNull
     "array" -> value is JsonArray
@@ -170,9 +155,9 @@ private fun coercePrimitiveByType(value: JsonElement, type: String): JsonElement
             value.content.toJsNumberOrNull()?.takeIf { it.isFinite() }?.let { JsonPrimitive(it) }
                 ?: value
 
-        value.booleanPrimitive() == true -> JsonPrimitive(1)
+        value.strictBooleanOrNull() == true -> JsonPrimitive(1)
 
-        value.booleanPrimitive() == false -> JsonPrimitive(0)
+        value.strictBooleanOrNull() == false -> JsonPrimitive(0)
 
         else -> value
     }
@@ -186,9 +171,9 @@ private fun coercePrimitiveByType(value: JsonElement, type: String): JsonElement
                 ?.let { JsonPrimitive(it) }
                 ?: value
 
-        value.booleanPrimitive() == true -> JsonPrimitive(1)
+        value.strictBooleanOrNull() == true -> JsonPrimitive(1)
 
-        value.booleanPrimitive() == false -> JsonPrimitive(0)
+        value.strictBooleanOrNull() == false -> JsonPrimitive(0)
 
         else -> value
     }
@@ -197,22 +182,22 @@ private fun coercePrimitiveByType(value: JsonElement, type: String): JsonElement
         value is JsonNull -> JsonPrimitive(false)
         value is JsonPrimitive && value.isString && value.content == "true" -> JsonPrimitive(true)
         value is JsonPrimitive && value.isString && value.content == "false" -> JsonPrimitive(false)
-        value.numberPrimitive() == 1.0 -> JsonPrimitive(true)
-        value.numberPrimitive() == 0.0 -> JsonPrimitive(false)
+        value.strictDoubleOrNull() == 1.0 -> JsonPrimitive(true)
+        value.strictDoubleOrNull() == 0.0 -> JsonPrimitive(false)
         else -> value
     }
 
     "string" -> when {
         value is JsonNull -> JsonPrimitive("")
-        value.numberPrimitive() != null -> JsonPrimitive(jsNumber(value.numberPrimitive()))
-        value.booleanPrimitive() != null -> JsonPrimitive(value.booleanPrimitive().toString())
+        value.strictDoubleOrNull() != null -> JsonPrimitive(jsNumber(value.strictDoubleOrNull()))
+        value.strictBooleanOrNull() != null -> JsonPrimitive(value.strictBooleanOrNull().toString())
         else -> value
     }
 
     "null" -> when {
         value is JsonPrimitive && value.isString && value.content.isEmpty() -> JsonNull
-        value.numberPrimitive() == 0.0 -> JsonNull
-        value.booleanPrimitive() == false -> JsonNull
+        value.strictDoubleOrNull() == 0.0 -> JsonNull
+        value.strictBooleanOrNull() == false -> JsonNull
         else -> value
     }
 
@@ -393,7 +378,7 @@ private fun collectSchemaErrors(
         return errors
     }
     val enum = schema["enum"] as? JsonArray
-    if (enum != null && enum.none { sameJsonValue(it, value) }) {
+    if (enum != null && enum.none { jsonEquals(it, value) }) {
         errors.add(SchemaError("enum", path, "must be equal to one of the allowed values"))
     }
     when (value) {
@@ -452,23 +437,6 @@ private fun typeMessage(types: List<String>): String = if (types.size ==
     "must be either ${types.joinToString(" or ")}"
 }
 
-/** Structural equality that keeps primitive kinds apart (kotlinx compares content only). */
-private fun sameJsonValue(a: JsonElement, b: JsonElement): Boolean = when {
-    a is JsonNull && b is JsonNull -> true
-
-    a is JsonPrimitive && b is JsonPrimitive ->
-        a.isString == b.isString && a.content == b.content
-
-    a is JsonArray && b is JsonArray ->
-        a.size == b.size && a.zip(b).all { (x, y) -> sameJsonValue(x, y) }
-
-    a is JsonObject && b is JsonObject ->
-        a.size == b.size && a.keys == b.keys &&
-            a.keys.all { sameJsonValue(a.getValue(it), b.getValue(it)) }
-
-    else -> false
-}
-
 // --- Received-arguments echo (pi: JSON.stringify(arguments, null, 2)) ---
 
 /**
@@ -519,7 +487,7 @@ private fun StringBuilder.appendJsonLikeJs(value: JsonElement, depth: Int) {
         is JsonPrimitive ->
             if (value.isString) {
                 append(value)
-            } else if (value.booleanPrimitive() != null) {
+            } else if (value.strictBooleanOrNull() != null) {
                 append(value.content)
             } else {
                 append(value.content.toJsNumberOrNull()?.let { jsNumber(it) } ?: value.content)

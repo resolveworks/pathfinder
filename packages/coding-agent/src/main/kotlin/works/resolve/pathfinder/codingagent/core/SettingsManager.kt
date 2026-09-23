@@ -9,11 +9,15 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
 import works.resolve.pathfinder.ai.utils.DEFAULT_MAX_AGENT_RETRY_DELAY_MS
+import works.resolve.pathfinder.ai.utils.boolean
+import works.resolve.pathfinder.ai.utils.int
+import works.resolve.pathfinder.ai.utils.long
+import works.resolve.pathfinder.ai.utils.str
+import works.resolve.pathfinder.ai.utils.strictLong
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings as ResolvedCompactionSettings
 import works.resolve.pathfinder.codingagent.core.compaction.DEFAULT_COMPACTION_SETTINGS
 import works.resolve.pathfinder.codingagent.core.utils.stripBom
@@ -200,11 +204,9 @@ private fun encodeRetry(retry: RetrySettings): JsonObject = JsonObject(
 private fun decodeSettings(content: String): Settings {
     val obj = Json.parseToJsonElement(stripBom(content)) as? JsonObject ?: return Settings()
     return Settings(
-        defaultProvider = obj.stringField("defaultProvider"),
-        defaultModel = obj.stringField("defaultModel"),
-        defaultThinkingLevel = obj.stringField(
-            "defaultThinkingLevel"
-        )?.let(::modelThinkingLevelFromWire),
+        defaultProvider = obj.str("defaultProvider"),
+        defaultModel = obj.str("defaultModel"),
+        defaultThinkingLevel = obj.str("defaultThinkingLevel")?.let(::modelThinkingLevelFromWire),
         modelThinkingLevels = (obj["modelThinkingLevels"] as? JsonObject)?.let(
             ::decodeModelThinkingLevels
         ),
@@ -224,7 +226,7 @@ private fun decodeModelThinkingLevels(obj: JsonObject): Map<String, ModelThinkin
 }
 
 private fun decodeCompaction(obj: JsonObject) = CompactionSettings(
-    enabled = obj.booleanField("enabled"),
+    enabled = obj.boolean("enabled"),
     reserveTokens = obj.tokenField(setting = "compaction.reserveTokens", key = "reserveTokens"),
     keepRecentTokens = obj.tokenField(
         setting = "compaction.keepRecentTokens",
@@ -252,36 +254,24 @@ private fun decodeModelOverrides(obj: JsonObject): Map<String, CompactionModelOv
     }
 
 private fun decodeBranchSummary(obj: JsonObject) = BranchSummarySettings(
-    reserveTokens = obj.longField("reserveTokens"),
-    skipPrompt = obj.booleanField("skipPrompt")
+    reserveTokens = obj.long("reserveTokens"),
+    skipPrompt = obj.boolean("skipPrompt")
 )
 
 private fun decodeRetry(obj: JsonObject) = RetrySettings(
-    enabled = obj.booleanField("enabled") ?: true,
-    maxRetries = obj.intField("maxRetries") ?: 3,
-    baseDelayMs = obj.longField("baseDelayMs") ?: 2000,
-    maxAgentDelayMs = obj.longField("maxAgentDelayMs") ?: DEFAULT_MAX_AGENT_RETRY_DELAY_MS
+    enabled = obj.boolean("enabled") ?: true,
+    maxRetries = obj.int("maxRetries") ?: 3,
+    baseDelayMs = obj.long("baseDelayMs") ?: 2000,
+    maxAgentDelayMs = obj.long("maxAgentDelayMs") ?: DEFAULT_MAX_AGENT_RETRY_DELAY_MS
 )
 
 /** An integral stored number, or null when absent; range semantics validate at read like pi. */
 private fun JsonObject.tokenField(setting: String, key: String): Long? {
-    val element = this[key] ?: return null
-    val value = (element as? JsonPrimitive)?.takeIf { !it.isString }?.contentOrNull?.toLongOrNull()
-    return checkNotNull(value) {
-        "Invalid $setting setting: $element. Expected a non-negative safe integer."
-    }
+    if (key !in this) return null
+    return strictLong(key) ?: throw IllegalStateException(
+        "Invalid $setting setting: ${this[key]}. Expected a non-negative safe integer."
+    )
 }
-
-private fun JsonObject.stringField(key: String): String? = (this[key] as? JsonPrimitive)?.content
-
-private fun JsonObject.booleanField(key: String): Boolean? =
-    (this[key] as? JsonPrimitive)?.content?.toBooleanStrictOrNull()
-
-private fun JsonObject.intField(key: String): Int? =
-    (this[key] as? JsonPrimitive)?.content?.toIntOrNull()
-
-private fun JsonObject.longField(key: String): Long? =
-    (this[key] as? JsonPrimitive)?.content?.toLongOrNull()
 
 /**
  * pi's `SettingsManager`, reduced to a single global scope. Divergences:
