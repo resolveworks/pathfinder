@@ -258,8 +258,9 @@ private const val STREAM_BUFFER_CAPACITY = 64
 
 /**
  * Finite per-request deadline covering DNS through response headers — the
- * phase pi's SDK `timeout` and codex's header-phase signal cover, at the same
- * 300s default. Streamed body reads are idle-capped by the shared client's
+ * phase pi's SDK `timeout` and codex's header-phase signal cover; 300s chosen
+ * to match pi's process-wide undici default. Streamed body reads are
+ * idle-capped by the shared client's
  * read timeout instead (PathfinderApplication.HTTP_IDLE_TIMEOUT_MS — same
  * number, different semantic: header-phase deadline vs inter-read idle; do
  * not merge them). Mistral additionally caps its whole exchange with its own
