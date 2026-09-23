@@ -265,6 +265,51 @@ internal class ChatViewModelTest : ChatHarnessTest() {
     }
 
     @Test
+    fun send_whileStreaming_queuesSteering_andSurfacesQueuedState() =
+        runTest(mainDispatcherRule.scheduler) {
+            val h = harness()
+            val vm = h.newViewModel()
+            vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
+            vm.configure(apiKey = "k")
+            vm.awaitState { it.status == ChatStatus.Ready }
+
+            val gate = CompletableDeferred<Unit>()
+            h.scriptedStreams.add(h.gatedStream("first reply", gate))
+            h.scriptedStreams.add(
+                h.gatedStream(
+                    "steered reply",
+                    CompletableDeferred<Unit>().apply { complete(Unit) }
+                )
+            )
+
+            vm.onDraftChange("Hello")
+            vm.send()
+            vm.awaitState { it.isStreaming }
+
+            // The composer stays usable mid-run: submitting routes to
+            // prompt(steer) instead of being dropped.
+            vm.onDraftChange("steer this")
+            assertTrue(vm.uiState.value.canSend)
+            vm.send()
+            vm.awaitState { it.queued.steering == listOf("steer this") }
+
+            gate.complete(Unit)
+
+            val done = vm.awaitState { !it.isStreaming && it.messages.size == 5 }
+            // The steering message was delivered as a transcript row (after
+            // the first reply, before the steered response)...
+            assertEquals("steer this", done.messages[3].singleText())
+            assertTrue(done.messages[3].message() is UserMessage)
+            assertEquals("steered reply", done.messages[4].singleText())
+            assertTrue(done.messages[4].message() is AssistantMessage)
+            // ...and the queued rows cleared once delivery began.
+            assertTrue(done.queued.steering.isEmpty())
+            assertNull(done.error)
+
+            vm.closeForTest()
+        }
+
+    @Test
     fun streamingUpdates_reuseUnchangedCommittedProjection() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()

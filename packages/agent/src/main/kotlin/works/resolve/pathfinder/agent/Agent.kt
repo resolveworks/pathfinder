@@ -32,6 +32,33 @@ import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
 import works.resolve.pathfinder.ai.utils.getCurrentSystemPrompt
 import works.resolve.pathfinder.ai.utils.toToolDeclaration
 
+/** pi's PendingMessageQueue: mode-aware FIFO of messages awaiting delivery. */
+private class PendingMessageQueue(initialMode: QueueMode) {
+    var mode: QueueMode = initialMode
+    private val messages = mutableListOf<Message>()
+
+    fun enqueue(message: Message) {
+        messages.add(message)
+    }
+
+    fun hasItems(): Boolean = messages.isNotEmpty()
+
+    fun drain(): List<Message> {
+        if (mode == QueueMode.ALL) {
+            val drained = messages.toList()
+            messages.clear()
+            return drained
+        }
+        val first = messages.firstOrNull() ?: return emptyList()
+        messages.removeAt(0)
+        return listOf(first)
+    }
+
+    fun clear() {
+        messages.clear()
+    }
+}
+
 /**
  * Stateful wrapper around the low-level agent loop: owns the agent
  * transcript, reduces loop events into [AgentState] before notifying
@@ -53,6 +80,10 @@ class Agent(
     val streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
     tools: List<AgentTool> = emptyList(),
     private val toolExecution: ToolExecutionMode = ToolExecutionMode.PARALLEL,
+    /** Drain mode of the steering queue (pi's runtime option). */
+    steeringMode: QueueMode = QueueMode.ONE_AT_A_TIME,
+    /** Drain mode of the follow-up queue (pi's runtime option). */
+    followUpMode: QueueMode = QueueMode.ONE_AT_A_TIME,
     private val clock: Clock = Clock.System,
     private val streamFn: StreamFn
 ) {
@@ -67,6 +98,22 @@ class Agent(
 
     /** Set by the AgentEnd reduction; read by [prompt] to skip synthesized lifecycle for aborts the loop already terminated. */
     private var sawAgentEnd = false
+
+    /** pi's steeringQueue: messages injected after the current assistant turn. */
+    private val steeringQueue = PendingMessageQueue(steeringMode)
+
+    /** pi's followUpQueue: messages that start the next run once this one would stop. */
+    private val followUpQueue = PendingMessageQueue(followUpMode)
+
+    /**
+     * pi's per-run abort-signal state: set by [abort] while a run is active,
+     * cleared when the next run starts (upstream creates a fresh
+     * AbortController per run). Read by the ordinary-exception failure path:
+     * an exception escaping after an abort was requested is classified
+     * ABORTED, not ERROR.
+     */
+    @Volatile
+    private var abortRequested = false
 
     /**
      * Event sink installed by the owning coding-agent session. Invoked synchronously
@@ -192,15 +239,60 @@ class Agent(
      *   lifecycle, so the transcript and UI cannot remain stuck.
      */
     suspend fun prompt(messages: List<Message>) {
+        beginRun(PROMPT_ACTIVE_MESSAGE)
+        runPromptMessages(messages, skipInitialSteeringPoll = false)
+    }
+
+    /** Claim the single-run slot and reset the run's abort state (pi's fresh AbortController). */
+    private fun beginRun(guardMessage: String) {
         synchronized(lock) {
             if (active) {
-                throw IllegalStateException(
-                    "Agent is already processing a prompt. Wait for completion or abort it."
-                )
+                throw IllegalStateException(guardMessage)
             }
             active = true
+            abortRequested = false
         }
+    }
 
+    fun clearSteeringQueue() {
+        synchronized(lock) { steeringQueue.clear() }
+    }
+
+    fun clearFollowUpQueue() {
+        synchronized(lock) { followUpQueue.clear() }
+    }
+
+    fun clearAllQueues() {
+        clearSteeringQueue()
+        clearFollowUpQueue()
+    }
+
+    fun hasQueuedMessages(): Boolean = synchronized(lock) {
+        steeringQueue.hasItems() || followUpQueue.hasItems()
+    }
+
+    /**
+     * Queue a message for injection after the current assistant turn's tool
+     * calls, before the next provider request (pi's `steer`). Delivered by
+     * the loop's steering polls; safe to call while a run is active or idle
+     * (an idle-queued message joins the next run's initial context).
+     */
+    fun steer(message: Message) {
+        synchronized(lock) { steeringQueue.enqueue(message) }
+    }
+
+    /**
+     * Queue a message to start the next run once the current one would
+     * otherwise stop (pi's `followUp`).
+     */
+    fun followUp(message: Message) {
+        synchronized(lock) { followUpQueue.enqueue(message) }
+    }
+
+    private suspend fun runPromptMessages(
+        messages: List<Message>,
+        skipInitialSteeringPoll: Boolean
+    ) {
         sawAgentEnd = false
 
         try {
@@ -214,13 +306,26 @@ class Agent(
                 messages = _state.value.messages.toList(),
                 tools = _state.value.tools.toList()
             )
+            // pi's createLoopConfig closure: the initial steering poll is
+            // skipped exactly once when continueRun() already drained the
+            // steering queue to build this run's prompt.
+            var skipSteeringPoll = skipInitialSteeringPoll
             val config = AgentLoopConfig(
                 model = runModel,
                 options = runOptions,
                 streamFn = streamFn,
                 toolExecution = toolExecution,
                 clock = clock,
-                prepareNextTurn = prepareNextTurnWithContext
+                prepareNextTurn = prepareNextTurnWithContext,
+                getSteeringMessages = {
+                    if (skipSteeringPoll) {
+                        skipSteeringPoll = false
+                        emptyList()
+                    } else {
+                        synchronized(lock) { steeringQueue.drain() }
+                    }
+                },
+                getFollowUpMessages = { synchronized(lock) { followUpQueue.drain() } }
             )
 
             coroutineScope {
@@ -255,8 +360,9 @@ class Agent(
             // throws — even after agent_end was emitted, so a listener
             // throwing during agent_end produces a second message lifecycle
             // and a second agent_end — and the run then resolves normally
-            // rather than rethrowing.
-            withContext(NonCancellable) { handleRunFailure(aborted = false, cause = e) }
+            // rather than rethrowing. The signal's aborted state (pi's
+            // `abortController.signal.aborted`) decides the classification.
+            withContext(NonCancellable) { handleRunFailure(aborted = abortRequested, cause = e) }
         } finally {
             activeJob = null
             reduce {
@@ -272,16 +378,17 @@ class Agent(
      *
      * Mirrors pi's `continue()` guards, in upstream order: reject an
      * in-flight run, then an empty or system-only transcript, then an
-     * assistant tail. Upstream's assistant-tail branch first drains the
-     * steering and follow-up queues and continues from whichever has items;
-     * those queues are deliberately unported (no `steer()`/`followUp()`
-     * here), so an assistant tail is never continuable in this port.
-     * Upstream repeats the tail guards in `runAgentLoopContinue`; this port
-     * continues via `prompt(emptyList())`, so the guards live here only.
+     * assistant tail. The assistant-tail branch drains the steering queue
+     * first and runs the drained messages as the continuation prompt with
+     * [skipInitialSteeringPoll] (they were just drained — the loop's initial
+     * poll must not double-drain the queue), then the follow-up queue, and
+     * only throws when both are empty. Upstream repeats the tail guards in
+     * `runAgentLoopContinue`; this port continues via a prompt with no new
+     * messages, so the guards live here only.
      *
      * @throws IllegalStateException when a run is already active, the
      *   transcript is empty or system-only, or its last message is an
-     *   assistant message.
+     *   assistant message with both queues empty.
      */
     suspend fun continueRun() {
         val messages: List<Message> = synchronized(lock) {
@@ -297,18 +404,39 @@ class Agent(
             throw IllegalStateException("No messages to continue from")
         }
         if (lastMessage is AssistantMessage) {
+            val queuedSteering = synchronized(lock) { steeringQueue.drain() }
+            if (queuedSteering.isNotEmpty()) {
+                beginRun(CONTINUE_ACTIVE_MESSAGE)
+                runPromptMessages(queuedSteering, skipInitialSteeringPoll = true)
+                return
+            }
+
+            val queuedFollowUps = synchronized(lock) { followUpQueue.drain() }
+            if (queuedFollowUps.isNotEmpty()) {
+                beginRun(CONTINUE_ACTIVE_MESSAGE)
+                runPromptMessages(queuedFollowUps, skipInitialSteeringPoll = false)
+                return
+            }
+
             throw IllegalStateException("Cannot continue from message role: assistant")
         }
-        prompt(emptyList())
+        beginRun(CONTINUE_ACTIVE_MESSAGE)
+        runPromptMessages(emptyList(), skipInitialSteeringPoll = false)
     }
 
     /**
      * Abort the active prompt, if any; a no-op while idle. May be called from
      * any coroutine: once [AgentState.isStreaming] is observable, the run's
-     * job is already published, so this never races the run's start.
+     * job is already published, so this never races the run's start. Marks
+     * the run's abort state so an ordinary exception escaping afterwards is
+     * classified ABORTED (pi's per-run signal).
      */
     fun abort() {
-        activeJob?.cancel()
+        synchronized(lock) {
+            val job = activeJob ?: return
+            abortRequested = true
+            job.cancel()
+        }
     }
 
     /** Replace the committed transcript; only valid while idle. */
@@ -335,8 +463,9 @@ class Agent(
     }
 
     /**
-     * Clear the committed transcript and any error while retaining the
-     * replayed prompt/tool baseline; only valid while idle.
+     * Clear the committed transcript, any error, and both pending-message
+     * queues while retaining the replayed prompt/tool baseline; only valid
+     * while idle.
      */
     fun resetTranscript() {
         synchronized(lock) {
@@ -350,6 +479,8 @@ class Agent(
                     errorMessage = null
                 )
             }
+            followUpQueue.clear()
+            steeringQueue.clear()
         }
     }
 
@@ -395,6 +526,7 @@ class Agent(
             is AgentEvent.AgentStart,
             is AgentEvent.AgentSettled,
             is AgentEvent.ThinkingLevelChanged,
+            is AgentEvent.QueueUpdate,
             is AgentEvent.TurnStart,
             is AgentEvent.AutoRetryStart,
             is AgentEvent.AutoRetryEnd,
@@ -444,6 +576,12 @@ class Agent(
     private companion object {
         /** Bounded emit buffer decoupling slow external collectors from the loop. */
         const val EVENT_BUFFER_CAPACITY = 64
+
+        const val PROMPT_ACTIVE_MESSAGE =
+            "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion."
+
+        const val CONTINUE_ACTIVE_MESSAGE =
+            "Agent is already processing. Wait for completion before continuing."
 
         const val ABORT_ERROR_MESSAGE = "Run aborted"
 

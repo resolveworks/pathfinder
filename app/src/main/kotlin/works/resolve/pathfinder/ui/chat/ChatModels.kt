@@ -97,6 +97,16 @@ data class ProviderLoginNavKey(val providerId: String) : NavKey
 
 data class AutoRetryStatus(val attempt: Int, val maxAttempts: Int)
 
+/**
+ * Pending queued messages projected from queue_update events: texts waiting
+ * for delivery as steering (next provider request) or follow-ups (next run).
+ */
+@Immutable
+data class QueuedMessagesUi(
+    val steering: List<String> = emptyList(),
+    val followUp: List<String> = emptyList()
+)
+
 /** Outcome of the initial load of settings, credentials, and sessions. */
 enum class ChatStatus {
     Loading,
@@ -222,6 +232,8 @@ data class ChatUiState(
     val messages: List<TranscriptRow> = emptyList(),
     val draft: String = "",
     val isStreaming: Boolean = false,
+    /** Pending queued messages (see [QueuedMessagesUi]); submitted while a run was active. */
+    val queued: QueuedMessagesUi = QueuedMessagesUi(),
     /** Transient auto-retry backoff status; null when not retrying. */
     val retryStatus: AutoRetryStatus? = null,
     val isCompacting: Boolean = false,
@@ -245,7 +257,7 @@ data class ChatUiState(
     val error: UiString? = null
 ) {
     val canSend: Boolean
-        get() = status == ChatStatus.Ready && !isStreaming && draft.isNotBlank()
+        get() = status == ChatStatus.Ready && draft.isNotBlank()
 
     val scopedModelOptions: List<ModelOption>
         get() {
