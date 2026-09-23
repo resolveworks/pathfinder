@@ -1,7 +1,6 @@
 package works.resolve.pathfinder.ai.utils
 
 import kotlin.math.floor
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -9,16 +8,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
-
-/**
- * Renders a number the way JavaScript template literals and `String(x)` do
- * (5, not 5.0); null renders as "null" like `${null}`.
- */
-fun jsNumber(value: Double?): String = when {
-    value == null -> "null"
-    value == value.toLong().toDouble() -> value.toLong().toString()
-    else -> value.toString()
-}
 
 /**
  * Validates parsed tool-call arguments against the tool's JSON Schema
@@ -152,7 +141,9 @@ private fun coercePrimitiveByType(value: JsonElement, type: String): JsonElement
         value is JsonNull -> JsonPrimitive(0)
 
         value is JsonPrimitive && value.isString ->
-            value.content.toJsNumberOrNull()?.takeIf { it.isFinite() }?.let { JsonPrimitive(it) }
+            value.content.toCoercedJsNumberOrNull()?.takeIf { it.isFinite() }?.let {
+                JsonPrimitive(it)
+            }
                 ?: value
 
         value.strictBooleanOrNull() == true -> JsonPrimitive(1)
@@ -166,7 +157,7 @@ private fun coercePrimitiveByType(value: JsonElement, type: String): JsonElement
         value is JsonNull -> JsonPrimitive(0)
 
         value is JsonPrimitive && value.isString ->
-            value.content.toJsNumberOrNull()
+            value.content.toCoercedJsNumberOrNull()
                 ?.takeIf { it.isFinite() && it == floor(it) }
                 ?.let { JsonPrimitive(it) }
                 ?: value
@@ -205,42 +196,12 @@ private fun coercePrimitiveByType(value: JsonElement, type: String): JsonElement
 }
 
 /**
- * JS `Number(string)` behind pi's `trim() !== ""` guard: trims whitespace
- * and accepts decimal, exponent, radix-prefixed (0x/0o/0b, unsigned only),
- * and signed Infinity literals; null when the string is blank or not a
- * numeric literal (JS NaN). Blank strings stay uncoerced like in pi.
+ * pi's coercion guard is `value.trim() !== "" && Number.isFinite(Number(value))`:
+ * a JS-blank string stays uncoerced (the blank check is call-site policy,
+ * not JS `Number()` semantics, which map blank to 0).
  */
-private fun String.toJsNumberOrNull(): Double? {
-    val text = trim()
-    if (text.isEmpty()) return null
-    when {
-        text == "Infinity" || text == "+Infinity" -> return Double.POSITIVE_INFINITY
-        text == "-Infinity" -> return Double.NEGATIVE_INFINITY
-    }
-    val radix =
-        if (text.length > 2 && text[0] == '0') {
-            when (text[1]) {
-                'x', 'X' -> 16
-                'o', 'O' -> 8
-                'b', 'B' -> 2
-                else -> 0
-            }
-        } else {
-            0
-        }
-    if (radix > 0) {
-        var value = 0.0
-        for (char in text.substring(2)) {
-            val digit = Character.digit(char, radix)
-            if (digit < 0) return null
-            value = value * radix + digit
-        }
-        return value
-    }
-    return if (JS_DECIMAL.matches(text)) text.toDoubleOrNull() else null
-}
-
-private val JS_DECIMAL = Regex("""^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$""")
+private fun String.toCoercedJsNumberOrNull(): Double? =
+    if (trimJsWhitespace(this).isEmpty()) null else jsParseNumberOrNull(this)
 
 // --- JSON-Schema-driven coercion (pi's coerceWithJsonSchema) ---
 
@@ -490,7 +451,11 @@ private fun StringBuilder.appendJsonLikeJs(value: JsonElement, depth: Int) {
             } else if (value.strictBooleanOrNull() != null) {
                 append(value.content)
             } else {
-                append(value.content.toJsNumberOrNull()?.let { jsNumber(it) } ?: value.content)
+                append(
+                    value.content.toCoercedJsNumberOrNull()?.let {
+                        jsNumber(it)
+                    } ?: value.content
+                )
             }
     }
 }

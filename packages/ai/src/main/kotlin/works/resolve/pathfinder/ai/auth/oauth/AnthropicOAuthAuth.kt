@@ -1,8 +1,6 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
 import java.net.SocketTimeoutException
-import java.net.URI
-import java.net.URLDecoder
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -17,10 +15,13 @@ import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.oauth.PkceGenerator
+import works.resolve.pathfinder.ai.utils.formQuery
+import works.resolve.pathfinder.ai.utils.formUrlEncode
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.requireString
 import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.ai.utils.urlQueryParamsOrNull
 
 /**
  * A loopback callback server races the manual code prompt; a server result
@@ -140,7 +141,7 @@ class AnthropicOAuthAuth(
             )
             interaction.notify(
                 AuthEvent.AuthUrl(
-                    url = AUTHORIZE_URL + "?" + formEncode(authParams),
+                    url = AUTHORIZE_URL + "?" + formUrlEncode(authParams),
                     instructions =
                         "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here."
                 )
@@ -196,14 +197,9 @@ class AnthropicOAuthAuth(
         val value = input.trim()
         if (value.isEmpty()) return ParsedAuthorizationInput(null, null)
 
-        try {
-            val uri = URI(value)
-            if (uri.scheme != null) {
-                val params = uri.rawQuery?.let(::parseQueryString) ?: emptyMap()
-                return ParsedAuthorizationInput(params["code"], params["state"])
-            }
-        } catch (_: Exception) {
-            // not a URL
+        val urlParams = urlQueryParamsOrNull(value)
+        if (urlParams != null) {
+            return ParsedAuthorizationInput(urlParams["code"], urlParams["state"])
         }
 
         if (value.contains("#")) {
@@ -214,30 +210,11 @@ class AnthropicOAuthAuth(
         }
 
         if (value.contains("code=")) {
-            val params = parseQueryString(value) ?: emptyMap()
+            val params = formQuery(value)
             return ParsedAuthorizationInput(params["code"], params["state"])
         }
 
         return ParsedAuthorizationInput(value, null)
-    }
-
-    private fun parseQueryString(query: String): Map<String, String>? {
-        val result = mutableMapOf<String, String>()
-        for (pair in query.split('&')) {
-            if (pair.isEmpty()) continue
-            val separator = pair.indexOf('=')
-            if (separator < 0) continue
-            val name = pair.substring(0, separator).urlDecode()
-            val decoded = pair.substring(separator + 1).urlDecode()
-            if (!result.containsKey(name)) result[name] = decoded
-        }
-        return result
-    }
-
-    private fun String.urlDecode(): String = try {
-        URLDecoder.decode(this, "UTF-8")
-    } catch (_: IllegalArgumentException) {
-        this
     }
 
     internal suspend fun exchangeAuthorizationCode(
@@ -429,18 +406,5 @@ class AnthropicOAuthAuth(
         const val REFRESH_SKEW_MS: Long = 5 * 60 * 1000
 
         const val REQUEST_TIMEOUT_MS: Int = 30_000
-
-        /**
-         * The JDK [java.net.URLEncoder] uses the WHATWG form-urlencoded set
-         * (as `URLSearchParams` does): alphanumerics, `*`, `-`, `.`, `_` stay
-         * bare, space becomes `+`, and every other byte (including `~` →
-         * `%7E`) is percent-encoded.
-         */
-        internal fun formEncode(fields: Map<String, String>): String =
-            fields.entries.joinToString("&") { (name, value) ->
-                urlEncode(name) + "=" + urlEncode(value)
-            }
-
-        private fun urlEncode(value: String): String = java.net.URLEncoder.encode(value, "UTF-8")
     }
 }

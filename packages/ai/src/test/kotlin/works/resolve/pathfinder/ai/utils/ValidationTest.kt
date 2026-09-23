@@ -176,6 +176,12 @@ class ValidationTest {
         assertFailsWith<IllegalArgumentException> {
             validateValue("""{"type":"number"}""", "\"Infinity\"")
         }
+        // JS trim (not Kotlin trim) guards the coercion, so JS-whitespace
+        // around a literal still coerces — pi's `value.trim() !== ""`.
+        assertEquals(
+            "5.0",
+            validateValue("""{"type":"number"}""", "\"\u00A05\u00A0\"")["value"].repr()
+        )
     }
 
     @Test

@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
-import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.net.InetSocketAddress
@@ -15,6 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import works.resolve.pathfinder.ai.utils.formQuery
 
 internal data class LoopbackCallbackRequest(
     val method: String,
@@ -204,7 +204,7 @@ internal class LoopbackOAuthServer<R>(
         val query = if (queryStart >=
             0
         ) {
-            parseQuery(target.substring(queryStart + 1))
+            formQuery(target.substring(queryStart + 1))
         } else {
             emptyMap()
         }
@@ -257,68 +257,6 @@ internal class LoopbackOAuthServer<R>(
     }
 }
 
-/**
- * Parse `a=1&b=2` with form decoding (so `+` means space) and first-occurrence
- * semantics, matching `URLSearchParams.get`.
- */
-internal fun parseQuery(rawQuery: String): Map<String, String> {
-    if (rawQuery.isEmpty()) return emptyMap()
-    val map = LinkedHashMap<String, String>()
-    for (pair in rawQuery.split('&')) {
-        if (pair.isEmpty()) continue
-        val eq = pair.indexOf('=')
-        val key = if (eq >= 0) pair.substring(0, eq) else pair
-        val value = if (eq >= 0) pair.substring(eq + 1) else ""
-        val decodedKey = urlDecode(key)
-        if (!map.containsKey(decodedKey)) {
-            map[decodedKey] = urlDecode(value)
-        }
-    }
-    return map
-}
-
-/**
- * WHATWG `application/x-www-form-urlencoded` decoding, matching
- * `URLSearchParams`: `+` becomes a space, valid escapes decode as UTF-8
- * (malformed sequences become U+FFFD), and anything else — an invalid escape
- * like `%zz` or a trailing `%` — passes through unchanged.
- */
-private fun urlDecode(value: String): String {
-    val out = ByteArrayOutputStream()
-    var index = 0
-    while (index < value.length) {
-        val c = value[index]
-        when {
-            c == '+' -> {
-                out.write(' '.code)
-                index++
-            }
-
-            c == '%' && index + 2 < value.length &&
-                isHex(value[index + 1]) &&
-                isHex(value[index + 2]) -> {
-                out.write(hexDigit(value[index + 1]) * 16 + hexDigit(value[index + 2]))
-                index += 3
-            }
-
-            else -> {
-                out.write(c.toString().toByteArray(Charsets.UTF_8))
-                index++
-            }
-        }
-    }
-    return out.toString(Charsets.UTF_8)
-}
-
-private fun isHex(c: Char): Boolean = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
-
-private fun hexDigit(c: Char): Int = when (c) {
-    in '0'..'9' -> c - '0'
-    in 'a'..'f' -> c - 'a' + 10
-    else -> c - 'A' + 10
-}
-
-/** Minimal status-line reason phrases (HTTP/1.1 allows any token; clients ignore it). */
 private fun reasonPhrase(status: Int): String = when (status) {
     200 -> "OK"
     400 -> "Bad Request"

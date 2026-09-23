@@ -2,7 +2,6 @@ package works.resolve.pathfinder.ai.api
 
 import com.github.luben.zstd.Zstd
 import java.io.IOException
-import java.util.Base64
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -50,11 +49,13 @@ import works.resolve.pathfinder.ai.transport.WebSocketEvent
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.RetryDelayExceededError
 import works.resolve.pathfinder.ai.utils.arr
+import works.resolve.pathfinder.ai.utils.decodeJwtPayload
 import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.getDeclaredTools
 import works.resolve.pathfinder.ai.utils.getInitialSystemMessage
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
+import works.resolve.pathfinder.ai.utils.jsParseNumberOrNull
 import works.resolve.pathfinder.ai.utils.normalizeContext
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
@@ -202,13 +203,12 @@ internal fun isRetryableError(status: Int, errorText: String): Boolean {
 }
 
 /**
- * Retry delay from the retry-after-ms / retry-after headers. Parsing stays
- * codex-local rather than shared with ProviderRetry: the two parsers are
- * deliberately different (this one uses JS `Number()` semantics —
- * whole-string parsing with hex integers accepted, non-finite values
- * skipped — and clamps to >= 0; ProviderRetry parses lenient floats without
- * clamping), so they are not deduplicated. The delay-cap check they feed
- * into is shared ([validateRetryDelayMs]).
+ * Retry delay from the retry-after-ms / retry-after headers, mirroring pi's
+ * codex adapter: both parse with JS `Number()` (whole-string semantics, so
+ * `"2 s"` is not a number) via the shared [jsParseNumberOrNull] — distinct
+ * from `ProviderRetry`, which uses `Number.parseFloat` prefix semantics
+ * (jsParseFloatOrNull). The delay-cap check they feed into is shared
+ * ([validateRetryDelayMs]).
  */
 internal fun getRetryAfterDelayMs(
     retryAfterMs: String?,
@@ -216,39 +216,19 @@ internal fun getRetryAfterDelayMs(
     nowMs: () -> Long
 ): Long? {
     retryAfterMs?.let {
-        jsNumberOrNull(it)?.takeIf { value -> value.isFinite() }?.let { millis ->
+        jsParseNumberOrNull(it)?.takeIf { value -> value.isFinite() }?.let { millis ->
             return maxOf(0.0, millis).toLong()
         }
     }
     if (retryAfter == null || retryAfter.isEmpty()) return null
-    jsNumberOrNull(retryAfter)?.takeIf { value -> value.isFinite() }?.let { seconds ->
+    jsParseNumberOrNull(retryAfter)?.takeIf { value -> value.isFinite() }?.let { seconds ->
         return maxOf(0.0, seconds * 1000).toLong()
     }
     // retry-after can be an HTTP date ("Wed, 21 Oct 2015 07:28:00 GMT" —
-    // the spec format) or ISO-8601; try both, RFC 1123 first (Instant.parse
-    // only accepts ISO-8601-with-Z).
-    val date = works.resolve.pathfinder.ai.utils.parseHttpDateMsOrNull(retryAfter)
-        ?: try {
-            java.time.Instant.parse(retryAfter).toEpochMilli()
-        } catch (_: Exception) {
-            return null
-        }
+    // the spec format) or ISO-8601; the shared date-parse chain covers both
+    // (RFC 1123 first, then the ISO 8601 forms `Date.parse` accepts).
+    val date = works.resolve.pathfinder.ai.utils.parseHttpDateMsOrNull(retryAfter) ?: return null
     return maxOf(0L, date - nowMs())
-}
-
-/** JS `Number()` for the string forms a retry header can carry: decimal
- * (with exponent and sign) via the platform parser, hex integers via the
- * 0x/0X prefix, and trimmed-empty strings as 0. Returns null where
- * `Number()` yields NaN. */
-private fun jsNumberOrNull(value: String): Double? {
-    val trimmed = value.trim()
-    if (trimmed.isEmpty()) return 0.0
-    val hex = Regex("^([+-]?)0[xX]([0-9a-fA-F]+)$").find(trimmed)
-    if (hex != null) {
-        val magnitude = hex.groupValues[2].toLongOrNull(16) ?: return null
-        return (if (hex.groupValues[1] == "-") -magnitude else magnitude).toDouble()
-    }
-    return trimmed.toDoubleOrNull()
 }
 
 /**
@@ -1457,25 +1437,11 @@ internal fun parseCodexErrorResponse(
 }
 
 internal fun extractAccountId(token: String): String {
-    try {
-        val parts = token.split(".")
-        require(parts.size == 3) { "Invalid token" }
-        val payload = Base64.getDecoder().decode(
-            parts[1].replace('-', '+').replace('_', '/').padBase64()
-        ).decodeToString()
-        val json = responsesJson.parseToJsonElement(payload)
-            as? JsonObject ?: error("Invalid token")
-        val accountId = json.obj(JWT_CLAIM_PATH)?.str("chatgpt_account_id")
-        if (accountId.isNullOrEmpty()) error("No account ID in token")
-        return accountId
-    } catch (_: Exception) {
+    val accountId = decodeJwtPayload(token)?.obj(JWT_CLAIM_PATH)?.str("chatgpt_account_id")
+    if (accountId.isNullOrEmpty()) {
         throw IllegalStateException("Failed to extract accountId from token")
     }
-}
-
-private fun String.padBase64(): String {
-    val remainder = length % 4
-    return if (remainder == 0) this else this + "=".repeat(4 - remainder)
+    return accountId
 }
 
 internal fun buildBaseCodexHeaders(

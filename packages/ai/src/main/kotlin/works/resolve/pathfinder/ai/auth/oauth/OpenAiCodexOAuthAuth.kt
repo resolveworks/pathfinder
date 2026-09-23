@@ -15,12 +15,17 @@ import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.oauth.PkceGenerator
+import works.resolve.pathfinder.ai.utils.decodeJwtPayload
+import works.resolve.pathfinder.ai.utils.formQuery
+import works.resolve.pathfinder.ai.utils.formUrlEncode
+import works.resolve.pathfinder.ai.utils.jsParseNumberOrNull
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
 import works.resolve.pathfinder.ai.utils.truthyString
+import works.resolve.pathfinder.ai.utils.urlQueryParamsOrNull
 
 /**
  * Divergences from pi:
@@ -52,9 +57,10 @@ import works.resolve.pathfinder.ai.utils.truthyString
  *   messages (statuses, wording, ordering) is verbatim.
  * - **No status line fallback.** `OAuthHttpResponse` has no `statusText`, so
  *   failed token responses append nothing when the body is empty.
- * - **JWT base64 tolerance.** Pi decodes with `atob` (standard base64); this
- *   port also accepts unpadded base64url, since real ChatGPT access tokens
- *   are RFC 7515 base64url JWTs — strictly more permissive, never less.
+ * - **JWT base64 tolerance.** Pi decodes with `atob` (standard base64);
+ *   this port decodes RFC 7515 base64url with omitted padding tolerated,
+ *   which is what real ChatGPT access tokens are — a standard-base64
+ *   payload (`+`/`/`) is not a valid JWT part and is rejected.
  * - **Test seams.** `Date.now()` reads through [clock], state generation
  *   through [createState], and PKCE through [pkce] — all for deterministic
  *   tests; production uses defaults.
@@ -125,7 +131,7 @@ class OpenAiCodexOAuthAuth(
         val pair = pkce.generate()
         val state = createState()
         val url = AUTH_BASE_URL + AUTHORIZE_PATH + "?" +
-            XaiOAuthAuth.formUrlEncode(
+            formUrlEncode(
                 linkedMapOf(
                     "response_type" to "code",
                     "client_id" to CLIENT_ID,
@@ -138,7 +144,7 @@ class OpenAiCodexOAuthAuth(
                     "codex_cli_simplified_flow" to "true",
                     "originator" to originator
                 )
-            ).toString(Charsets.UTF_8)
+            )
         return AuthorizationFlow(verifier = pair.verifier, state = state, url = url)
     }
 
@@ -273,16 +279,9 @@ class OpenAiCodexOAuthAuth(
         val value = input.trim()
         if (value.isEmpty()) return AuthorizationInput(code = null, state = null)
 
-        val url = try {
-            java.net.URI(value)
-        } catch (_: Exception) {
-            null
-        }
-        if (url?.scheme != null) {
-            return AuthorizationInput(
-                code = queryParam(url.rawQuery, "code"),
-                state = queryParam(url.rawQuery, "state")
-            )
+        val urlParams = urlQueryParamsOrNull(value)
+        if (urlParams != null) {
+            return AuthorizationInput(code = urlParams["code"], state = urlParams["state"])
         }
 
         if (value.contains("#")) {
@@ -291,33 +290,13 @@ class OpenAiCodexOAuthAuth(
         }
 
         if (value.contains("code=")) {
-            return AuthorizationInput(
-                code = queryParam(value, "code"),
-                state = queryParam(value, "state")
-            )
+            val params = formQuery(value)
+            return AuthorizationInput(code = params["code"], state = params["state"])
         }
-
         return AuthorizationInput(code = value, state = null)
     }
 
     internal data class AuthorizationInput(val code: String?, val state: String?)
-
-    /** First matching form-encoded query parameter (`URLSearchParams.get` parity). */
-    private fun queryParam(rawQuery: String?, name: String): String? {
-        if (rawQuery == null) return null
-        for (pair in rawQuery.split('&')) {
-            if (pair.isEmpty()) continue
-            val separator = pair.indexOf('=')
-            val rawName = if (separator >= 0) pair.substring(0, separator) else pair
-            if (formUrlDecode(rawName) == name) {
-                return if (separator >= 0) formUrlDecode(pair.substring(separator + 1)) else ""
-            }
-        }
-        return null
-    }
-
-    private fun formUrlDecode(raw: String): String =
-        java.net.URLDecoder.decode(raw, Charsets.UTF_8.name())
 
     // --- device-code login ---
 
@@ -396,54 +375,13 @@ class OpenAiCodexOAuthAuth(
         when (val interval = json?.get("interval")) {
             is JsonPrimitive ->
                 if (interval.isString) {
-                    jsNumber(interval.content)
+                    jsParseNumberOrNull(interval.content) ?: Double.NaN
                 } else {
                     interval.content.toDoubleOrNull() ?: Double.NaN
                 }
 
             else -> Double.NaN
         }
-
-    /**
-     * JS `Number(string)` for the string-interval path: trims JS whitespace
-     * (including `\u00A0`/`\uFEFF`), maps the empty/whitespace-only result to
-     * 0, accepts signed decimal/exponent notation plus `0x`/`0o`/`0b` radix
-     * literals and `Infinity`/`NaN`, and returns NaN for everything else
-     * (including Java-only forms like a trailing `f`/`d` suffix). Narrow
-     * divergence: radix literals beyond `Long` range return NaN instead of
-     * JS's rounded double.
-     */
-    internal fun jsNumber(raw: String): Double {
-        val s = raw.trim { it.isWhitespace() || it == '\u00A0' || it == '\uFEFF' }
-        if (s.isEmpty()) return 0.0
-        val negative = s.startsWith("-")
-        val unsigned = s.removePrefix("+").removePrefix("-")
-        when (unsigned) {
-            "Infinity" ->
-                return if (negative) {
-                    Double.NEGATIVE_INFINITY
-                } else {
-                    Double.POSITIVE_INFINITY
-                }
-
-            "NaN" -> return Double.NaN
-        }
-        radixLiteral.matchEntire(s)?.let { match ->
-            val digits = match.groupValues[2].substring(2)
-            val radix = when (match.groupValues[2][1].lowercaseChar()) {
-                'x' -> 16
-                'o' -> 8
-                else -> 2
-            }
-            val value = digits.toLongOrNull(radix) ?: return Double.NaN
-            return (if (negative) -value else value).toDouble()
-        }
-        return if (decimalLiteral.matches(s)) s.toDouble() else Double.NaN
-    }
-
-    private val radixLiteral = Regex("^([+-]?)(0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+)$")
-
-    private val decimalLiteral = Regex("^([+-]?)((\\d+(\\.\\d*)?)|\\.\\d+)([eE][+-]?\\d+)?$")
 
     internal data class DeviceTokenSuccess(
         val authorizationCode: String,
@@ -626,22 +564,7 @@ class OpenAiCodexOAuthAuth(
 
     // --- credentials ---
 
-    internal fun decodeJwt(token: String): JsonObject? {
-        return try {
-            val parts = token.split(".")
-            if (parts.size != 3) return null
-            val payload = parts[1]
-            val normalized = payload.replace('-', '+').replace('_', '/')
-            val decoded =
-                java.util.Base64.getDecoder()
-                    .decode(normalized + "=".repeat((4 - normalized.length % 4) % 4))
-            parseJson(decoded.decodeToString()) as? JsonObject
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    internal fun getAccountId(accessToken: String): String? = decodeJwt(accessToken)
+    internal fun getAccountId(accessToken: String): String? = decodeJwtPayload(accessToken)
         ?.obj(JWT_CLAIM_PATH)
         ?.truthyString("chatgpt_account_id")
 
@@ -675,7 +598,7 @@ class OpenAiCodexOAuthAuth(
                 method = "POST",
                 url = url,
                 headers = mapOf("content-type" to "application/x-www-form-urlencoded"),
-                body = XaiOAuthAuth.formUrlEncode(fields),
+                body = formUrlEncode(fields).toByteArray(Charsets.UTF_8),
                 timeoutMs = REQUEST_TIMEOUT_MS
             )
         )
