@@ -41,6 +41,19 @@ import works.resolve.pathfinder.ui.chat.ChatViewModel
  */
 class PathfinderApplication : Application() {
 
+    /**
+     * The shared app client: one OkHttp instance for provider streaming
+     * ([transport], [webSocketTransport]) and app tools. Its read timeout is
+     * the 300s inter-read idle cap — the undici `bodyTimeout` analog pi
+     * installs process-wide — so streamed bodies carry no whole-request
+     * deadline here; per-request header-phase deadlines (the provider-SDK
+     * fetch-timeout analog) are set by the transport on each call, never by
+     * this client. OAuth deliberately does not use this client:
+     * `OkHttpOAuthHttpClient` owns a private one because its whole-exchange
+     * call deadlines (the `AbortSignal.timeout` analog) are a different
+     * deadline model — merging the clients would couple OAuth's per-exchange
+     * deadlines to the streaming idle model.
+     */
     private val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -197,6 +210,11 @@ class PathfinderApplication : Application() {
          * process-wide; OkHttp applies it per read op, so a stream whose gaps
          * stay under the limit never times out, and silence beyond it fails
          * like pi's bodyTimeout.
+         *
+         * Numerically equal to the header-phase request deadline
+         * (NativeAgentFactory's REQUEST_TIMEOUT_MS) but semantically distinct
+         * — idle gap vs DNS-through-headers deadline. Do not merge them into
+         * one shared constant.
          */
         const val HTTP_IDLE_TIMEOUT_MS = 300_000L
     }

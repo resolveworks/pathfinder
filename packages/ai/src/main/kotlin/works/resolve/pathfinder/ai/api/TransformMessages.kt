@@ -190,8 +190,9 @@ internal fun transformMessages(
                         toolName = tc.name,
                         content = listOf(TextContent("No result provided")),
                         isError = true,
-                        // pi stamps Date.now() here; reading wall time is
-                        // this pass's job.
+                        // Wall-time read sanctioned by the AGENTS.md
+                        // "Time and deadlines" rule: pi stamps Date.now()
+                        // here, and stamping wall time is this pass's job.
                         timestamp = System.currentTimeMillis()
                     )
                 )

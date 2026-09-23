@@ -106,6 +106,12 @@ data class OAuthHttpResponse(
  * connect timeout capped at the same budget so a late connect can never
  * extend it. Response bodies are read in full, unbounded, like pi's
  * `await response.text()` / `.json()`.
+ *
+ * Deliberately a private client rather than the app's shared streaming
+ * client (see the composition root's topology note): whole-exchange call
+ * deadlines are a different model than the shared client's inter-read idle
+ * cap plus per-request header-phase deadlines, and sharing would couple the
+ * two.
  */
 class OkHttpOAuthHttpClient : OAuthHttpClient {
 
