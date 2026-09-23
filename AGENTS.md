@@ -85,6 +85,25 @@ the shared JS-number helpers (no JVM library implements them; hand-rolled is
 the norm). Per-flow code keeps only what pi actually varies: scheme gates and
 error channels.
 
+Concurrency conventions: abort is coroutine cancellation — it never produces
+a terminal Error event, and rethrows out of `prompt()`/`compact()` only after
+the run's terminal state is committed. Where a `NonCancellable` tail must
+still observe abort (pi reads `signal.aborted` there), a `@Volatile`
+abort-requested flag mirrors the signal, because cancellation is structurally
+invisible inside `NonCancellable`. Break out of a `Flow` collect with
+truncation operators (`transformWhile`/`takeWhile`) when the break is a
+per-element predicate, else a private sentinel exception caught immediately
+outside the collect (kotlinx's own operators do this internally); sentinels
+never cross a public API boundary or survive a generic catch. Timeouts use
+`withTimeoutOrNull` — or a `TimeoutCancellationException` catch wrapping only
+the `withTimeout` call — with real failures propagating from outside the
+block, and plain `CancellationException` always rethrown. `NonCancellable` is
+reserved for must-complete tails (terminal events, resource release) and used
+alone in the context. Event delivery uses one awaited suspend sink plus a
+suspending-emit `SharedFlow` for observers — never `tryEmit` where loss is
+unacceptable. Serialization picks per call path: `Mutex` when the section
+suspends, plain locks or `@Volatile` snapshots when it does not.
+
 The generated model catalog includes only providers supported end to end and
 must not be hand-edited.
 
