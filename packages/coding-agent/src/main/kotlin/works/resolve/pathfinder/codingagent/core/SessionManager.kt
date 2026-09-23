@@ -57,6 +57,7 @@ import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.constrainedSamplingToJson
 import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
 import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
 import works.resolve.pathfinder.ai.utils.uuidv7
@@ -359,7 +360,9 @@ data class SessionInfo(
  * header, then one entry per line with pi's exact field names. Entry
  * timestamps encode as pi's ISO-8601 UTC strings with exactly three
  * millisecond digits and decode like `new Date(...)` (see [parseIso]);
- * internally entries carry epoch millis.
+ * internally entries carry epoch millis. Optional fields encode with the
+ * omit-when-null convention (`?.let { put(...) }`): like pi's JSON.stringify
+ * of optional fields, absent optionals are omitted, never materialized.
  *
  * Divergences from pi:
  * - `cwd` carries the session's working directory (a connected SSH remote,
@@ -562,7 +565,7 @@ internal object JsonlCodec {
                 timestamp = timestamp,
                 summary = obj.string("summary") ?: invalid(),
                 firstKeptEntryId = obj.string("firstKeptEntryId") ?: invalid(),
-                tokensBefore = obj.number("tokensBefore")?.toInt() ?: invalid(),
+                tokensBefore = obj.strictDouble("tokensBefore")?.toInt() ?: invalid(),
                 details = decodeDetails(obj["details"]),
                 usage = obj["usage"]?.let(::decodeUsage),
                 systemMessage = obj["systemMessage"]?.let {
@@ -624,10 +627,6 @@ internal object JsonlCodec {
         throw JsonlDecodeException(reason)
 
     class JsonlDecodeException(message: String) : Exception(message)
-
-    /** Numeric (never string-encoded) field read for wire numbers. */
-    private fun JsonObject.number(key: String): Double? =
-        (get(key) as? JsonPrimitive)?.takeIf { !it.isString }?.contentOrNull?.toDoubleOrNull()
 
     // ---- message codecs (unchanged wire shape from the v4 codec) ----
 
@@ -744,12 +743,12 @@ internal object JsonlCodec {
                         ?.map { ToolReference((it as JsonObject).string("name") ?: invalid()) }
                         ?: invalid()
                 },
-                timestamp = obj.number("timestamp")?.toLong() ?: entryTimestamp
+                timestamp = obj.strictDouble("timestamp")?.toLong() ?: entryTimestamp
             )
 
             "user" -> UserMessage(
                 content = decodeContentList(obj["content"]),
-                timestamp = obj.number("timestamp")?.toLong() ?: entryTimestamp
+                timestamp = obj.strictDouble("timestamp")?.toLong() ?: entryTimestamp
             )
 
             "assistant" -> AssistantMessage(
@@ -764,7 +763,7 @@ internal object JsonlCodec {
                 responseId = obj.string("responseId"),
                 responseModel = obj.string("responseModel"),
                 endTurn = obj["endTurn"]?.let { (it as JsonPrimitive).content.toBooleanStrict() },
-                timestamp = obj.number("timestamp")?.toLong() ?: entryTimestamp
+                timestamp = obj.strictDouble("timestamp")?.toLong() ?: entryTimestamp
             )
 
             "toolResult" -> ToolResultMessage(
@@ -776,7 +775,7 @@ internal object JsonlCodec {
                 isError =
                     obj["isError"]?.let { (it as JsonPrimitive).content.toBooleanStrict() }
                         ?: invalid(),
-                timestamp = obj.number("timestamp")?.toLong() ?: entryTimestamp
+                timestamp = obj.strictDouble("timestamp")?.toLong() ?: entryTimestamp
             )
 
             else -> invalid("unknown message role $role")
@@ -897,16 +896,19 @@ internal object JsonlCodec {
     private fun decodeUsage(element: kotlinx.serialization.json.JsonElement): Usage {
         val obj = element as? JsonObject ?: invalid()
         val cost = obj["cost"] as? JsonObject ?: invalid()
-        val c = { key: String -> cost.number(key) ?: invalid() }
-        fun i(key: String) = obj.number(key)?.toInt() ?: invalid()
+        val c = { key: String -> cost.strictDouble(key) ?: invalid() }
+        fun i(key: String) = obj.strictDouble(key)?.toInt() ?: invalid()
         return Usage(
             input = i("input"),
             output = i("output"),
             cacheRead = i("cacheRead"),
             cacheWrite = i("cacheWrite"),
-            cacheWrite1h = obj.number("cacheWrite1h")?.toInt() ?: 0,
-            // pi omits reasoning when zero.
-            reasoning = obj.number("reasoning")?.toInt() ?: 0,
+            cacheWrite1h = obj.strictDouble("cacheWrite1h")?.toInt() ?: 0,
+            // pi's `reasoning` is optional: written whenever the provider reported
+            // one (explicit 0 included), omitted only when undefined. The typed
+            // Usage folds undefined into 0, so the codec omits zero and absence
+            // here decodes back to 0.
+            reasoning = obj.strictDouble("reasoning")?.toInt() ?: 0,
             totalTokens = i("totalTokens"),
             cost = Cost(
                 input = c("input"),

@@ -3,6 +3,7 @@ package works.resolve.pathfinder.ai.utils
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -10,6 +11,14 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
+
+/*
+ * Shared JSON DOM reads. Read JSON the way the upstream site reads it:
+ * lenient family where pi reads the field through TS typing with no runtime
+ * guard (JS coerces at use); strict family where pi guards with
+ * `typeof`/`Number.isFinite`; element-form strict reads mirror `typeof` on a
+ * held value.
+ */
 
 val lenientJson: Json = Json { ignoreUnknownKeys = true }
 
@@ -54,10 +63,6 @@ fun JsonObject?.string(key: String): String? =
 /** Element form of [string]. */
 fun JsonElement?.stringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
 
-/** Finite numeric double that is not string-encoded (TS `Number.isFinite` shape). */
-fun JsonElement?.numberOrNull(): Double? =
-    (this as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull?.takeIf { it.isFinite() }
-
 /** [key] as a numeric (never string-encoded) Int; null when absent/malformed. */
 fun JsonObject?.strictInt(key: String): Int? = strictNumeric(key) { it.intOrNull }
 
@@ -67,9 +72,20 @@ fun JsonObject?.strictLong(key: String): Long? = strictNumeric(key) { it.longOrN
 /** [key] as a numeric (never string-encoded) Double; null when absent/malformed. */
 fun JsonObject?.strictDouble(key: String): Double? = strictNumeric(key) { it.doubleOrNull }
 
+/**
+ * Element form of [strictDouble] with no finite filter: `typeof x === "number"`
+ * accepts the Infinity/NaN literals a streaming parse can hold.
+ */
+fun JsonElement?.strictDoubleOrNull(): Double? =
+    (this as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull
+
 /** [key] as a boolean primitive (never string-encoded); null when absent/malformed. */
 fun JsonObject?.strictBoolean(key: String): Boolean? =
     (this?.get(key) as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+
+/** Element form of [strictBoolean]. */
+fun JsonElement?.strictBooleanOrNull(): Boolean? =
+    (this as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
 
 private inline fun <N> JsonObject?.strictNumeric(key: String, parse: (JsonPrimitive) -> N?): N? =
     (this?.get(key) as? JsonPrimitive)?.takeIf { !it.isString }?.let(parse)
@@ -81,14 +97,41 @@ private inline fun <N> JsonObject?.strictNumeric(key: String, parse: (JsonPrimit
 fun JsonObject.requireString(key: String, error: (String) -> Throwable): String =
     string(key) ?: throw error(key)
 
-fun JsonObject.requireInt(key: String, error: (String) -> Throwable): Int =
-    strictInt(key) ?: throw error(key)
+// --- Equality ---
 
-fun JsonObject.requireLong(key: String, error: (String) -> Throwable): Long =
-    strictLong(key) ?: throw error(key)
+/**
+ * JS `===` over JSON values: string primitives by content, numeric
+ * primitives by parsed double value (5, 5.0, and 1e3-vs-1000 are equal; NaN,
+ * like in JS, equals nothing), booleans by value, and objects/arrays
+ * structurally with the same primitive rules; kind mismatches (string vs
+ * number) are always unequal. Exists because kotlinx `==` compares numeric
+ * content lexically (verified at kotlinx.serialization 1.11.0), so
+ * JsonPrimitive(5) != JsonPrimitive(5.0) and a parsed 1e3 != 1000 there.
+ */
+fun jsonEquals(a: JsonElement, b: JsonElement): Boolean = when {
+    a is JsonNull || b is JsonNull -> a is JsonNull && b is JsonNull
 
-fun JsonObject.requireDouble(key: String, error: (String) -> Throwable): Double =
-    strictDouble(key) ?: throw error(key)
+    a is JsonObject && b is JsonObject ->
+        a.size == b.size && a.keys.all { key ->
+            key in b && jsonEquals(a.getValue(key), b.getValue(key))
+        }
 
-fun JsonObject.requireBoolean(key: String, error: (String) -> Throwable): Boolean =
-    strictBoolean(key) ?: throw error(key)
+    a is JsonArray && b is JsonArray ->
+        a.size == b.size && a.zip(b).all { (x, y) -> jsonEquals(x, y) }
+
+    a is JsonPrimitive && b is JsonPrimitive && a.isString == b.isString ->
+        if (a.isString) {
+            a.content == b.content
+        } else {
+            val numberA = a.strictDoubleOrNull()
+            val numberB = b.strictDoubleOrNull()
+            if (numberA != null && numberB != null) {
+                numberA == numberB
+            } else {
+                val booleanA = a.strictBooleanOrNull()
+                booleanA != null && booleanA == b.strictBooleanOrNull()
+            }
+        }
+
+    else -> false
+}

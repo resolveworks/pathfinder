@@ -438,6 +438,31 @@ class SettingsManagerTest {
     }
 
     @Test
+    fun unguardedReadsAcceptQuotedNumeralsWhileTokenBudgetsRejectThem() = runTest {
+        // Fields pi reads through TS typing with no runtime guard coerce
+        // like JS would (kotlinx lenient reads accept quoted numerals and
+        // booleans); the compaction token budgets pi guards with
+        // `typeof`/`Number.isSafeInteger` reject a quoted numeral.
+        val storage = InMemorySettingsStorage()
+        writeStorage(
+            storage,
+            """{"retry":{"enabled":"true","maxRetries":"1","baseDelayMs":"500"},""" +
+                """"branchSummary":{"reserveTokens":"5"}}"""
+        )
+        val manager = SettingsManager.fromStorage(storage)
+        assertTrue(manager.drainErrors().isEmpty())
+        assertEquals(
+            RetrySettings(enabled = true, maxRetries = 1, baseDelayMs = 500),
+            manager.getRetrySettings()
+        )
+        assertEquals(5L, manager.getBranchSummarySettings().reserveTokens)
+
+        writeStorage(storage, """{"compaction":{"reserveTokens":"100"}}"""")
+        manager.reload()
+        assertEquals(1, manager.drainErrors().size)
+    }
+
+    @Test
     fun setAndGetModelThinkingLevels() = runTest {
         val manager = SettingsManager.inMemory()
 

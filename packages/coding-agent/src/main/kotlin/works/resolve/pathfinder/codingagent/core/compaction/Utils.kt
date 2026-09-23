@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.codingagent.core.compaction
 
-import kotlinx.serialization.json.JsonElement
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.ContentType
 import works.resolve.pathfinder.ai.Message
@@ -58,8 +57,6 @@ fun formatFileOperations(readFiles: List<String>, modifiedFiles: List<String>): 
 
 private const val TOOL_RESULT_MAX_CHARS = 2000
 
-private fun safeJsonStringify(value: JsonElement): String = value.toString()
-
 private fun truncateForSummary(text: String, maxChars: Int): String {
     if (text.length <= maxChars) return text
     val truncatedChars = text.length - maxChars
@@ -88,7 +85,7 @@ fun serializeConversation(messages: List<Message>): String {
 
                         is ToolCall -> {
                             val argsStr = block.arguments.entries.joinToString(", ") { (k, v) ->
-                                "$k=${safeJsonStringify(v)}"
+                                "$k=$v"
                             }
                             toolCalls.add("${block.name}($argsStr)")
                         }

@@ -12,8 +12,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
@@ -81,6 +79,7 @@ import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strOrNull
+import works.resolve.pathfinder.ai.utils.strictDoubleOrNull
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
 import works.resolve.pathfinder.telemetry.TelemetryContext
@@ -102,12 +101,9 @@ private fun hasValidCommonReasoningDetailFields(detail: JsonObject): Boolean {
     val format = detail["format"]
     if (format != null && format !is JsonNull && format.stringOrNull() == null) return false
     val index = detail["index"]
-    if (index != null && index !is JsonNull &&
-        // pi guards with `typeof index === "number"`; numeric primitives only.
-        (index as? JsonPrimitive)?.let { it.longOrNull != null || it.doubleOrNull != null } != true
-    ) {
-        return false
-    }
+    // pi guards with `typeof index === "number"`: JSON null, strings, and
+    // quoted numerals are rejected; Infinity/NaN spellings pass.
+    if (index != null && index.strictDoubleOrNull() == null) return false
     return true
 }
 
