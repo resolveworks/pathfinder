@@ -1,6 +1,11 @@
 package works.resolve.pathfinder.codingagent.core
 
 import java.io.File
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -15,6 +20,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
@@ -278,6 +284,119 @@ class AgentSessionFidelityTest {
         assertEquals(1, events.filterIsInstance<AgentEvent.AgentSettled>().size)
         assertFalse(agent.isStreaming.value)
     }
+
+    /**
+     * pi's #9340 regression, ported under real dispatchers: an abort landing
+     * while the run's final error message is still being processed (here:
+     * parked in its persistence append — pi fires the same abort from a
+     * synchronous message_end listener) must skip every post-run phase — no
+     * second retry start, no compaction — and finalize the outstanding retry
+     * as cancelled. Single-threaded test schedulers serialize this window
+     * away: the abort comes from a foreign thread while the loop thread is
+     * parked mid final-message_end, so the abort flag and the prompt-job
+     * Divergence from pi's exact event tail, inherent to the port's eager
+     * cancellation: pi's advisory signal lets the error message finish and
+     * the post-run checkpoint finalize the attempt ("Retry cancelled"); the
+     * port's prompt-job cancellation preempts the run at the append resume,
+     * so the interrupted run finalizes through the agent's synthesized
+     * aborted lifecycle — which closes the outstanding attempt exactly like
+     * pi's abort during a retried run's streaming (success=true on a
+     * non-error stopReason).
+     */
+    @Test
+    fun `abort at the final message window skips the post-run phases under real dispatchers`() =
+        runBlocking {
+            val streams = ScriptedStreams().apply {
+                streams.add(errorStream("terminated"))
+                streams.add(errorStream("terminated"))
+            }
+            val streamCalls = AtomicInteger()
+            val parked = AtomicBoolean(false)
+            val windowEntered = CountDownLatch(1)
+            val releaseWindow = CountDownLatch(1)
+            val gatedManager = SessionManager.create(
+                createTempDirectory("fidelity-abort-window").toFile(),
+                clock = clock,
+                ioDispatcher = Dispatchers.Unconfined,
+                idFactory = { "sess-abort-window" },
+                entryIdFactory = {
+                    val id = "e${entryCounter++}"
+                    // Park once inside the second (final) error message's
+                    // append: the last suspension before agent_end. A raw
+                    // latch — coroutine cancellation cannot preempt it.
+                    if (streamCalls.get() >= 2 && parked.compareAndSet(false, true)) {
+                        windowEntered.countDown()
+                        check(releaseWindow.await(10, TimeUnit.SECONDS)) {
+                            "abort window was never released"
+                        }
+                    }
+                    id
+                }
+            )
+            val agent = AgentSession(
+                agent = Agent(
+                    model,
+                    streamFn = StreamFn { requestedModel, context, options ->
+                        streamCalls.incrementAndGet()
+                        streams.streamFn.stream(requestedModel, context, options)
+                    }
+                ),
+                manager = gatedManager,
+                settingsManager = SettingsManager.inMemory(
+                    Settings(retry = RetrySettings(enabled = true, maxRetries = 3, baseDelayMs = 0))
+                ),
+                sleep = { }
+            )
+
+            val events = CopyOnWriteArrayList<AgentEvent>()
+            val settled = CountDownLatch(1)
+            val collector = launch(Dispatchers.Default) {
+                agent.events.collect { event ->
+                    events.add(event)
+                    if (event is AgentEvent.AgentSettled) settled.countDown()
+                }
+            }
+            val run = launch(Dispatchers.Default) { agent.prompt("test") }
+            check(windowEntered.await(10, TimeUnit.SECONDS)) { "abort window never entered" }
+            // UNDISPATCHED runs abort()'s synchronous prefix — the abort
+            // flag write and the prompt-job cancellation — on this thread
+            // before the parked loop thread is released.
+            val aborter = launch(start = CoroutineStart.UNDISPATCHED) { agent.abort() }
+            releaseWindow.countDown()
+            aborter.join()
+            run.join()
+            check(settled.await(10, TimeUnit.SECONDS)) { "session never settled" }
+            collector.cancelAndJoin()
+
+            assertTrue(run.isCancelled)
+            // No second retry start; the outstanding attempt is closed by the
+            // aborted message's own message_end handling.
+            assertEquals(
+                listOf(
+                    AgentEvent.AutoRetryStart(
+                        attempt = 1,
+                        maxAttempts = 3,
+                        delayMs = 0,
+                        errorMessage = "terminated"
+                    )
+                ),
+                events.filterIsInstance<AgentEvent.AutoRetryStart>()
+            )
+            val retryEnd = events.filterIsInstance<AgentEvent.AutoRetryEnd>().single()
+            assertEquals(1, retryEnd.attempt)
+            // The interrupted run classified ABORTED (the agent's abort
+            // signal state), not ERROR — pi's handleRunFailure semantics.
+            assertTrue(retryEnd.success)
+            assertEquals(
+                StopReason.ABORTED,
+                (agent.state.value.messages.last() as AssistantMessage).stopReason
+            )
+            // The abort was already requested when the final agent_end was
+            // processed, so it predicts no continuation.
+            assertEquals(false, events.filterIsInstance<AgentEvent.AgentEnd>().last().willRetry)
+            assertTrue(events.none { it is AgentEvent.CompactionStart })
+            assertFalse(agent.isStreaming.value)
+        }
 
     // ---- finding 10: listeners hear message_end even when the append fails ----
 

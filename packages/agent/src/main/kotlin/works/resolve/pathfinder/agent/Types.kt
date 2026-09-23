@@ -29,6 +29,15 @@ import works.resolve.pathfinder.ai.utils.getCurrentSystemPrompt
  */
 enum class ToolExecutionMode { SEQUENTIAL, PARALLEL }
 
+/** pi's QueueMode: how a pending-message queue is drained. */
+enum class QueueMode {
+    /** Every queued message is delivered in one turn. */
+    ALL,
+
+    /** One message per turn (pi's default for both queues). */
+    ONE_AT_A_TIME
+}
+
 data class AgentLoopConfig(
     val model: Model,
     val options: SimpleStreamOptions = SimpleStreamOptions(),
@@ -46,7 +55,11 @@ data class AgentLoopConfig(
      * context/model/thinkingLevel, or messages to append, for the next
      * provider request.
      */
-    val prepareNextTurn: (suspend (PrepareNextTurnContext) -> AgentLoopTurnUpdate?)? = null
+    val prepareNextTurn: (suspend (PrepareNextTurnContext) -> AgentLoopTurnUpdate?)? = null,
+    /** pi's getSteeringMessages: polled at loop start, after prepareNextTurn (conditionally), and after each turn. */
+    val getSteeringMessages: (() -> List<Message>)? = null,
+    /** pi's getFollowUpMessages: polled once the loop would otherwise stop. */
+    val getFollowUpMessages: (() -> List<Message>)? = null
 )
 
 /**
@@ -260,6 +273,14 @@ sealed class AgentEvent {
      * setThinkingLevel; carries the clamped effective level.
      */
     data class ThinkingLevelChanged(val level: ModelThinkingLevel) : AgentEvent()
+
+    /**
+     * Session-level: the session's pending steering/follow-up queues changed
+     * (pi's queue_update). Emitted by the owning session when a message is
+     * queued and again when a queued user message starts delivery; never
+     * appears in loop output.
+     */
+    data class QueueUpdate(val steering: List<String>, val followUp: List<String>) : AgentEvent()
 
     /**
      * A retryable run is being retried after an exponential-backoff delay.

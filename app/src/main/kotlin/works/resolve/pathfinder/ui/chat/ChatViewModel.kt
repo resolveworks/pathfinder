@@ -45,6 +45,7 @@ import works.resolve.pathfinder.codingagent.core.SessionError
 import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.SettingsManager
+import works.resolve.pathfinder.codingagent.core.StreamingBehavior
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.ssh.Machine
@@ -794,6 +795,7 @@ class ChatViewModel(
                     conversation.getLeafId(),
                     it.treeFilter
                 ),
+                queued = QueuedMessagesUi(),
                 draft = draft
             )
         }
@@ -898,6 +900,10 @@ class ChatViewModel(
             }
 
             is AgentEvent.AutoRetryEnd -> _uiState.update { it.copy(retryStatus = null) }
+
+            is AgentEvent.QueueUpdate -> _uiState.update {
+                it.copy(queued = QueuedMessagesUi(event.steering, event.followUp))
+            }
 
             is AgentEvent.CompactionStart -> _uiState.update { it.copy(isCompacting = true) }
 
@@ -1172,14 +1178,18 @@ class ChatViewModel(
 
     private suspend fun sendInternal() {
         val state = _uiState.value
-        if (state.status != ChatStatus.Ready || state.isStreaming) return
+        if (state.status != ChatStatus.Ready) return
         val text = state.draft.trim()
         val currentAgent = agent
         if (text.isEmpty() || currentAgent == null) return
 
         _uiState.update { it.copy(draft = "") }
+        // Like pi's editor submit during streaming: route through prompt()
+        // with steering behavior, which enqueues for delivery before the
+        // next provider request.
+        val streamingBehavior = if (state.isStreaming) StreamingBehavior.STEER else null
         try {
-            currentAgent.prompt(text)
+            currentAgent.prompt(text, streamingBehavior)
         } catch (e: CancellationException) {
             // Abort or teardown: the agent committed its terminal state,
             // which the manager appended inline.

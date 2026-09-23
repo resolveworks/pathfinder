@@ -46,6 +46,7 @@ import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
 import works.resolve.pathfinder.ai.utils.calculateContextTokens
+import works.resolve.pathfinder.ai.utils.contentText
 import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
 import works.resolve.pathfinder.ai.utils.isContextOverflow
 import works.resolve.pathfinder.ai.utils.isRecoverableLength
@@ -67,6 +68,15 @@ import works.resolve.pathfinder.codingagent.core.compaction.shouldCompact
 
 /** pi's scopedModels entry (the `--models` flag list): a model plus an optional explicit thinking level. */
 data class ScopedModel(val model: Model, val thinkingLevel: ModelThinkingLevel? = null)
+
+/** pi's PromptOptions.streamingBehavior: how prompt() queues while a run is active. */
+enum class StreamingBehavior { STEER, FOLLOW_UP }
+
+/** Snapshot of the session's pending-message queues (pi's queue_update payload / clearQueue return). */
+data class QueuedMessages(
+    val steering: List<String> = emptyList(),
+    val followUp: List<String> = emptyList()
+)
 
 /**
  * Prompt-orchestration facade over [Agent]: owns the session tree via
@@ -182,6 +192,12 @@ class AgentSession(
      * non-length assistant message completes.
      */
     private var overflowRecoveryAttempted = false
+
+    /** pi's _steeringMessages: pending steering texts for UI display; removed when delivered. */
+    private val steeringMessages = mutableListOf<String>()
+
+    /** pi's _followUpMessages: pending follow-up texts for UI display; removed when delivered. */
+    private val followUpMessages = mutableListOf<String>()
 
     /**
      * pi's three compaction-state controllers. Manual compaction and branch
@@ -381,7 +397,15 @@ class AgentSession(
      * continuation loop execute in a single job so [abort] cancels runs and
      * backoff alike.
      *
-     * Guards, in pi's order: manual compaction in progress, then an active
+     * While a prompt cycle is active, pi's classification applies: with
+     * [streamingBehavior] the text is queued as steering (delivered before
+     * the next provider request) or as a follow-up (delivered once the run
+     * settles, via the post-run continuation); without it, the submit is
+     * rejected. Like pi, a queued submit runs no model/auth preflight. A
+     * message queued exactly as the cycle settles is delivered by the next
+     * prompt's initial steering poll — pi's race, ported as-is.
+     *
+     * Guards, in pi's order: manual compaction in progress, then the active
      * prompt cycle. Automatic compaction and tree navigation are NOT guard
      * inputs — pi's prompt only checks the manual-compaction controller and
      * its own run state, leaving a latent race against pre-prompt
@@ -391,21 +415,30 @@ class AgentSession(
      * prompt's preflight — before its run is active — likewise proceeds and
      * fails at the agent's own single-run guard, exactly like pi.
      *
-     * @throws IllegalStateException when manual compaction is running or a
-     *   prompt cycle is already active.
+     * @throws IllegalStateException when manual compaction is running, or a
+     *   prompt cycle is active and [streamingBehavior] was not specified.
      * @throws CancellationException when aborted or the caller is cancelled;
      *   the agent has committed its terminal state either way.
      */
-    suspend fun prompt(text: String) {
+    suspend fun prompt(text: String, streamingBehavior: StreamingBehavior? = null) {
         synchronized(lock) {
             if (manualCompactionJob != null) {
                 throw IllegalStateException(COMPACTION_IN_PROGRESS)
             }
-            if (agentRunActive) {
+        }
+
+        if (agentRunActive) {
+            if (streamingBehavior == null) {
                 throw IllegalStateException(
-                    "Agent is already processing a prompt. Wait for completion or abort it."
+                    "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message."
                 )
             }
+            if (streamingBehavior == StreamingBehavior.FOLLOW_UP) {
+                queueFollowUp(text)
+            } else {
+                queueSteer(text)
+            }
+            return
         }
 
         try {
@@ -473,6 +506,82 @@ class AgentSession(
     }
 
     /**
+     * Queue a steering message while a run is active (pi's steer). Delivered
+     * after the current assistant turn finishes executing its tool calls,
+     * before the next provider request.
+     */
+    suspend fun steer(text: String) {
+        queueSteer(text)
+    }
+
+    /**
+     * Queue a follow-up message to be processed after the run settles (pi's
+     * followUp). Delivered only when the agent has no more tool calls or
+     * steering messages.
+     */
+    suspend fun followUp(text: String) {
+        queueFollowUp(text)
+    }
+
+    /** pi's _queueSteer: mirror the text for UI display, enqueue on the agent, announce. */
+    private suspend fun queueSteer(text: String) {
+        val message = UserMessage.ofText(text, clock.now().toEpochMilliseconds())
+        val update: AgentEvent.QueueUpdate
+        synchronized(lock) {
+            steeringMessages.add(text)
+            agent.steer(message)
+            update = queueUpdateSnapshot()
+        }
+        _events.emit(update)
+    }
+
+    /** pi's _queueFollowUp. */
+    private suspend fun queueFollowUp(text: String) {
+        val message = UserMessage.ofText(text, clock.now().toEpochMilliseconds())
+        val update: AgentEvent.QueueUpdate
+        synchronized(lock) {
+            followUpMessages.add(text)
+            agent.followUp(message)
+            update = queueUpdateSnapshot()
+        }
+        _events.emit(update)
+    }
+
+    private fun queueUpdateSnapshot() = AgentEvent.QueueUpdate(
+        steering = steeringMessages.toList(),
+        followUp = followUpMessages.toList()
+    )
+
+    /**
+     * Clear all queued messages and return them (pi's clearQueue), announcing
+     * the emptied queues. Useful for restoring to the editor when the user
+     * aborts.
+     */
+    suspend fun clearQueue(): QueuedMessages {
+        val cleared: QueuedMessages
+        val update: AgentEvent.QueueUpdate
+        synchronized(lock) {
+            cleared = QueuedMessages(steeringMessages.toList(), followUpMessages.toList())
+            steeringMessages.clear()
+            followUpMessages.clear()
+            agent.clearAllQueues()
+            update = queueUpdateSnapshot()
+        }
+        _events.emit(update)
+        return cleared
+    }
+
+    /** Number of pending messages, steering and follow-up combined. */
+    val pendingMessageCount: Int
+        get() = synchronized(lock) { steeringMessages.size + followUpMessages.size }
+
+    /** Pending steering messages, in queue order. */
+    fun getSteeringMessages(): List<String> = synchronized(lock) { steeringMessages.toList() }
+
+    /** Pending follow-up messages, in queue order. */
+    fun getFollowUpMessages(): List<String> = synchronized(lock) { followUpMessages.toList() }
+
+    /**
      * pi's _runAgentPrompt: the prompt cycle — one agent run plus the
      * post-run continuation loop (retries, auto-compaction). Run-active
      * state spans the whole cycle, so [isStreaming] stays busy across retry
@@ -526,6 +635,9 @@ class AgentSession(
         prompt?.cancel()
         manualCompaction?.cancel()
         branchSummary?.cancel()
+        // pi's agent.abort(): marks the run's abort state so an ordinary
+        // exception escaping afterwards classifies ABORTED.
+        agent.abort()
         prompt?.join()
         manualCompaction?.join()
         branchSummary?.join()
@@ -839,13 +951,40 @@ class AgentSession(
      * last-assistant-message capture for post-run handling. Listeners thus
      * hear `message_end` even when the subsequent append fails, and the
      * success `auto_retry_end` follows the triggering `message_end`.
+     *
+     * A user message starting delivery is first removed from the pending-
+     * queue mirrors (steering checked first, exact text match) and the
+     * emptied queue announced — before the message_start is re-emitted, so
+     * the UI sees the updated queue state (pi's order).
      */
     private suspend fun processEvent(event: AgentEvent) {
         when (event) {
-            // A user message starting a turn clears the one-shot overflow
-            // recovery budget.
             is AgentEvent.MessageStart -> {
-                if (event.message is UserMessage) overflowRecoveryAttempted = false
+                val userMessage = event.message as? UserMessage
+                if (userMessage != null) {
+                    // A user message starting a turn also clears the one-shot
+                    // overflow recovery budget.
+                    overflowRecoveryAttempted = false
+                    var update: AgentEvent.QueueUpdate? = null
+                    val messageText = contentText(userMessage.content, "")
+                    if (messageText.isNotEmpty()) {
+                        synchronized(lock) {
+                            val steeringIndex = steeringMessages.indexOfFirst { it == messageText }
+                            if (steeringIndex != -1) {
+                                steeringMessages.removeAt(steeringIndex)
+                            } else {
+                                val followUpIndex = followUpMessages.indexOfFirst {
+                                    it ==
+                                        messageText
+                                }
+                                if (followUpIndex == -1) return@synchronized
+                                followUpMessages.removeAt(followUpIndex)
+                            }
+                            update = queueUpdateSnapshot()
+                        }
+                    }
+                    update?.let { _events.emit(it) }
+                }
             }
 
             else -> Unit
@@ -942,10 +1081,11 @@ class AgentSession(
             return !agentRunAbortRequested
         }
 
-        // pi continues for queued steer/follow-up messages
-        // (!abortRequested && hasQueuedMessages()); there are no queues
-        // here, so the cycle ends.
-        return false
+        // The agent loop drains both queues before emitting agent_end. Any
+        // messages here were queued while the post-run phases ran (or during
+        // the run's tail) and need a continuation, which continueRun()
+        // delivers from whichever queue holds them.
+        return !agentRunAbortRequested && agent.hasQueuedMessages()
     }
 
     // ---- automatic compaction ----
@@ -1132,9 +1272,10 @@ class AgentSession(
             return true
         }
 
-        // pi continues for steer/follow-up messages queued during
-        // compaction; there are no queues here.
-        return false
+        // Auto-compaction can complete while follow-up/steering/custom
+        // messages are waiting. Continue once so queued messages are
+        // delivered.
+        return agent.hasQueuedMessages()
     }
 
     private sealed interface CompactionRunResult {

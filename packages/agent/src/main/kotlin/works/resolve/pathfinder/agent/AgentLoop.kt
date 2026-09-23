@@ -119,136 +119,171 @@ private suspend fun runLoop(
     var llmMessages = initialLlmMessages
     var config = initialConfig
     var lastCompletedTurn: PrepareNextTurnContext? = null
+    // Check for steering messages at start (user may have typed while waiting)
+    var pendingMessages = config.getSteeringMessages?.invoke() ?: emptyList()
+
+    // Outer loop: continues when queued follow-up messages arrive after the
+    // agent would otherwise stop.
     while (true) {
-        var preparedMessages: List<Message> = emptyList()
-        if (lastCompletedTurn != null) {
-            val update = config.prepareNextTurn?.invoke(lastCompletedTurn)
-            if (update != null) {
-                update.context?.let { refreshed ->
-                    context = refreshed
-                    llmMessages = refreshed.messages.toMutableList()
-                }
-                preparedMessages = update.messages ?: emptyList()
-                val nextModel = update.model
-                val nextThinkingLevel = update.thinkingLevel
-                if (nextModel != null || nextThinkingLevel != null) {
-                    config = config.copy(
-                        model = nextModel ?: config.model,
-                        options = config.options.copy(
-                            reasoning = nextTurnReasoning(
-                                config.options.reasoning,
-                                nextThinkingLevel
+        var hasMoreToolCalls = true
+
+        // Inner loop: process tool calls and steering messages.
+        while (hasMoreToolCalls || pendingMessages.isNotEmpty()) {
+            var preparedMessages: List<Message> = emptyList()
+            if (lastCompletedTurn != null) {
+                val update = config.prepareNextTurn?.invoke(lastCompletedTurn)
+                if (update != null) {
+                    update.context?.let { refreshed ->
+                        context = refreshed
+                        llmMessages = refreshed.messages.toMutableList()
+                    }
+                    preparedMessages = update.messages ?: emptyList()
+                    val nextModel = update.model
+                    val nextThinkingLevel = update.thinkingLevel
+                    if (nextModel != null || nextThinkingLevel != null) {
+                        config = config.copy(
+                            model = nextModel ?: config.model,
+                            options = config.options.copy(
+                                reasoning = nextTurnReasoning(
+                                    config.options.reasoning,
+                                    nextThinkingLevel
+                                )
                             )
                         )
-                    )
+                    }
                 }
+                // Preparation can be long-running (for example, compaction).
+                // Pick up steering queued while it ran. Only poll again if the
+                // earlier poll returned nothing; otherwise one-at-a-time mode
+                // would deliver two messages in this turn.
+                if (pendingMessages.isEmpty()) {
+                    pendingMessages = config.getSteeringMessages?.invoke() ?: emptyList()
+                }
+                emit(AgentEvent.TurnStart)
             }
-            emit(AgentEvent.TurnStart)
-        }
 
-        // pi keeps one live transcript on the context; this port syncs the
-        // snapshot's messages from the working list before each request.
-        context = context.copy(messages = llmMessages.toList())
+            // pi keeps one live transcript on the context; this port syncs the
+            // snapshot's messages from the working list before each request.
+            context = context.copy(messages = llmMessages.toList())
 
-        // Process prepared messages before the next assistant response.
-        for (message in declareToolChanges(context, preparedMessages, config.clock)) {
-            emit(AgentEvent.MessageStart(message))
-            emit(AgentEvent.MessageEnd(message))
-            llmMessages.add(message)
+            // Process prepared and queued messages before the next assistant
+            // response.
+            for (message in declareToolChanges(
+                context,
+                preparedMessages + pendingMessages,
+                config.clock
+            )) {
+                emit(AgentEvent.MessageStart(message))
+                emit(AgentEvent.MessageEnd(message))
+                llmMessages.add(message)
+                newMessages.add(message)
+            }
+            pendingMessages = emptyList()
+
+            val message = streamAssistantResponse(
+                llmContext = normalizeContext(Context(messages = llmMessages.toList())),
+                config = config,
+                emit = emit
+            )
             newMessages.add(message)
-        }
+            llmMessages.add(message)
 
-        val message = streamAssistantResponse(
-            llmContext = normalizeContext(Context(messages = llmMessages.toList())),
-            config = config,
-            emit = emit
-        )
-        newMessages.add(message)
-        llmMessages.add(message)
-
-        if (message.stopReason == StopReason.ERROR || message.stopReason == StopReason.ABORTED) {
-            // The ABORTED case runs in an already-cancelled coroutine; the
-            // terminal events must still be delivered.
-            withContext(NonCancellable) {
-                emit(AgentEvent.TurnEnd(message))
-                emit(AgentEvent.AgentEnd(newMessages.toList()))
+            if (message.stopReason == StopReason.ERROR ||
+                message.stopReason == StopReason.ABORTED
+            ) {
+                // The ABORTED case runs in an already-cancelled coroutine; the
+                // terminal events must still be delivered.
+                withContext(NonCancellable) {
+                    emit(AgentEvent.TurnEnd(message))
+                    emit(AgentEvent.AgentEnd(newMessages.toList()))
+                }
+                return
             }
-            return
-        }
 
-        val toolCalls = message.content.filterIsInstance<ToolCall>()
-        val toolResults = mutableListOf<ToolResultMessage>()
-        var terminate = false
-        if (toolCalls.isNotEmpty()) {
-            val progress = ToolBatchProgress()
-            try {
-                // A "length" stop means the output was cut off by the token
-                // limit, so every tool call in the message may carry truncated
-                // arguments — fail them all rather than execute potentially
-                // broken calls.
-                val executedToolBatch =
-                    if (message.stopReason == StopReason.LENGTH) {
-                        failToolCallsFromTruncatedMessage(toolCalls, config, emit, progress)
-                    } else {
-                        executeToolCalls(context, toolCalls, config, emit, progress)
+            val toolCalls = message.content.filterIsInstance<ToolCall>()
+            val toolResults = mutableListOf<ToolResultMessage>()
+            hasMoreToolCalls = false
+            if (toolCalls.isNotEmpty()) {
+                val progress = ToolBatchProgress()
+                try {
+                    // A "length" stop means the output was cut off by the token
+                    // limit, so every tool call in the message may carry truncated
+                    // arguments — fail them all rather than execute potentially
+                    // broken calls.
+                    val executedToolBatch =
+                        if (message.stopReason == StopReason.LENGTH) {
+                            failToolCallsFromTruncatedMessage(toolCalls, config, emit, progress)
+                        } else {
+                            executeToolCalls(context, toolCalls, config, emit, progress)
+                        }
+                    toolResults.addAll(executedToolBatch.messages)
+                    hasMoreToolCalls = !executedToolBatch.terminate
+                } catch (cancellation: CancellationException) {
+                    // pi on abort: every started call finalizes — completed results
+                    // are kept, in-flight and queued ones become "Operation aborted"
+                    // error results — and the turn still ends with turn_end carrying
+                    // whatever settled. pi then runs one more loop iteration whose
+                    // provider request fails immediately on the aborted signal; see
+                    // [emitAbortedFinalTurn].
+                    val recoveredBatch =
+                        withContext(NonCancellable) {
+                            recoverAbortedToolBatch(toolCalls, progress, config, emit)
+                        }
+                    toolResults.addAll(recoveredBatch.messages)
+                    for (result in toolResults) {
+                        llmMessages.add(result)
+                        newMessages.add(result)
                     }
-                toolResults.addAll(executedToolBatch.messages)
-                terminate = executedToolBatch.terminate
-            } catch (cancellation: CancellationException) {
-                // pi on abort: every started call finalizes — completed results
-                // are kept, in-flight and queued ones become "Operation aborted"
-                // error results — and the turn still ends with turn_end carrying
-                // whatever settled. pi then runs one more loop iteration whose
-                // provider request fails immediately on the aborted signal; see
-                // [emitAbortedFinalTurn].
-                val recoveredBatch =
                     withContext(NonCancellable) {
-                        recoverAbortedToolBatch(toolCalls, progress, config, emit)
+                        emit(AgentEvent.TurnEnd(message, toolResults.toList()))
+                        if (!recoveredBatch.terminate) {
+                            emitAbortedFinalTurn(
+                                completedTurn = PrepareNextTurnContext(
+                                    message = message,
+                                    toolResults = toolResults.toList(),
+                                    context = context.copy(messages = llmMessages.toList()),
+                                    newMessages = newMessages.toList()
+                                ),
+                                config = config,
+                                newMessages = newMessages,
+                                emit = emit
+                            )
+                        }
+                        emit(AgentEvent.AgentEnd(newMessages.toList()))
                     }
-                toolResults.addAll(recoveredBatch.messages)
+                    throw cancellation
+                }
                 for (result in toolResults) {
                     llmMessages.add(result)
                     newMessages.add(result)
                 }
-                withContext(NonCancellable) {
-                    emit(AgentEvent.TurnEnd(message, toolResults.toList()))
-                    if (!recoveredBatch.terminate) {
-                        emitAbortedFinalTurn(
-                            completedTurn = PrepareNextTurnContext(
-                                message = message,
-                                toolResults = toolResults.toList(),
-                                context = context.copy(messages = llmMessages.toList()),
-                                newMessages = newMessages.toList()
-                            ),
-                            config = config,
-                            newMessages = newMessages,
-                            emit = emit
-                        )
-                    }
-                    emit(AgentEvent.AgentEnd(newMessages.toList()))
-                }
-                throw cancellation
             }
-            for (result in toolResults) {
-                llmMessages.add(result)
-                newMessages.add(result)
-            }
+
+            emit(AgentEvent.TurnEnd(message, toolResults.toList()))
+
+            lastCompletedTurn = PrepareNextTurnContext(
+                message = message,
+                toolResults = toolResults.toList(),
+                context = context.copy(messages = llmMessages.toList()),
+                newMessages = newMessages.toList()
+            )
+
+            pendingMessages = config.getSteeringMessages?.invoke() ?: emptyList()
         }
 
-        emit(AgentEvent.TurnEnd(message, toolResults.toList()))
-
-        lastCompletedTurn = PrepareNextTurnContext(
-            message = message,
-            toolResults = toolResults.toList(),
-            context = context.copy(messages = llmMessages.toList()),
-            newMessages = newMessages.toList()
-        )
-
-        if (toolCalls.isEmpty() || terminate) {
-            emit(AgentEvent.AgentEnd(newMessages.toList()))
-            return
+        // The agent would stop here. Check for follow-up messages.
+        val followUpMessages = config.getFollowUpMessages?.invoke() ?: emptyList()
+        if (followUpMessages.isNotEmpty()) {
+            // Set as pending so the inner loop processes them.
+            pendingMessages = followUpMessages
+            continue
         }
+
+        // No more messages, exit.
+        break
     }
+
+    emit(AgentEvent.AgentEnd(newMessages.toList()))
 }
 
 /**

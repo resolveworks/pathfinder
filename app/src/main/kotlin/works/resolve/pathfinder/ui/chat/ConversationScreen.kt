@@ -80,6 +80,7 @@ internal fun ChatSurface(
             if (uiState.isCompacting) {
                 CompactingStatusRow()
             }
+            QueuedMessagesRow(queued = uiState.queued)
             Composer(
                 draft = uiState.draft,
                 onDraftChange = onDraftChange,
@@ -481,6 +482,36 @@ private fun CompactingStatusRow(modifier: Modifier = Modifier) {
     )
 }
 
+/**
+ * Transient pending rows for messages queued while a run is active: steering
+ * first (delivered before the next provider request), then follow-ups
+ * (delivered once the run settles). Rows disappear as delivery begins.
+ */
+@Composable
+private fun QueuedMessagesRow(queued: QueuedMessagesUi, modifier: Modifier = Modifier) {
+    if (queued.steering.isEmpty() && queued.followUp.isEmpty()) return
+    Column(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)) {
+        queued.steering.forEach { text ->
+            QueuedMessageRow(text = text)
+        }
+        queued.followUp.forEach { text ->
+            QueuedMessageRow(text = text)
+        }
+    }
+}
+
+@Composable
+private fun QueuedMessageRow(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = stringResource(R.string.chat_queued, text),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier.fillMaxWidth()
+    )
+}
+
 @Composable
 private fun Composer(
     draft: String,
@@ -494,22 +525,27 @@ private fun Composer(
     OutlinedTextField(
         value = draft,
         onValueChange = onDraftChange,
-        enabled = !isStreaming,
+        // Editable while streaming too: submitting then queues the message
+        // as steering (pi's editor stays active during a run).
+        enabled = true,
         placeholder = { Text(stringResource(R.string.chat_message_hint)) },
         trailingIcon = {
-            if (isStreaming) {
-                IconButton(onClick = onStop) {
-                    Icon(
-                        ComposerIcons.Stop,
-                        contentDescription = stringResource(R.string.action_stop)
-                    )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (canSend) {
+                    IconButton(onClick = onSend) {
+                        Icon(
+                            ComposerIcons.Send,
+                            contentDescription = stringResource(R.string.action_send)
+                        )
+                    }
                 }
-            } else if (canSend) {
-                IconButton(onClick = onSend) {
-                    Icon(
-                        ComposerIcons.Send,
-                        contentDescription = stringResource(R.string.action_send)
-                    )
+                if (isStreaming) {
+                    IconButton(onClick = onStop) {
+                        Icon(
+                            ComposerIcons.Stop,
+                            contentDescription = stringResource(R.string.action_stop)
+                        )
+                    }
                 }
             }
         },

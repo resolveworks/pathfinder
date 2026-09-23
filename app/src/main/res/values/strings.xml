@@ -9,6 +9,7 @@
     <string name="chat_message_hint">Message</string>
     <string name="chat_retrying">Retrying… attempt %1$d of %2$d</string>
     <string name="chat_compacting">Compacting…</string>
+    <string name="chat_queued">Queued: %1$s</string>
     <string name="chat_compacted">Compacted</string>
 
     <string name="action_new_chat">New chat</string>
