@@ -108,9 +108,10 @@ class Agent(
     /**
      * pi's per-run abort-signal state: set by [abort] while a run is active,
      * cleared when the next run starts (upstream creates a fresh
-     * AbortController per run). Read by the ordinary-exception failure path:
-     * an exception escaping after an abort was requested is classified
-     * ABORTED, not ERROR.
+     * AbortController per run). Volatile: read inside the failure path's
+     * [NonCancellable] tail, where the cancellation that delivered the
+     * abort is structurally invisible — an exception escaping after an
+     * abort was requested is classified ABORTED, not ERROR.
      */
     @Volatile
     private var abortRequested = false

@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.agent
 
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
@@ -689,6 +690,66 @@ class AgentTest {
             assertEquals(StopReason.ABORTED, aborted.stopReason)
             assertEquals("Request was aborted", aborted.errorMessage)
         }
+
+    /**
+     * The port's abort contract: unlike pi, whose prompt() resolves normally
+     * after an abort, cancellation rethrows — with the dedicated "Prompt
+     * aborted" message, only after the loop committed its terminal state.
+     */
+    @Test
+    fun `abort rethrows the Prompt aborted cancellation from prompt`() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val hanging = flow<AssistantMessageEvent> {
+            emit(AssistantMessageEvent.Start(assistant(text = "")))
+            entered.complete(Unit)
+            awaitCancellation()
+        }
+        val agent = Agent(model, streamFn = StreamFn { _, _, _ -> hanging })
+
+        val failure = CompletableDeferred<Throwable>()
+        val run = launch {
+            try {
+                agent.prompt(listOf(UserMessage.ofText("hi")))
+            } catch (e: Throwable) {
+                failure.complete(e)
+            }
+        }
+        entered.await()
+        agent.abort()
+        val error = failure.await()
+        run.join()
+
+        assertTrue(error is CancellationException)
+        assertEquals("Prompt aborted", error.message)
+        assertFalse(agent.state.value.isStreaming)
+    }
+
+    /**
+     * The run's job is published before isStreaming can become observable,
+     * so an abort fired at that exact moment reaches it — the LAZY-start
+     * publication invariant.
+     */
+    @Test
+    fun `abort at the first observable isStreaming reaches the published run job`() = runTest {
+        val agent = Agent(model, streamFn = StreamFn { _, _, _ -> hangingStream() })
+
+        val failure = CompletableDeferred<Throwable>()
+        val run = launch {
+            try {
+                agent.prompt(listOf(UserMessage.ofText("hi")))
+            } catch (e: Throwable) {
+                failure.complete(e)
+            }
+        }
+        agent.state.first { it.isStreaming }
+        agent.abort()
+        val error = failure.await()
+        run.join()
+
+        assertTrue(error is CancellationException)
+        assertEquals("Prompt aborted", error.message)
+        assertFalse(agent.state.value.isStreaming)
+    }
 
     /**
      * pi's runWithLifecycle awaits its failure handler for every loop throw,

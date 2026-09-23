@@ -157,11 +157,12 @@ class AgentSession(
 
     /**
      * pi's _agentRunAbortRequested: set by [abort] while a run is active,
-     * consumed by the post-run abort-window checks and cleared when the
-     * next cycle starts. The agent loop's post-abort tail runs under
-     * [NonCancellable], so the [prepareNextTurnWithContext][Agent] hook and
-     * the continuation checks must consult this flag rather than coroutine
-     * cancellation.
+     * consumed by the post-run abort-window checks (retry, post-run
+     * compaction, continuation) and cleared when the next cycle starts.
+     * Volatile: abort() writes it from an arbitrary coroutine while the
+     * cycle reads it from the loop dispatcher. The mid-run compaction hook
+     * ([compactBeforeNextAssistantResponse]) deliberately does not consult
+     * it — pi's hook ignores the run's abort signal.
      */
     @Volatile
     private var agentRunAbortRequested = false
@@ -200,15 +201,21 @@ class AgentSession(
     private val followUpMessages = mutableListOf<String>()
 
     /**
-     * pi's three compaction-state controllers. Manual compaction and branch
-     * summarization (tree navigation) run in their caller's coroutine under
-     * a tracked child job so [abort] can cancel them (pi's AbortControllers);
-     * automatic compaction runs inside the prompt cycle (preflight or the
-     * post-run continuation) and is cancelled through it, so only its marker
+     * pi's three compaction-state controllers. Manual compaction, the
+     * pre-prompt preflight compaction, and branch summarization (tree
+     * navigation) run in their caller's coroutine under a tracked child job
+     * so [abort] can cancel and await them (pi's AbortControllers; the
+     * preflight job is pi's _autoCompactionAbortController registration on
+     * the pre-prompt path, which lives outside the prompt job). In-cycle
+     * automatic compaction — the post-run continuation and the mid-run hook
+     * — is cancelled through the prompt job it lives in, so only its marker
      * is tracked here.
      */
     @Volatile
     private var manualCompactionJob: Job? = null
+
+    @Volatile
+    private var prePromptCompactionJob: Job? = null
 
     @Volatile
     private var autoCompactionInProgress = false
@@ -218,7 +225,10 @@ class AgentSession(
 
     /** pi's isCompacting: manual compaction, automatic compaction, or branch summarization is running. */
     val isCompacting: Boolean
-        get() = manualCompactionJob != null || autoCompactionInProgress || branchSummaryJob != null
+        get() = manualCompactionJob != null ||
+            prePromptCompactionJob != null ||
+            autoCompactionInProgress ||
+            branchSummaryJob != null
 
     /** Name→tool registry over the constructor list. */
     private val toolRegistry: Map<String, AgentTool> = tools.associateBy { it.definition.name }
@@ -268,11 +278,12 @@ class AgentSession(
      * model — and the transcript — like any other prompt update.
      *
      * The hook is also invoked once more inside the loop's post-abort
-     * [NonCancellable] tail, where coroutine cancellation is invisible: the
-     * compaction checkpoint then consults [agentRunAbortRequested] — the
-     * session-level abort state — so an aborted run never kicks off a
-     * mid-run summarization request (pi's hook receives the run's aborted
-     * signal for exactly this purpose).
+     * [NonCancellable] tail. pi's hook does not consult the run's abort
+     * signal and its _runAutoCompaction registers a fresh, un-aborted
+     * controller — so the tail's threshold checkpoint really compacts: an
+     * aborted run may run one summarization request before its final
+     * aborted turn. The tail's [NonCancellable] context is the port's
+     * equivalent of that fresh controller.
      */
     private fun installAgentNextTurnRefresh() {
         agent.prepareNextTurnWithContext = { turn ->
@@ -290,13 +301,12 @@ class AgentSession(
     /**
      * pi's _compactBeforeNextAssistantResponse: when the turn's context
      * crosses the compaction threshold, run auto compaction ("threshold"
-     * reason) and rebuild the context from the agent transcript. Skipped
-     * entirely when the run was aborted — see
-     * [installAgentNextTurnRefresh] for why this consults the session's
-     * abort flag instead of coroutine cancellation.
+     * reason) and rebuild the context from the agent transcript. Like pi's
+     * hook, no abort state is consulted — the run's signal does not gate
+     * the checkpoint, so it also fires inside the loop's post-abort tail
+     * (see [installAgentNextTurnRefresh]).
      */
     private suspend fun compactBeforeNextAssistantResponse(context: AgentContext): AgentContext {
-        if (agentRunAbortRequested) return context
         val settings = settingsManager.getCompactionSettings(model)
         if (
             model.contextWindow <= 0 ||
@@ -417,8 +427,11 @@ class AgentSession(
      *
      * @throws IllegalStateException when manual compaction is running, or a
      *   prompt cycle is active and [streamingBehavior] was not specified.
-     * @throws CancellationException when aborted or the caller is cancelled;
-     *   the agent has committed its terminal state either way.
+     * @throws CancellationException when aborted during the cycle or the
+     *   caller is cancelled; the agent has committed its terminal state
+     *   either way. An abort landing during the pre-prompt compaction
+     *   cancels only that compaction — pi's prompt proceeds (see
+     *   [runPrePromptCompaction]).
      */
     suspend fun prompt(text: String, streamingBehavior: StreamingBehavior? = null) {
         synchronized(lock) {
@@ -467,7 +480,7 @@ class AgentSession(
             // sent below, so do not continue the agent here (pi: the result
             // is likewise unused).
             findLastAssistantMessage()?.let { lastAssistant ->
-                checkCompaction(lastAssistant, skipAbortedCheck = false)
+                runPrePromptCompaction(lastAssistant)
             }
 
             val promptMessage = UserMessage.ofText(text, clock.now().toEpochMilliseconds())
@@ -502,6 +515,34 @@ class AgentSession(
             }
         } finally {
             promptJob = null
+        }
+    }
+
+    /**
+     * The pre-prompt compaction checkpoint, under a tracked child job (pi
+     * registers its _autoCompactionAbortController for the preflight path):
+     * [abort] cancels and awaits the compaction through the job. pi's
+     * _runAutoCompaction swallows the abort into compaction_end{aborted}
+     * and returns false, so its prompt still proceeds — here too, caller
+     * cancellation rethrows while a session abort of the compaction does
+     * not stop this prompt.
+     */
+    private suspend fun runPrePromptCompaction(lastAssistant: AssistantMessage) {
+        val controller = Job(currentCoroutineContext()[Job]).also { job ->
+            prePromptCompactionJob = job
+        }
+        try {
+            withContext(controller) { checkCompaction(lastAssistant, skipAbortedCheck = false) }
+        } catch (e: CancellationException) {
+            // Only the tracked controller was aborted (pi's
+            // abortCompaction); the aborted compaction_end was already
+            // emitted. pi's prompt continues past the cancelled checkpoint.
+            currentCoroutineContext().ensureActive()
+        } finally {
+            prePromptCompactionJob = null
+            // withContext treats the controller as the block's parent job;
+            // complete it so it does not outlive the caller.
+            controller.complete()
         }
     }
 
@@ -618,10 +659,10 @@ class AgentSession(
     /**
      * pi's abort: request abortion of the active prompt cycle, cancel
      * in-flight retry backoff (through the prompt job), manual compaction,
-     * and branch summarization, and await their completion. A prompt cycle's
-     * pre-prompt auto-compaction runs in the prompt caller's own coroutine
-     * and has no job here; its abort surfaces through that caller, unlike
-     * pi's, which awaits it through the auto-compaction controller. May be
+     * pre-prompt auto-compaction, and branch summarization, and await their
+     * completion — pi's waitForIdle covers both the run and every
+     * compaction controller, so this does too. In-cycle automatic
+     * compaction is cancelled through the prompt job it lives in. May be
      * called from any coroutine outside the cycle it aborts.
      */
     suspend fun abort() {
@@ -631,15 +672,18 @@ class AgentSession(
         // pi's abortRetry: the backoff sleep lives inside the prompt job.
         val prompt = promptJob
         val manualCompaction = manualCompactionJob
+        val prePromptCompaction = prePromptCompactionJob
         val branchSummary = branchSummaryJob
         prompt?.cancel()
         manualCompaction?.cancel()
+        prePromptCompaction?.cancel()
         branchSummary?.cancel()
         // pi's agent.abort(): marks the run's abort state so an ordinary
         // exception escaping afterwards classifies ABORTED.
         agent.abort()
         prompt?.join()
         manualCompaction?.join()
+        prePromptCompaction?.join()
         branchSummary?.join()
     }
 
@@ -1205,10 +1249,12 @@ class AgentSession(
      * Execute threshold or overflow compaction (pi's _runAutoCompaction).
      *
      * Divergence: pi signals abort through a dedicated auto-compaction
-     * AbortController; here the automatic path runs inside the prompt cycle
-     * (or the prompt caller's preflight), so abort is plain cancellation
-     * and the aborted `compaction_end` is emitted under [NonCancellable]
-     * before rethrowing.
+     * AbortController; here the in-cycle path (the post-run continuation or
+     * the mid-run hook) is cancelled through the prompt job it lives in —
+     * plain cancellation, with the aborted `compaction_end` emitted under
+     * [NonCancellable] before rethrowing — and the pre-prompt preflight
+     * path runs under its own tracked job (see [runPrePromptCompaction] for
+     * where that rethrow lands).
      *
      * @return Whether the post-run loop should continue the agent.
      */
