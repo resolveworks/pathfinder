@@ -74,6 +74,17 @@ accessors rather than introducing serializable mirror DTOs or private helper
 families. Streaming uses `Flow`: preserve pi's event contract and always
 propagate coroutine cancellation unchanged.
 
+JS stdlib equivalents have one shared implementation, never a per-file one:
+WHATWG query parsing and href normalization go through OkHttp's `HttpUrl`
+(already a dependency, WHATWG-derived; verified byte-parity with
+`URLSearchParams`/`href` for our inputs — including per-sequence malformed-
+percent pass-through), form encoding through `URLEncoder` (byte-identical to
+`URLSearchParams` serialization; OkHttp's `addQueryParameter` is NOT a form
+encoder — space becomes `%20`), and `Number()`/`parseFloat` semantics through
+the shared JS-number helpers (no JVM library implements them; hand-rolled is
+the norm). Per-flow code keeps only what pi actually varies: scheme gates and
+error channels.
+
 The generated model catalog includes only providers supported end to end and
 must not be hand-edited.
 
