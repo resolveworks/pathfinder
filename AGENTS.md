@@ -104,6 +104,15 @@ suspending-emit `SharedFlow` for observers — never `tryEmit` where loss is
 unacceptable. Serialization picks per call path: `Mutex` when the section
 suspends, plain locks or `@Volatile` snapshots when it does not.
 
+Time and deadlines: domain code injects `kotlin.time.Clock` (the
+`Date.now()` analog); direct wall-time reads exist only in the helpers whose
+job is to stamp wall time (uuidv7, synthetic tool-result stamps, diagnostics,
+the bash output throttle), and each cites this rule. The shared OkHttp client
+carries the 300 s inter-read idle cap (undici `bodyTimeout` analog) with
+per-request header-phase deadlines (provider-SDK fetch-timeout analog);
+OAuth HTTP uses whole-exchange call deadlines (the `AbortSignal.timeout`
+analog).
+
 The generated model catalog includes only providers supported end to end and
 must not be hand-edited.
 
