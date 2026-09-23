@@ -3,7 +3,9 @@ package works.resolve.pathfinder.ai.api
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -21,7 +23,6 @@ import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.ChatTemplateKwargValue
 import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.ContentType
-import works.resolve.pathfinder.ai.DoneSentinel
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.MaxTokensField
 import works.resolve.pathfinder.ai.Message
@@ -400,15 +401,17 @@ class OpenAiCompletionsApi(
 
             emitAll(state.start())
 
-            try {
-                response.events.collect { event ->
+            // [DONE] is a per-element stop, so truncation is the break
+            // mechanism: abandoning collection right after the terminal chunk
+            // cancels the transport call promptly (upstream, the SDK ends its
+            // own stream at [DONE]).
+            emitAll(
+                response.events.transformWhile { event ->
                     processSseEvent(event, model, state, grammarToolInputProperties)
                         ?.let { emitAll(it) }
-                    if (state.done) throw DoneSentinel()
+                    !state.done
                 }
-            } catch (_: DoneSentinel) {
-                // Cancelling the collector closes the transport call promptly.
-            }
+            )
 
             emitAll(state.finish())
 
@@ -710,7 +713,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     var responseModel: String? = null
     var hasFinishReason: Boolean = false
 
-    /** Set when the `[DONE]` sentinel arrives; collection stops promptly after. */
+    /** Set when the `[DONE]` marker arrives; collection stops promptly after. */
     var done: Boolean = false
         private set
 

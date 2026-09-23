@@ -442,6 +442,12 @@ private fun withToolChanges(message: SystemMessage, changes: ToolStateChanges): 
  * cancellation, so the loop folds the deltas since the last boundary
  * snapshot and finalizes the partial itself): stopReason ABORTED,
  * errorMessage set, partial content preserved.
+ *
+ * The terminal break cancels a child collector rather than using a
+ * truncation operator: the break must carry the terminal message out of
+ * the fold, and cancelling — unlike operator truncation, which aborts the
+ * source mid-emission — lets the provider flow observe cancellation at its
+ * next suspension point, the pinned upstream contract.
  */
 private suspend fun streamAssistantResponse(
     llmContext: TranscriptContext,

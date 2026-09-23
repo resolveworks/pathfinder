@@ -603,6 +603,23 @@ class MistralConversationsApiTest {
     }
 
     @Test
+    fun `done marker stops consuming the body`() = runTest {
+        val transport = FakeTransport()
+        // The body never ends server-side: if the adapter kept draining after
+        // [DONE] the exchange timeout would surface as an error event instead.
+        transport.enqueueHangingResponse(terminalEvent(), "[DONE]")
+        val events = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(StopReason.STOP, done.reason)
+        assertTrue(
+            transport.cancelled.value,
+            "event collection should be cancelled after [DONE]"
+        )
+    }
+
+    @Test
     fun `preserves raw finish reasons for successful stops`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(terminalEvent("stop"), "[DONE]"))

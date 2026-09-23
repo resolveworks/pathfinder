@@ -715,6 +715,24 @@ class OpenAiCodexResponsesApiTest {
     }
 
     @Test
+    fun `terminal event stops consuming the body`() = runTest {
+        val transport = FakeTransport()
+        // The body never ends server-side: if the adapter kept draining after
+        // the terminal event this test would time out instead of completing.
+        transport.enqueueHangingResponse(
+            """{"type":"response.completed","response":{"id":"r","status":"completed"}}"""
+        )
+        val events = api(
+            transport
+        ).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        assertIs<AssistantMessageEvent.Done>(events.last())
+        assertTrue(
+            transport.cancelled.value,
+            "event collection should be cancelled after the terminal event"
+        )
+    }
+
+    @Test
     fun `default service tier resolves to the requested flex or priority tier`() {
         assertEquals("flex", resolveCodexServiceTier("default", "flex"))
         assertEquals("priority", resolveCodexServiceTier("default", "priority"))

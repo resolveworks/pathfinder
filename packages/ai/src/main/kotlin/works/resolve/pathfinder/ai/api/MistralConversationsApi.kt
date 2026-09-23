@@ -4,7 +4,9 @@ import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -19,7 +21,6 @@ import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.ContentType
-import works.resolve.pathfinder.ai.DoneSentinel
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.MessageRole
@@ -257,15 +258,17 @@ class MistralConversationsApi(
 
                         emit(AssistantMessageEvent.Start(state.snapshot()))
 
-                        try {
-                            response.events.collect { event ->
+                        // [DONE] is a per-element stop, so truncation is the
+                        // break mechanism: abandoning collection right after
+                        // the terminal chunk cancels the transport call
+                        // promptly (upstream, the SDK ends its own stream at
+                        // [DONE]).
+                        emitAll(
+                            response.events.transformWhile { event ->
                                 processSseEvent(event, model, state).forEach { emit(it) }
-                                if (state.done) throw DoneSentinel()
+                                !state.done
                             }
-                        } catch (_: DoneSentinel) {
-                            // Stop consuming promptly after [DONE]; cancelling the
-                            // collector closes the transport call.
-                        }
+                        )
 
                         state.finishOpenBlocks().forEach { emit(it) }
 

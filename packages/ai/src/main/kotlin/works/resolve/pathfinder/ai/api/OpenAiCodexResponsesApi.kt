@@ -12,8 +12,9 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -463,13 +464,13 @@ class OpenAICodexResponsesApi(
             val response = requestWithRetries(model, options, headers, body)
             emit(AssistantMessageEvent.Start(state.partialSnapshot()))
 
-            // pi stops at the terminal event (done/completed/incomplete) even
-            // while the SSE body stays open; mirror that by abandoning
-            // collection once the terminal event has been processed — the
-            // transport cancels the HTTP call when collection is abandoned.
-            try {
-                response.events.collect { event ->
-                    if (event.data.trim() == "[DONE]") return@collect
+            // pi stops at the terminal event (done/completed/incomplete)
+            // even while the SSE body stays open; that stop is per-element,
+            // so truncation is the break mechanism — abandoning collection
+            // right after the terminal event cancels the HTTP call.
+            emitAll(
+                response.events.transformWhile { event ->
+                    if (event.data.trim() == "[DONE]") return@transformWhile true
                     val parsed = try {
                         responsesJson.parseToJsonElement(event.data)
                     } catch (error: Exception) {
@@ -481,17 +482,15 @@ class OpenAICodexResponsesApi(
                         ?: throw ProviderStreamException(
                             "Invalid Codex SSE JSON: expected an object"
                         )
-                    val mapped = mapCodexEvent(obj) { endTurn = it } ?: return@collect
+                    val mapped = mapCodexEvent(obj) { endTurn = it }
+                        ?: return@transformWhile true
                     processSseEvent(
                         works.resolve.pathfinder.ai.transport.SseEvent(mapped.first.toString()),
                         state
                     )?.forEach { emit(it) }
-                    if (mapped.second) {
-                        throw TerminalEventReached
-                    }
+                    !mapped.second
                 }
-            } catch (_: TerminalEventReached) {
-            }
+            )
             // A body that ends without a terminal event is reported by
             // assertTerminalEvent in finishStream.
             finishStream()
@@ -839,9 +838,6 @@ internal fun formatCodexError(error: Exception): String = when (error) {
     is ProviderStreamException -> error.message ?: "Codex stream error"
     else -> error.message ?: error::class.simpleName ?: "Unknown error"
 }
-
-/** Control-flow sentinel: the terminal Codex event was processed, so the SSE body is abandoned. */
-private object TerminalEventReached : RuntimeException()
 
 internal fun buildCodexRequestBody(
     model: Model,

@@ -816,7 +816,7 @@ class OpenAiCompletionsStreamTest {
     }
 
     @Test
-    fun `done sentinel stops consuming the body`() = runTest {
+    fun `done marker stops consuming the body`() = runTest {
         val transport = FakeTransport()
         // The stream never ends server-side: if the adapter kept draining the
         // body after [DONE] this test would time out instead of completing.

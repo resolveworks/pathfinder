@@ -349,6 +349,8 @@ class AnthropicMessagesApi(
 
             emit(AssistantMessageEvent.Start(state.snapshot()))
 
+            // No early break: like pi, the SSE body is consumed to its end
+            // and the terminal state is validated afterwards.
             response.events.collect { event ->
                 processSseEvent(event, model, normalizedContext, currentTools, state)?.forEach {
                     emit(it)
