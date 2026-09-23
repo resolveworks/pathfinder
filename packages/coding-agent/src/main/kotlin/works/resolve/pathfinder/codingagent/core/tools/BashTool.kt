@@ -121,7 +121,10 @@ class BashTool internal constructor(private val cwd: String, private val options
 
         return coroutineScope {
             // Throttled update state, shared between the exec callback (arbitrary
-            // thread) and the timer coroutine; guarded by `lock`.
+            // thread) and the timer coroutine; guarded by `lock`. The
+            // System.currentTimeMillis() reads below are wall-time reads
+            // sanctioned by the AGENTS.md "Time and deadlines" rule: timing
+            // the output throttle is this code's job.
             val lock = Any()
             var acceptingOutput = true
             var updateTimer: kotlinx.coroutines.Job? = null

@@ -49,7 +49,8 @@ fun createAssistantMessageDiagnostic(
     details: JsonObject? = null
 ): AssistantMessageDiagnostic = AssistantMessageDiagnostic(
     type = type,
-    // pi stamps Date.now() here; reading wall time is this helper's job.
+    // Wall-time read sanctioned by the AGENTS.md "Time and deadlines" rule:
+    // pi stamps Date.now() here, and stamping wall time is this helper's job.
     timestamp = System.currentTimeMillis(),
     error = extractDiagnosticError(error),
     details = details

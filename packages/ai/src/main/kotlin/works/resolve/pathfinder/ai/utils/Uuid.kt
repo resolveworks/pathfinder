@@ -24,9 +24,9 @@ import java.security.SecureRandom
  * - pi throws `RangeError` on invalid timestamps; Kotlin's closest
  *   programmer-error exception is [IllegalArgumentException].
  *
- * The `System.currentTimeMillis()` call below deliberately breaks the
- * domain-code timing rule: pi's generator is `Date.now()`-based, and reading
- * wall time is this function's entire job.
+ * The `System.currentTimeMillis()` call below is the wall-time read
+ * sanctioned by the AGENTS.md "Time and deadlines" rule: pi's generator is
+ * `Date.now()`-based, and stamping wall time is this function's job.
  */
 fun uuidv7(timestampMs: Long? = null): String = Uuidv7.next(timestampMs)
 

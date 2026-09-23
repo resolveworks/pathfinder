@@ -66,9 +66,17 @@ import okhttp3.sse.EventSources
  * adapter alone threads its timeout signal into the body reader, capping that
  * stream's total duration; the mistral adapter reproduces that cap with a
  * `withTimeout` around its whole exchange, so no transport-level support is
- * needed.
+ * needed. The composition root (PathfinderApplication) documents the full
+ * client topology — this transport runs on the app's shared client, and why
+ * OAuth keeps a separate one.
  */
-class OkHttpTransport(private val client: OkHttpClient = OkHttpClient()) : HttpStreamingTransport {
+class OkHttpTransport(
+    /**
+     * Production injects the app's shared client; the default builds an
+     * unconfigured client for tests only.
+     */
+    private val client: OkHttpClient = OkHttpClient()
+) : HttpStreamingTransport {
 
     override suspend fun post(request: TransportRequest): TransportResponse {
         val builder = Request.Builder()

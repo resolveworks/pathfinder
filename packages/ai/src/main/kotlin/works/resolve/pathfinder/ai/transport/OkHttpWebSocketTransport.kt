@@ -19,8 +19,13 @@ import okhttp3.WebSocketListener
  * Never logs headers, auth values, or message content; the connection's
  * [toString][OkHttpWebSocketConnection.toString] carries no URL or headers.
  */
-class OkHttpWebSocketTransport(private val client: OkHttpClient = OkHttpClient()) :
-    WebSocketStreamingTransport {
+class OkHttpWebSocketTransport(
+    /**
+     * Production injects the app's shared client; the default builds an
+     * unconfigured client for tests only.
+     */
+    private val client: OkHttpClient = OkHttpClient()
+) : WebSocketStreamingTransport {
 
     override suspend fun connect(
         url: String,
