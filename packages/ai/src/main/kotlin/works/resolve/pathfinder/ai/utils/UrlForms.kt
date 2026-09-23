@@ -74,7 +74,7 @@ internal fun urlQueryParamsOrNull(value: String): Map<String, String>? = try {
  * (`https:foo`) handling included. Non-http(s) schemes and unparseable values
  * return null — exactly the http(s)-only gate the OAuth flows want.
  */
-internal fun normalizedHttpUrlOrNull(raw: String): String? = raw.toHttpUrlOrNull()?.toString()
+fun normalizedHttpUrlOrNull(raw: String): String? = raw.toHttpUrlOrNull()?.toString()
 
 /**
  * Decodes the base64url payload of a `header.payload.signature` JWT to a

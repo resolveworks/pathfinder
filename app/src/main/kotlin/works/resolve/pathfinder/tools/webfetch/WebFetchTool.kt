@@ -1,7 +1,5 @@
 package works.resolve.pathfinder.tools.webfetch
 
-import java.net.URI
-import java.net.URISyntaxException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -11,6 +9,7 @@ import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
+import works.resolve.pathfinder.ai.utils.normalizedHttpUrlOrNull
 import works.resolve.pathfinder.ai.utils.str
 
 /** Failure of a page fetch; thrown through [AgentTool.execute] so the loop turns it into an error tool result. */
@@ -76,15 +75,11 @@ class WebFetchTool(private val fetcher: PageFetcher) : AgentTool {
     ): AgentToolResult {
         val url = arguments.str("url")
             ?: throw IllegalArgumentException("web_fetch: missing required argument 'url'")
-        val parsed = try {
-            URI(url)
-        } catch (e: URISyntaxException) {
-            throw IllegalArgumentException("web_fetch: 'url' is not a valid URL", e)
-        }
-        if (parsed.scheme?.lowercase() !in HTTP_SCHEMES || parsed.host.isNullOrBlank()) {
-            throw IllegalArgumentException("web_fetch: 'url' must be an absolute http(s) URL")
-        }
-        val page = fetcher.fetch(url)
+        // Shared WHATWG gate/normalizer (ai/utils UrlForms) instead of a
+        // hand-rolled URI check; fetch the canonical href.
+        val target = normalizedHttpUrlOrNull(url)
+            ?: throw IllegalArgumentException("web_fetch: 'url' must be an absolute http(s) URL")
+        val page = fetcher.fetch(target)
         if (page.markdown.isBlank()) {
             return AgentToolResult(
                 content = listOf(TextContent("No readable content found at $url.")),
@@ -109,8 +104,6 @@ class WebFetchTool(private val fetcher: PageFetcher) : AgentTool {
 
     companion object {
         const val NAME = "web_fetch"
-
-        private val HTTP_SCHEMES = setOf("http", "https")
 
         /** Caps the returned content roughly at pi's 50 KiB tool-output budget. */
         private const val MAX_CONTENT_CHARS = 50_000
