@@ -291,6 +291,8 @@ internal object GoogleStreamEngine {
 
             emit(AssistantMessageEvent.Start(state.snapshot()))
 
+            // No early break: like pi, the SDK stream is consumed to its end
+            // and the finish reason validated afterwards.
             response.events.collect { event ->
                 for (toEmit in state.processChunk(event)) emit(toEmit)
             }

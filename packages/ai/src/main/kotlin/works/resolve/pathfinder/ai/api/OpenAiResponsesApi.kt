@@ -354,6 +354,9 @@ class OpenAiResponsesApi(
             )
 
             emit(AssistantMessageEvent.Start(state.partialSnapshot()))
+
+            // No early break: like pi, the SDK stream is consumed to its
+            // end; finish() validates the terminal state afterwards.
             response.events.collect { event ->
                 processSseEvent(event, state)?.forEach { emit(it) }
             }
