@@ -197,6 +197,34 @@ class ProviderRetryTest {
                 60_000
             )
         )
+        // JS longest-prefix semantics keep a trailing exponent:
+        // parseFloat("1.e2") is 100, not the "1." prefix alone.
+        assertEquals(
+            100_000L,
+            h.retry.retryDelayMs(
+                httpError(429, mapOf("retry-after" to listOf("1.e2"))),
+                0,
+                1_000_000
+            )
+        )
+        // parseFloat("0x10") is 0: the hex prefix is not a decimal literal.
+        assertEquals(
+            0L,
+            h.retry.retryDelayMs(
+                httpError(429, mapOf("retry-after" to listOf("0x10"))),
+                0,
+                60_000
+            )
+        )
+        // parseFloat("Infinity") is Infinity: an infinite requested delay
+        // exceeds any cap immediately.
+        assertFailsWith<RetryDelayExceededError> {
+            h.retry.retryDelayMs(
+                httpError(429, mapOf("retry-after" to listOf("Infinity"))),
+                0,
+                60_000
+            )
+        }
         val error = httpError(
             429,
             mapOf(

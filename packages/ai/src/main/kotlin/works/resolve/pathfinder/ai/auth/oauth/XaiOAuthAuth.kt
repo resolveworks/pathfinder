@@ -3,11 +3,13 @@ package works.resolve.pathfinder.ai.auth.oauth
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonObject
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
+import works.resolve.pathfinder.ai.utils.formUrlEncode
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
@@ -221,22 +223,13 @@ class XaiOAuthAuth(private val http: OAuthHttpClient, private val clock: Clock =
     /**
      * The verification URI is opened in the user's browser; force it to be
      * an https URL so a malicious response cannot make `open` launch
-     * something else.
-     *
-     * Divergence from pi: pi returns the WHATWG-normalized
-     * `new URL(raw).href` (lower-cased host, default port removed, empty
-     * path becomes `/`); the JDK has no href-equivalent normalizer, so the
-     * parsed URI's string is returned as-is. The trust check errs strict:
-     * anything `URI` rejects (and WHATWG would accept) is treated as
-     * untrusted rather than opened.
+     * something else. Returns the WHATWG-normalized href, like pi's
+     * `new URL(raw).href`; only http(s)-family URLs parse at all, and the
+     * https gate narrows that further.
      */
     private fun validateVerificationUri(raw: String): String {
-        val url = try {
-            java.net.URI(raw)
-        } catch (_: Exception) {
-            throw IllegalStateException("Untrusted verification URI in xAI OAuth response")
-        }
-        if (url.scheme != "https" || url.host == null) {
+        val url = raw.toHttpUrlOrNull()
+        if (url?.isHttps != true) {
             throw IllegalStateException("Untrusted verification URI in xAI OAuth response")
         }
         return url.toString()
@@ -255,7 +248,7 @@ class XaiOAuthAuth(private val http: OAuthHttpClient, private val clock: Clock =
                         "accept" to "application/json",
                         "content-type" to "application/x-www-form-urlencoded"
                     ),
-                    body = formUrlEncode(fields),
+                    body = formUrlEncode(fields).toByteArray(Charsets.UTF_8),
                     timeoutMs = REQUEST_TIMEOUT_MS
                 )
             )
@@ -305,26 +298,5 @@ class XaiOAuthAuth(private val http: OAuthHttpClient, private val clock: Clock =
         const val DEFAULT_TOKEN_LIFETIME_SECONDS: Long = 3600
 
         const val REQUEST_TIMEOUT_MS: Int = 30_000
-
-        /**
-         * The JDK [java.net.URLEncoder] uses the WHATWG form-urlencoded set
-         * (as `URLSearchParams` does): alphanumerics, `*`, `-`, `.`, `_`
-         * stay bare, space becomes `+`, and every other byte (including `~`
-         * → `%7E`) is percent-encoded.
-         */
-        internal fun formUrlEncode(fields: Map<String, String>): ByteArray {
-            val out = StringBuilder()
-            for ((index, entry) in fields.entries.withIndex()) {
-                if (index > 0) out.append('&')
-                encodeTo(out, entry.key)
-                out.append('=')
-                encodeTo(out, entry.value)
-            }
-            return out.toString().toByteArray(Charsets.UTF_8)
-        }
-
-        private fun encodeTo(out: StringBuilder, value: String) {
-            out.append(java.net.URLEncoder.encode(value, "UTF-8"))
-        }
     }
 }

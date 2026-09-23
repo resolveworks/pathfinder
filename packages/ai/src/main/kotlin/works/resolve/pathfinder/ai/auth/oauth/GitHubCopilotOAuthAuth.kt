@@ -22,7 +22,10 @@ import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
+import works.resolve.pathfinder.ai.utils.formUrlEncode
+import works.resolve.pathfinder.ai.utils.jsParseFloatOrNull
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.normalizedHttpUrlOrNull
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.parseHttpDateMsOrNull
 import works.resolve.pathfinder.ai.utils.strictDouble
@@ -279,7 +282,7 @@ class GitHubCopilotOAuthAuth(
             // pi's truthiness check: an empty Retry-After value skips header
             // handling entirely, keeping the exponential backoff.
             if (!retryAfter.isNullOrEmpty()) {
-                val seconds = parseFloatPrefix(retryAfter)
+                val seconds = jsParseFloatOrNull(retryAfter)
                 delayMs =
                     if (seconds == null) {
                         parseHttpDateMsOrNull(retryAfter)?.let {
@@ -376,12 +379,12 @@ class GitHubCopilotOAuthAuth(
                 "Content-Type" to "application/x-www-form-urlencoded",
                 "User-Agent" to COPILOT_USER_AGENT
             ),
-            body = XaiOAuthAuth.formUrlEncode(
+            body = formUrlEncode(
                 mapOf(
                     "client_id" to CLIENT_ID,
                     "scope" to "read:user"
                 )
-            )
+            ).toByteArray(Charsets.UTF_8)
         ).let { recordOr(it, "Invalid device code response") }
 
         val deviceCode = data.string("device_code")
@@ -429,13 +432,13 @@ class GitHubCopilotOAuthAuth(
                             "Content-Type" to "application/x-www-form-urlencoded",
                             "User-Agent" to COPILOT_USER_AGENT
                         ),
-                        body = XaiOAuthAuth.formUrlEncode(
+                        body = formUrlEncode(
                             mapOf(
                                 "client_id" to CLIENT_ID,
                                 "device_code" to device.deviceCode,
                                 "grant_type" to DEVICE_GRANT_TYPE
                             )
-                        )
+                        ).toByteArray(Charsets.UTF_8)
                     ).let { recordOr(it, "Invalid device token response") }
 
                     when {
@@ -623,46 +626,15 @@ class GitHubCopilotOAuthAuth(
     }
 
     /**
-     * Mirrors JS `Number.parseFloat` prefix semantics for `Retry-After`: the
-     * longest numeric prefix of the trimmed value parses (`"1x"`,
-     * `" 2.5 sec"`), anything else (no numeric prefix, `"Infinity"`) is null.
-     */
-    internal fun parseFloatPrefix(value: String): Double? {
-        val trimmed = value.trim()
-        val match =
-            Regex("""^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?""").find(trimmed)
-                ?: return null
-        return match.value.toDoubleOrNull()
-    }
-
-    /**
      * The device flow's verification URI is opened in the user's browser, so
-     * it must be a strict http(s) URL. The JDK has no WHATWG `href`
-     * normalizer, so the safe form is rebuilt: lower-cased scheme and host,
-     * scheme-default ports (`:80`/`:443`) omitted, empty path becomes `/`,
-     * query and fragment preserved verbatim. Anything `URI` rejects (opaque
-     * authority-less forms like `http:foo`, control characters, invalid
-     * escapes) is treated as untrusted rather than opened.
+     * it must be an http(s) URL; returns the WHATWG-normalized href like
+     * pi's `parsedUri.href` (lowercase scheme and host, default ports
+     * dropped, empty path `/`). Non-http(s) schemes and unparseable values
+     * are rejected — pi through its protocol gate and the URL constructor
+     * respectively.
      */
-    internal fun validateVerificationUri(raw: String): String {
-        val uri = try {
-            java.net.URI(raw)
-        } catch (_: Exception) {
-            null
-        } ?: throw IllegalStateException("Untrusted verification_uri in device code response")
-        val scheme = uri.scheme?.lowercase(Locale.ROOT)
-        if ((scheme != "https" && scheme != "http") || uri.host.isNullOrEmpty()) {
-            throw IllegalStateException("Untrusted verification_uri in device code response")
-        }
-        val host = uri.host.lowercase(Locale.ROOT)
-        val defaultPort =
-            (scheme == "https" && uri.port == 443) || (scheme == "http" && uri.port == 80)
-        val port = if (uri.port != -1 && !defaultPort) ":${uri.port}" else ""
-        val path = uri.rawPath.takeIf { it.isNotEmpty() } ?: "/"
-        val query = uri.rawQuery?.let { "?$it" } ?: ""
-        val fragment = uri.rawFragment?.let { "#$it" } ?: ""
-        return "$scheme://$host$port$path$query$fragment"
-    }
+    internal fun validateVerificationUri(raw: String): String = normalizedHttpUrlOrNull(raw)
+        ?: throw IllegalStateException("Untrusted verification_uri in device code response")
 
     private fun jsonPolicyBody(): ByteArray =
         buildJsonObject { put("state", "enabled") }.toString().toByteArray(Charsets.UTF_8)

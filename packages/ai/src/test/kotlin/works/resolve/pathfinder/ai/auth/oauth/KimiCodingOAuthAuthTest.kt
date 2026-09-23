@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.runTest
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.OAuthCredential
+import works.resolve.pathfinder.ai.utils.formUrlEncode
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class KimiCodingOAuthAuthTest {
@@ -515,9 +516,7 @@ class KimiCodingOAuthAuthTest {
     fun `formUrlEncode matches URLSearchParams percent-encoding`() {
         assertEquals(
             "a=1&b=hello+world&c=x%2By",
-            KimiCodingOAuthAuth.formUrlEncode(
-                linkedMapOf("a" to "1", "b" to "hello world", "c" to "x+y")
-            ).toString(Charsets.UTF_8)
+            formUrlEncode(linkedMapOf("a" to "1", "b" to "hello world", "c" to "x+y"))
         )
     }
 
@@ -538,10 +537,12 @@ class KimiCodingOAuthAuthTest {
     }
 
     @Test
-    fun `trustedHttpUrl rejects authority-less and opaque http forms`() {
-        // WHATWG normalizes these; this port rejects them (narrow safety divergence)
-        assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl("https:foo"))
-        assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl("https:///path"))
+    fun `trustedHttpUrl normalizes WHATWG special-scheme forms like URL href`() {
+        // `https:foo` is a special-scheme form WHATWG resolves against an
+        // implicit authority, like pi's `new URL(value)`; only non-special
+        // schemes (above) are rejected.
+        assertEquals("https://foo/", KimiCodingOAuthAuth.trustedHttpUrl("https:foo"))
+        assertEquals("https://path/", KimiCodingOAuthAuth.trustedHttpUrl("https:///path"))
     }
 
     @Test

@@ -19,6 +19,8 @@ import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.utils.formUrlEncode
+import works.resolve.pathfinder.ai.utils.jsParseNumberOrNull
 
 class OpenAiCodexOAuthAuthTest {
 
@@ -791,54 +793,54 @@ class OpenAiCodexOAuthAuthTest {
     }
 
     @Test
-    fun `jsNumber pins JS Number coercion for string intervals`() {
-        val flow = OpenAiCodexOAuthAuth(FakeHttpClient())
-        assertEquals(5.0, flow.jsNumber("5"))
-        assertEquals(5.0, flow.jsNumber(" 5 \t"))
+    fun `jsParseNumberOrNull pins JS Number coercion for string intervals`() {
+        assertEquals(5.0, jsParseNumberOrNull("5"))
+        assertEquals(5.0, jsParseNumberOrNull(" 5 \t"))
         // JS: Number("") and Number(" ") are both 0 (finite and non-negative,
         // so a whitespace-only interval is *valid* with a zero interval).
-        assertEquals(0.0, flow.jsNumber(""))
-        assertEquals(0.0, flow.jsNumber("   "))
-        assertEquals(0.0, flow.jsNumber("\u00A0\uFEFF"))
-        assertEquals(16.0, flow.jsNumber("0x10"))
-        assertEquals(-16.0, flow.jsNumber("-0x10"))
-        assertEquals(5.0, flow.jsNumber("0b101"))
-        assertEquals(15.0, flow.jsNumber("0o17"))
-        assertEquals(100.0, flow.jsNumber("1e2"))
-        assertEquals(0.5, flow.jsNumber(".5"))
-        assertTrue(flow.jsNumber("Infinity").isInfinite())
-        assertTrue(flow.jsNumber("-Infinity").isInfinite())
-        assertTrue(flow.jsNumber("NaN").isNaN())
-        assertTrue(flow.jsNumber("12px").isNaN())
+        assertEquals(0.0, jsParseNumberOrNull(""))
+        assertEquals(0.0, jsParseNumberOrNull("   "))
+        assertEquals(0.0, jsParseNumberOrNull("\u00A0\uFEFF"))
+        assertEquals(16.0, jsParseNumberOrNull("0x10"))
+        // JS rejects signed radix literals: Number("-0x10") is NaN.
+        assertNull(jsParseNumberOrNull("-0x10"))
+        assertEquals(5.0, jsParseNumberOrNull("0b101"))
+        assertEquals(15.0, jsParseNumberOrNull("0o17"))
+        assertEquals(100.0, jsParseNumberOrNull("1e2"))
+        assertEquals(0.5, jsParseNumberOrNull(".5"))
+        assertTrue(jsParseNumberOrNull("Infinity")!!.isInfinite())
+        assertTrue(jsParseNumberOrNull("-Infinity")!!.isInfinite())
+        assertNull(jsParseNumberOrNull("NaN"))
+        assertNull(jsParseNumberOrNull("12px"))
         // Java-only Double.parseDouble suffix forms are not JS numbers.
-        assertTrue(flow.jsNumber("5f").isNaN())
-        assertTrue(flow.jsNumber("5d").isNaN())
+        assertNull(jsParseNumberOrNull("5f"))
+        assertNull(jsParseNumberOrNull("5d"))
     }
 
     @Test
-    fun `string intervals coerce through jsNumber in the device auth response`() = runTest {
-        for ((interval, expected) in listOf(" 5 " to 5.0, "0x10" to 16.0, " " to 0.0)) {
-            val http = FakeHttpClient()
-            http.enqueue(
-                json(200, """{"device_auth_id":"d","user_code":"ABCD","interval":"$interval"}""")
-            )
-            val device = auth(http).startOpenAICodexDeviceAuth()
-            assertEquals(expected, device.intervalSeconds)
+    fun `string intervals coerce through jsParseNumberOrNull in the device auth response`() =
+        runTest {
+            for ((interval, expected) in listOf(" 5 " to 5.0, "0x10" to 16.0, " " to 0.0)) {
+                val http = FakeHttpClient()
+                http.enqueue(
+                    json(
+                        200,
+                        """{"device_auth_id":"d","user_code":"ABCD","interval":"$interval"}"""
+                    )
+                )
+                val device = auth(http).startOpenAICodexDeviceAuth()
+                assertEquals(expected, device.intervalSeconds)
+            }
         }
-    }
 
     @Test
     fun `form encoding matches URLSearchParams byte for byte`() {
         // WHATWG application/x-www-form-urlencoded: `~` percent-encodes, `*`
         // stays literal, a space becomes `+` — exactly java.net.URLEncoder.
-        assertEquals(
-            "k=%7E+*",
-            XaiOAuthAuth.formUrlEncode(mapOf("k" to "~ *")).toString(Charsets.UTF_8)
-        )
+        assertEquals("k=%7E+*", formUrlEncode(mapOf("k" to "~ *")))
         assertEquals(
             "a=1&b=two+words",
-            XaiOAuthAuth.formUrlEncode(linkedMapOf("a" to "1", "b" to "two words"))
-                .toString(Charsets.UTF_8)
+            formUrlEncode(linkedMapOf("a" to "1", "b" to "two words"))
         )
     }
 
@@ -956,6 +958,22 @@ class OpenAiCodexOAuthAuthTest {
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("", null),
             flow.parseAuthorizationInput("http://localhost:1455/auth/callback?code")
+        )
+    }
+
+    @Test
+    fun `malformed percent escapes never throw from a pasted url`() {
+        val flow = OpenAiCodexOAuthAuth(FakeHttpClient())
+        // URLSearchParams never throws on a malformed escape; per-sequence
+        // pass-through means "%zz" survives literally where a whole-value
+        // decoder would have failed (or fallen back to the raw input).
+        assertEquals(
+            OpenAiCodexOAuthAuth.AuthorizationInput("%zz", "s1"),
+            flow.parseAuthorizationInput("http://localhost:1455/auth/callback?code=%zz&state=s1")
+        )
+        assertEquals(
+            OpenAiCodexOAuthAuth.AuthorizationInput("%zz\u00E9", null),
+            flow.parseAuthorizationInput("code=%zz%C3%A9")
         )
     }
 

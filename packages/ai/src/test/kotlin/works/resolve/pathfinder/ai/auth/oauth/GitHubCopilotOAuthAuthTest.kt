@@ -28,6 +28,7 @@ import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.utils.jsParseFloatOrNull
 import works.resolve.pathfinder.ai.utils.parseHttpDateMsOrNull
 
 /** Faked HTTP and virtual time (`runTest` + scheduler clock) keep poll sleeps and retry backoffs instant. */
@@ -806,7 +807,6 @@ class GitHubCopilotOAuthAuthTest {
     fun `authority-less and malformed verification uris are rejected`() {
         val a = auth(FakeHttpClient())
         for (bad in listOf(
-            "http:foo",
             "https:",
             "//github.com",
             "file:///bin/sh",
@@ -817,20 +817,28 @@ class GitHubCopilotOAuthAuthTest {
                 assertFailsWith<IllegalStateException>(bad) { a.validateVerificationUri(bad) }
             assertEquals("Untrusted verification_uri in device code response", error.message)
         }
-        // Control characters make the URI unparseable → untrusted.
-        val error = assertFailsWith<IllegalStateException> {
-            a.validateVerificationUri("https://github.com/lo\u0000gin")
-        }
-        assertEquals("Untrusted verification_uri in device code response", error.message)
     }
 
     @Test
-    fun `login rejects authority-less verification uri from the server`() = runTest {
+    fun `WHATWG-special-form and control-character verification uris normalize like pi`() {
+        val a = auth(FakeHttpClient())
+        // WHATWG resolves `http:foo` against an implicit authority and
+        // percent-encodes control characters, so pi's `new URL(raw)` accepts
+        // both; the href form is returned.
+        assertEquals("http://foo/", a.validateVerificationUri("http:foo"))
+        assertEquals(
+            "https://github.com/lo%00gin",
+            a.validateVerificationUri("https://github.com/lo\u0000gin")
+        )
+    }
+
+    @Test
+    fun `login rejects a non-http verification uri from the server`() = runTest {
         val http = FakeHttpClient()
         http.script +=
             {
                 ok(
-                    """{"device_code":"DC","user_code":"ABCD-1234","verification_uri":"http:foo","expires_in":900}"""
+                    """{"device_code":"DC","user_code":"ABCD-1234","verification_uri":"ftp://example.com/activate","expires_in":900}"""
                 )
             }
         val error = assertFailsWith<IllegalStateException> {
@@ -841,17 +849,18 @@ class GitHubCopilotOAuthAuthTest {
 
     @Test
     fun `retry-after numeric parsing mirrors js parseFloat`() {
-        val a = auth(FakeHttpClient())
-        assertEquals(1.0, a.parseFloatPrefix("1x"))
-        assertEquals(-1.0, a.parseFloatPrefix("-1x"))
-        assertEquals(2.5, a.parseFloatPrefix(" 2.5 sec"))
-        assertEquals(100.0, a.parseFloatPrefix("1e2foo"))
-        assertEquals(0.5, a.parseFloatPrefix(".5"))
-        assertEquals(3.0, a.parseFloatPrefix("+3"))
-        assertNull(a.parseFloatPrefix("soon"))
-        assertNull(a.parseFloatPrefix(""))
-        assertNull(a.parseFloatPrefix("Infinity"))
-        assertNull(a.parseFloatPrefix("e5"))
+        assertEquals(1.0, jsParseFloatOrNull("1x"))
+        assertEquals(-1.0, jsParseFloatOrNull("-1x"))
+        assertEquals(2.5, jsParseFloatOrNull(" 2.5 sec"))
+        assertEquals(100.0, jsParseFloatOrNull("1e2foo"))
+        assertEquals(0.5, jsParseFloatOrNull(".5"))
+        assertEquals(3.0, jsParseFloatOrNull("+3"))
+        assertNull(jsParseFloatOrNull("soon"))
+        assertNull(jsParseFloatOrNull(""))
+        // JS semantics: parseFloat("Infinity") IS Infinity (the caller's
+        // isFinite gate treats it as an unparsable delay).
+        assertTrue(jsParseFloatOrNull("Infinity")!!.isInfinite())
+        assertNull(jsParseFloatOrNull("e5"))
     }
 
     @Test

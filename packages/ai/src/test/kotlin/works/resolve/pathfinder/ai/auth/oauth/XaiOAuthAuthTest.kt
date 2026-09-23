@@ -13,6 +13,7 @@ import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.utils.formUrlEncode
 
 class XaiOAuthAuthTest {
 
@@ -159,6 +160,18 @@ class XaiOAuthAuthTest {
             )
         }
         assertEquals("Untrusted verification URI in xAI OAuth response", error.message)
+    }
+
+    @Test
+    fun `verification URI is WHATWG-normalized like pi's URL href`() = runTest {
+        val auth = XaiOAuthAuth(FakeHttpClient())
+        // pi returns `new URL(raw).href`: lower-cased scheme and host, default
+        // port dropped, empty path `/`, special-scheme forms resolved.
+        val device = auth.parseDeviceCodeForTest(
+            """{"device_code":"d","user_code":"u","verification_uri":"HTTPS://Auth.X.AI:443","verification_uri_complete":"https:foo","expires_in":900}"""
+        )
+        assertEquals("https://auth.x.ai/", device.verificationUri)
+        assertEquals("https://foo/", device.verificationUriComplete)
     }
 
     @Test
@@ -416,9 +429,9 @@ class XaiOAuthAuthTest {
 
     @Test
     fun `form encoding matches URLSearchParams semantics`() {
-        val encoded = XaiOAuthAuth.formUrlEncode(
+        val encoded = formUrlEncode(
             mapOf("a b" to "c/d", "e" to "ü~*.-_1\uD83D\uDE00")
-        ).toString(Charsets.UTF_8)
+        )
         // URLSearchParams percent-encodes `~`, keeps `*`, `.-_` and
         // alphanumerics, encodes spaces as `+`, and encodes the supplementary
         // code point as its full UTF-8 sequence (not surrogate halves).

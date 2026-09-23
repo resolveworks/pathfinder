@@ -1,8 +1,6 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
 import java.io.IOException
-import java.net.URI
-import java.net.URLEncoder
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -16,7 +14,9 @@ import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
+import works.resolve.pathfinder.ai.utils.formUrlEncode
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.normalizedHttpUrlOrNull
 import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
 /**
@@ -74,7 +74,7 @@ class KimiCodingOAuthAuth(
                 method = "POST",
                 url = "$OAUTH_HOST/api/oauth/device_authorization",
                 headers = FORM_HEADERS,
-                body = formUrlEncode(mapOf("client_id" to CLIENT_ID)),
+                body = formUrlEncode(mapOf("client_id" to CLIENT_ID)).toByteArray(Charsets.UTF_8),
                 timeoutMs = REQUEST_TIMEOUT_MS
             )
         )
@@ -169,7 +169,7 @@ class KimiCodingOAuthAuth(
                         "device_code" to device.deviceCode,
                         "grant_type" to DEVICE_CODE_GRANT_TYPE
                     )
-                ),
+                ).toByteArray(Charsets.UTF_8),
                 timeoutMs = REQUEST_TIMEOUT_MS
             )
         )
@@ -243,7 +243,7 @@ class KimiCodingOAuthAuth(
                                 "grant_type" to "refresh_token",
                                 "refresh_token" to refreshTokenValue
                             )
-                        ),
+                        ).toByteArray(Charsets.UTF_8),
                         timeoutMs = REQUEST_TIMEOUT_MS
                     )
                 )
@@ -315,17 +315,6 @@ class KimiCodingOAuthAuth(
             status == 429 || status >= 500
 
         /**
-         * application/x-www-form-urlencoded serialization — space becomes `+`,
-         * exactly like `URLSearchParams` (and `URLEncoder`) on the wire.
-         */
-        internal fun formUrlEncode(fields: Map<String, String>): ByteArray =
-            fields.entries.joinToString("&") { (name, value) ->
-                urlEncode(name) + "=" + urlEncode(value)
-            }.toByteArray(Charsets.UTF_8)
-
-        private fun urlEncode(value: String): String = URLEncoder.encode(value, "UTF-8")
-
-        /**
          * JS `typeof [] === "object"`, so any non-null JSON object *or array*
          * is returned as-is (pi keeps it for `JSON.stringify` in
          * malformed-response errors); scalars and unparseable bodies become
@@ -343,45 +332,15 @@ class KimiCodingOAuthAuth(
 
         /**
          * The verification URI is opened in the user's browser; only http(s)
-         * URLs are trusted. Like pi's `url.href` return, the value is the
-         * normalized URL form, rebuilt from the parsed [URI]: lowercase
-         * scheme, root path `/` for empty paths, and default ports
-         * `:80`/`:443` omitted.
-         *
-         * Divergence from pi: WHATWG URL accepts authority-less/opaque forms
-         * like `https:foo`; [URI] (and this port) reject them by requiring a
-         * non-empty host, because a provider device authorization response
-         * should always carry an absolute verification URL. This is the
-         * narrow safety boundary.
+         * URLs are trusted. Returns the WHATWG-normalized href
+         * (`new URL(value).href` equivalent) like pi: lowercase scheme and
+         * host, scheme-default ports dropped, empty path `/`, special-form
+         * (`https:foo`) handling included. Non-http(s) schemes and
+         * unparseable values are rejected — pi rejects them through the
+         * protocol gate and URL constructor respectively.
          */
-        internal fun trustedHttpUrl(value: String?): String? {
-            if (value.isNullOrEmpty()) return null
-            return try {
-                val uri = URI(value)
-                val scheme = uri.scheme?.lowercase()
-                val host = uri.host?.lowercase()
-                val port = uri.port
-                if ((scheme != "http" && scheme != "https") || host.isNullOrEmpty()) {
-                    null
-                } else {
-                    buildString {
-                        append(scheme).append("://")
-                        uri.rawUserInfo?.let { append(it).append('@') }
-                        append(host)
-                        if (port != -1 && !(scheme == "http" && port == 80) &&
-                            !(scheme == "https" && port == 443)
-                        ) {
-                            append(':').append(port)
-                        }
-                        append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
-                        uri.rawQuery?.let { append('?').append(it) }
-                        uri.rawFragment?.let { append('#').append(it) }
-                    }
-                }
-            } catch (_: Exception) {
-                null
-            }
-        }
+        internal fun trustedHttpUrl(value: String?): String? =
+            if (value.isNullOrEmpty()) null else normalizedHttpUrlOrNull(value)
 
         /** pi's `JSON.stringify(json)` rendering (`"null"` for null, compact JSON otherwise). */
         private fun JsonElement?.jsonString(): String = this?.toString() ?: "null"

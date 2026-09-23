@@ -1,8 +1,6 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
 import java.net.SocketTimeoutException
-import java.net.URI
-import java.net.URLDecoder
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
@@ -20,9 +18,12 @@ import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.oauth.PkceGenerator
+import works.resolve.pathfinder.ai.utils.formQuery
+import works.resolve.pathfinder.ai.utils.formUrlEncode
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.ai.utils.urlQueryParamsOrNull
 
 /**
  * OpenRouter OAuth PKCE flow: OpenRouter exchanges an authorization code for
@@ -89,12 +90,14 @@ class OpenRouterOAuthAuth(
 
         try {
             val callbackUrl = "http://127.0.0.1:${handle.port}$callbackPath"
-            val authorizeUrl = buildString {
-                append(AUTHORIZE_URL)
-                append("?callback_url=").append(urlEncode(callbackUrl))
-                append("&code_challenge=").append(urlEncode(challenge.challenge))
-                append("&code_challenge_method=S256")
-            }
+            val authorizeUrl = AUTHORIZE_URL + "?" +
+                formUrlEncode(
+                    linkedMapOf(
+                        "callback_url" to callbackUrl,
+                        "code_challenge" to challenge.challenge,
+                        "code_challenge_method" to "S256"
+                    )
+                )
 
             interaction.notify(
                 AuthEvent.Progress("Listening for OpenRouter OAuth callback on $callbackUrl")
@@ -292,37 +295,11 @@ class OpenRouterOAuthAuth(
         internal fun parseAuthorizationCodeInput(input: String): String? {
             val value = input.trim()
             if (value.isEmpty()) return null
-            try {
-                val uri = URI(value)
-                if (uri.scheme != null) {
-                    return uri.rawQuery?.let(::parseQueryString)?.get("code")
-                }
-            } catch (_: Exception) {
-                // not a URL
-            }
+            urlQueryParamsOrNull(value)?.let { return it["code"] }
             if (value.contains("code=")) {
-                return parseQueryString(value)?.get("code")
+                return formQuery(value)["code"]
             }
             return value
-        }
-
-        private fun parseQueryString(query: String): Map<String, String>? {
-            val result = mutableMapOf<String, String>()
-            for (pair in query.split('&')) {
-                if (pair.isEmpty()) continue
-                val separator = pair.indexOf('=')
-                if (separator < 0) continue
-                val name = pair.substring(0, separator).urlDecode()
-                val decoded = pair.substring(separator + 1).urlDecode()
-                if (!result.containsKey(name)) result[name] = decoded
-            }
-            return result
-        }
-
-        private fun String.urlDecode(): String = try {
-            URLDecoder.decode(this, "UTF-8")
-        } catch (_: IllegalArgumentException) {
-            this
         }
 
         internal fun errorDetail(body: JsonObject): String? {
@@ -359,8 +336,5 @@ class OpenRouterOAuthAuth(
                 put("code_challenge_method", "S256")
             }
         ).toByteArray(Charsets.UTF_8)
-
-        private fun urlEncode(value: String): String =
-            java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
     }
 }

@@ -27,6 +27,7 @@ import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.oauth.Pkce
 import works.resolve.pathfinder.ai.auth.oauth.PkceGenerator
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.utils.formUrlEncode
 
 class AnthropicOAuthAuthTest {
 
@@ -184,6 +185,21 @@ class AnthropicOAuthAuthTest {
             assertEquals("Missing authorization code", error.message, "input: $input")
             assertTrue(http.requests.isEmpty(), "input: $input")
         }
+    }
+
+    @Test
+    fun `malformed percent escapes decode per sequence like URLSearchParams`() {
+        val (auth, _) = flow()
+        // Upstream URLSearchParams passes "%zz" through and decodes the rest;
+        // the old whole-value URLDecoder fallback returned the raw remainder.
+        assertEquals(
+            AnthropicOAuthAuth.ParsedAuthorizationInput(code = "%zz\u00E9", state = "s"),
+            auth.parseAuthorizationInput("code=%zz%C3%A9&state=s")
+        )
+        assertEquals(
+            AnthropicOAuthAuth.ParsedAuthorizationInput(code = "%", state = null),
+            auth.parseAuthorizationInput("code=%")
+        )
     }
 
     @Test
@@ -536,8 +552,8 @@ class AnthropicOAuthAuthTest {
     }
 
     @Test
-    fun `formEncode matches URLSearchParams including tilde`() {
-        assertEquals("x=%7E+*", AnthropicOAuthAuth.formEncode(mapOf("x" to "~ *")))
+    fun `formUrlEncode matches URLSearchParams including tilde`() {
+        assertEquals("x=%7E+*", formUrlEncode(mapOf("x" to "~ *")))
     }
 
     private fun assertNoSecrets(text: String?, secrets: List<String>, context: String) {

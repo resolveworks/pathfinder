@@ -24,6 +24,7 @@ import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.oauth.Pkce
 import works.resolve.pathfinder.ai.auth.oauth.PkceGenerator
+import works.resolve.pathfinder.ai.utils.formQuery
 
 class OpenRouterOAuthAuthTest {
 
@@ -114,7 +115,7 @@ class OpenRouterOAuthAuthTest {
 
     private fun callbackUrlFrom(authorizeUrl: String): String {
         val query = authorizeUrl.substringAfter("?", "")
-        return parseQuery(query).entries.first { it.key == "callback_url" }.value
+        return formQuery(query)!!.entries.first { it.key == "callback_url" }.value
     }
 
     @Test
@@ -134,9 +135,12 @@ class OpenRouterOAuthAuthTest {
                 ).matches(callbackUrl),
                 "callback_url: $callbackUrl"
             )
+            // URLSearchParams serialization: none of these values contain a
+            // space, so the wire bytes are unchanged from the old per-site
+            // encoder (which additionally swapped `+` for `%20`).
             assertEquals(
                 "https://openrouter.ai/auth?callback_url=" +
-                    java.net.URLEncoder.encode(callbackUrl, "UTF-8").replace("+", "%20") +
+                    java.net.URLEncoder.encode(callbackUrl, "UTF-8") +
                     "&code_challenge=${pkcePair.challenge}&code_challenge_method=S256",
                 urlEvent.url
             )

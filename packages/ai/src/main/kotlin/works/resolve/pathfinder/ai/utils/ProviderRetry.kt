@@ -59,12 +59,12 @@ class ProviderRetry(
     fun retryDelayMs(error: Exception, retryIndex: Int, maxRetryDelayMs: Long): Long {
         if (error is ProviderHttpException) {
             error.header("retry-after-ms")?.let { header ->
-                parseFloatPrefix(header)?.let { value ->
+                jsParseFloatOrNull(header)?.let { value ->
                     return validateServerDelayMs(value.toLong(), maxRetryDelayMs, error)
                 }
             }
             error.header("retry-after")?.let { header ->
-                val delayMs = parseFloatPrefix(header)?.let { it * 1000 }
+                val delayMs = jsParseFloatOrNull(header)?.let { it * 1000 }
                     ?: (parseHttpDateMs(header) - clock.now().toEpochMilliseconds())
                 return validateServerDelayMs(delayMs.toLong(), maxRetryDelayMs, error)
             }
@@ -78,16 +78,6 @@ class ProviderRetry(
         maxRetryDelayMs: Long,
         error: Exception
     ): Long = validateRetryDelayMs(delayMs, maxRetryDelayMs, messageSuffix = error.message)
-
-    /** Longest numeric prefix (so "1200ms" parses as 1200), or null when none.
-     * NaN parses in Kotlin but is not a valid delay, so it falls through. */
-    private fun parseFloatPrefix(value: String): Double? {
-        val trimmed = value.trim()
-        for (end in trimmed.length downTo 1) {
-            trimmed.substring(0, end).toDoubleOrNull()?.takeIf { !it.isNaN() }?.let { return it }
-        }
-        return null
-    }
 
     private fun parseHttpDateMs(value: String): Long = parseHttpDateMsOrNull(value) ?: 0L
 }
