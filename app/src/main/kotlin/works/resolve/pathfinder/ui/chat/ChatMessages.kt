@@ -65,7 +65,7 @@ import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.int
-import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.ai.utils.truthyString
 import works.resolve.pathfinder.codingagent.core.tools.BashTool
 import works.resolve.pathfinder.codingagent.core.tools.EditTool
 import works.resolve.pathfinder.codingagent.core.tools.ReadTool
@@ -396,7 +396,7 @@ internal object ToolResultRenderers {
  */
 internal fun editDiff(result: ToolResultMessage): String? {
     if (result.toolName != EditTool.NAME) return null
-    return (result.details as? JsonObject)?.string("diff")?.takeIf { it.isNotEmpty() }
+    return (result.details as? JsonObject)?.truthyString("diff")
 }
 
 /**
@@ -409,15 +409,13 @@ internal fun editDiff(result: ToolResultMessage): String? {
 internal fun toolCallTitle(call: ToolCall): String {
     return when (call.name) {
         BashTool.NAME -> {
-            val command =
-                call.arguments.string("command")?.takeIf { it.isNotEmpty() } ?: return call.name
+            val command = call.arguments.truthyString("command") ?: return call.name
             val timeout = call.arguments.int("timeout")
             "$ " + command + (if (timeout != null) " (timeout ${timeout}s)" else "")
         }
 
         ReadTool.NAME -> {
-            val path =
-                call.arguments.string("path")?.takeIf { it.isNotEmpty() } ?: return call.name
+            val path = call.arguments.truthyString("path") ?: return call.name
             val offset = call.arguments.int("offset")
             val limit = call.arguments.int("limit")
             val range = if (offset == null && limit == null) {
@@ -430,19 +428,17 @@ internal fun toolCallTitle(call: ToolCall): String {
         }
 
         EditTool.NAME, WriteTool.NAME -> {
-            val path =
-                call.arguments.string("path")?.takeIf { it.isNotEmpty() } ?: return call.name
+            val path = call.arguments.truthyString("path") ?: return call.name
             call.name + " " + path
         }
 
         BraveWebSearchTool.NAME -> {
-            val query =
-                call.arguments.string("query")?.takeIf { it.isNotEmpty() } ?: return call.name
+            val query = call.arguments.truthyString("query") ?: return call.name
             stringResource(R.string.tool_title_searched_for, query)
         }
 
         WebFetchTool.NAME -> {
-            val url = call.arguments.string("url")?.takeIf { it.isNotEmpty() } ?: return call.name
+            val url = call.arguments.truthyString("url") ?: return call.name
             stringResource(R.string.tool_title_fetched, url)
         }
 

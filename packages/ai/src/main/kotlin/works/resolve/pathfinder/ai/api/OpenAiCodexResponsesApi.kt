@@ -69,6 +69,8 @@ import works.resolve.pathfinder.ai.utils.strictBoolean
 import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
+import works.resolve.pathfinder.ai.utils.truthyString
 import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.ai.utils.validateRetryDelayMs
 import works.resolve.pathfinder.telemetry.TelemetryContext
@@ -470,7 +472,7 @@ class OpenAICodexResponsesApi(
             // right after the terminal event cancels the HTTP call.
             emitAll(
                 response.events.transformWhile { event ->
-                    if (event.data.trim() == "[DONE]") return@transformWhile true
+                    if (trimJsWhitespace(event.data) == "[DONE]") return@transformWhile true
                     val parsed = try {
                         responsesJson.parseToJsonElement(event.data)
                     } catch (error: Exception) {
@@ -966,7 +968,12 @@ internal fun resolveCodexServiceTier(responseTier: String?, requestTier: String?
     }
 
 internal fun resolveCodexUrl(baseUrl: String?): String {
-    val raw = if (!baseUrl.isNullOrBlank()) baseUrl else DEFAULT_CODEX_BASE_URL
+    val raw =
+        if (baseUrl != null && trimJsWhitespace(baseUrl).isNotEmpty()) {
+            baseUrl
+        } else {
+            DEFAULT_CODEX_BASE_URL
+        }
     val normalized = raw.replace(Regex("/+$"), "")
     if (normalized.endsWith("/codex/responses")) return normalized
     if (normalized.endsWith("/codex")) return "$normalized/responses"
@@ -1021,8 +1028,9 @@ internal fun mapCodexEvent(
     event: JsonObject,
     onEndTurn: (Boolean) -> Unit
 ): Pair<JsonObject, Boolean>? {
-    // Falsy type (absent, non-string, or empty) skips the event entirely.
-    val type = event.string("type")?.takeIf { it.isNotEmpty() } ?: return null
+    // Falsy type (absent, non-string, or empty) skips the event entirely —
+    // pi's `typeof event.type === "string"` guard plus its `!type` truthiness.
+    val type = event.truthyString("type") ?: return null
 
     if (type == "error") {
         val nested = event.obj("error")
@@ -1406,14 +1414,14 @@ internal fun parseCodexErrorResponse(
         val parsed = responsesJson.parseToJsonElement(body) as? JsonObject
         val err = parsed?.get("error") as? JsonObject
         if (err != null) {
-            val code = err.str("code") ?: err.str("type") ?: ""
+            val code = err.truthyString("code") ?: err.truthyString("type") ?: ""
             val usageLimit =
                 Regex(
                     "usage_limit_reached|usage_not_included|rate_limit_exceeded",
                     RegexOption.IGNORE_CASE
                 ).containsMatchIn(code) || status == 429
             if (usageLimit) {
-                val plan = err.str("plan_type")?.takeIf { it.isNotEmpty() }
+                val plan = err.truthyString("plan_type")
                     ?.let { " (${it.lowercase()} plan)" } ?: ""
                 // JS truthiness: 0 (and NaN) resets_at values read as absent.
                 val resetsAt = err.strictDouble("resets_at")
@@ -1424,7 +1432,7 @@ internal fun parseCodexErrorResponse(
                 } ?: ""
                 friendly = ("You have hit your ChatGPT usage limit$plan.$whenText").trim()
             }
-            message = err.str("message")?.takeIf { it.isNotEmpty() } ?: friendly ?: message
+            message = err.truthyString("message") ?: friendly ?: message
         }
     } catch (_: Exception) {
         // Non-JSON body: keep the raw text.

@@ -145,7 +145,7 @@ fun parseJsonWithRepair(json: String): JsonElement = try {
  * Always returns a valid object, even if the JSON is incomplete.
  */
 inline fun <reified T : JsonElement> parseStreamingJson(partialJson: String?): T {
-    if (partialJson == null || partialJson.trim().isEmpty()) {
+    if (partialJson == null || trimJsWhitespace(partialJson).isEmpty()) {
         return JsonObject(emptyMap()) as T
     }
 
@@ -166,10 +166,13 @@ inline fun <reified T : JsonElement> parseStreamingJson(partialJson: String?): T
 
 @PublishedApi
 internal fun partialJsonParse(jsonString: String): JsonElement {
-    if (jsonString.isBlank()) {
+    // partial-json's `parse`: JS-trim once, reject the empty result, parse the
+    // trimmed input.
+    val trimmed = trimJsWhitespace(jsonString)
+    if (trimmed.isEmpty()) {
         throw PartialJsonException("$jsonString is empty")
     }
-    return PartialJsonParser(jsonString.trim()).parseTopLevel()
+    return PartialJsonParser(trimmed).parseTopLevel()
 }
 
 private class PartialJsonParser(private val json: String) {

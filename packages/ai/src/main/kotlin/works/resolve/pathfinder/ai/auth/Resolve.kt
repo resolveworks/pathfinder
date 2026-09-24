@@ -6,6 +6,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 
 /**
  * A stored credential owns the provider: ambient/env is consulted only when
@@ -32,7 +33,7 @@ class ModelsError(val code: ModelsErrorCode, message: String, cause: Throwable? 
 
     companion object {
         private fun withCauseDetail(message: String, cause: Throwable?): String {
-            val detail = cause?.message?.trim().orEmpty()
+            val detail = cause?.message?.let(::trimJsWhitespace).orEmpty()
             if (detail.isEmpty() || message.contains(detail)) return message
             return "$message: $detail"
         }

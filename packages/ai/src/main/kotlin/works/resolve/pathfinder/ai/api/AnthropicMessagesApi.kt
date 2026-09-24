@@ -69,6 +69,7 @@ import works.resolve.pathfinder.ai.utils.resolveTranscript
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strOrNull
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 internal fun resolveCacheRetention(
@@ -646,7 +647,9 @@ internal fun getBetaFeatures(
     }
     if (configured) {
         if (configuredFeatures == null) return emptyList()
-        return configuredFeatures.split(",").map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        return configuredFeatures.split(",").map {
+            trimJsWhitespace(it)
+        }.filter { it.isNotEmpty() }.distinct()
     }
 
     val compat = anthropicCompatOf(model)
@@ -1089,7 +1092,14 @@ internal fun convertMessages(
                 val blocks = userContent.mapNotNull { block ->
                     when (block) {
                         is TextContent ->
-                            if (block.text.trim().isNotEmpty()) textBlock(block.text) else null
+                            if (trimJsWhitespace(
+                                    block.text
+                                ).isNotEmpty()
+                            ) {
+                                textBlock(block.text)
+                            } else {
+                                null
+                            }
 
                         is ImageContent -> imageBlock(block)
 
@@ -1112,7 +1122,7 @@ internal fun convertMessages(
                 val blocks = mutableListOf<JsonObject>()
                 for (block in assistant.content) {
                     when (block) {
-                        is TextContent -> if (block.text.trim().isNotEmpty()) {
+                        is TextContent -> if (trimJsWhitespace(block.text).isNotEmpty()) {
                             blocks.add(
                                 textBlock(block.text)
                             )
@@ -1131,8 +1141,13 @@ internal fun convertMessages(
                             }
                             val signature = block.thinkingSignature
                             val hasSignature =
-                                !signature.isNullOrEmpty() && signature.trim().isNotEmpty()
-                            if (block.thinking.trim().isEmpty() && !hasSignature) continue
+                                !signature.isNullOrEmpty() &&
+                                    trimJsWhitespace(signature).isNotEmpty()
+                            if (trimJsWhitespace(block.thinking).isEmpty() &&
+                                !hasSignature
+                            ) {
+                                continue
+                            }
                             if (!hasSignature) {
                                 blocks.add(
                                     if (allowEmptySignature) {

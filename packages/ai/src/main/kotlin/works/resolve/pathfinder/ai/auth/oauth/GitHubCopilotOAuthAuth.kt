@@ -31,6 +31,7 @@ import works.resolve.pathfinder.ai.utils.parseHttpDateMsOrNull
 import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 
 /**
  * GitHub Copilot OAuth account flow: device-code login against github.com or
@@ -77,7 +78,7 @@ class GitHubCopilotOAuthAuth(
             throw IllegalStateException("Login cancelled", error)
         }
 
-        val trimmed = input.trim()
+        val trimmed = trimJsWhitespace(input)
         val enterpriseDomain = normalizeDomain(input)
         if (trimmed.isNotEmpty() && enterpriseDomain == null) {
             throw IllegalStateException("Invalid GitHub Enterprise URL/domain")
@@ -139,7 +140,7 @@ class GitHubCopilotOAuthAuth(
      * strictly rejecting rather than opening.
      */
     internal fun normalizeDomain(input: String): String? {
-        val trimmed = input.trim()
+        val trimmed = trimJsWhitespace(input)
         if (trimmed.isEmpty()) return null
         return try {
             java.net.URI(if (trimmed.contains("://")) trimmed else "https://$trimmed")
@@ -421,7 +422,7 @@ class GitHubCopilotOAuthAuth(
         return pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(
                 intervalSeconds = device.intervalSeconds,
-                expiresInSeconds = device.expiresInSeconds.toLong(),
+                expiresInSeconds = device.expiresInSeconds,
                 waitBeforeFirstPoll = true,
                 poll = {
                     val raw = fetchJson(

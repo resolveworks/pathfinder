@@ -39,7 +39,7 @@ class DeviceCodePollerTest {
         var calls = 0
         pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(
-                expiresInSeconds = 16,
+                expiresInSeconds = 16.0,
                 poll = {
                     times += currentTime
                     calls += 1
@@ -64,7 +64,7 @@ class DeviceCodePollerTest {
         pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(
                 intervalSeconds = 0.1,
-                expiresInSeconds = 5,
+                expiresInSeconds = 5.0,
                 poll = {
                     times += currentTime
                     calls += 1
@@ -90,7 +90,7 @@ class DeviceCodePollerTest {
             OAuthDeviceCodePollOptions(
                 intervalSeconds = 2.0,
                 waitBeforeFirstPoll = true,
-                expiresInSeconds = 10,
+                expiresInSeconds = 10.0,
                 poll = {
                     times += currentTime
                     calls += 1
@@ -126,7 +126,7 @@ class DeviceCodePollerTest {
         val error = assertFailsWith<IllegalStateException> {
             pollOAuthDeviceCodeFlow(
                 OAuthDeviceCodePollOptions(
-                    expiresInSeconds = 12,
+                    expiresInSeconds = 12.0,
                     poll = { OAuthDeviceCodePollResult.Pending }
                 ),
                 clock = virtualClock()
@@ -141,7 +141,7 @@ class DeviceCodePollerTest {
         val error = assertFailsWith<IllegalStateException> {
             pollOAuthDeviceCodeFlow(
                 OAuthDeviceCodePollOptions(
-                    expiresInSeconds = 12,
+                    expiresInSeconds = 12.0,
                     poll = {
                         calls += 1
                         if (calls ==
@@ -171,7 +171,7 @@ class DeviceCodePollerTest {
         pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(
                 intervalSeconds = 1.0,
-                expiresInSeconds = 30,
+                expiresInSeconds = 30.0,
                 poll = {
                     times += currentTime
                     calls += 1
@@ -194,7 +194,7 @@ class DeviceCodePollerTest {
         pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(
                 intervalSeconds = 1.0,
-                expiresInSeconds = 30,
+                expiresInSeconds = 30.0,
                 poll = {
                     times += currentTime
                     calls += 1
@@ -217,7 +217,7 @@ class DeviceCodePollerTest {
         pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(
                 intervalSeconds = 2.0,
-                expiresInSeconds = 30,
+                expiresInSeconds = 30.0,
                 poll = {
                     times += currentTime
                     calls += 1
@@ -247,7 +247,7 @@ class DeviceCodePollerTest {
             pollOAuthDeviceCodeFlow(
                 OAuthDeviceCodePollOptions(
                     intervalSeconds = 10.0,
-                    expiresInSeconds = 3,
+                    expiresInSeconds = 3.0,
                     poll = {
                         times += currentTime
                         calls += 1
@@ -265,6 +265,75 @@ class DeviceCodePollerTest {
         var calls = 0
         val value = pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(
+                poll = {
+                    calls += 1
+                    if (calls >=
+                        3
+                    ) {
+                        OAuthDeviceCodePollResult.Complete("ok")
+                    } else {
+                        OAuthDeviceCodePollResult.Pending
+                    }
+                }
+            ),
+            clock = virtualClock()
+        )
+        assertEquals("ok", value)
+    }
+
+    @Test
+    fun `fractional expires_in keeps a fractional deadline like pi's JS numbers`() = runTest {
+        // pi computes `Date.now() + expiresInSeconds * 1000` in JS numbers, so
+        // 2.5s survives as a 2500ms deadline (a truncated Long would read 2s).
+        val times = mutableListOf<Long>()
+        val error = assertFailsWith<IllegalStateException> {
+            pollOAuthDeviceCodeFlow(
+                OAuthDeviceCodePollOptions(
+                    intervalSeconds = 1.0,
+                    expiresInSeconds = 2.5,
+                    waitBeforeFirstPoll = true,
+                    poll = {
+                        times += currentTime
+                        OAuthDeviceCodePollResult.Pending
+                    }
+                ),
+                clock = virtualClock()
+            )
+        }
+        assertEquals("Device flow timed out", error.message)
+        // Polls at 1000 and 2000; the tail sleep runs out the remaining 500ms.
+        assertEquals(listOf(1000L, 2000L), times)
+    }
+
+    @Test
+    fun `sub-millisecond deadline sleeps Node setTimeout's 1ms floor`() = runTest {
+        var polled = false
+        val error = assertFailsWith<IllegalStateException> {
+            pollOAuthDeviceCodeFlow(
+                OAuthDeviceCodePollOptions(
+                    intervalSeconds = 5.0,
+                    expiresInSeconds = 0.0005,
+                    waitBeforeFirstPoll = true,
+                    poll = {
+                        polled = true
+                        OAuthDeviceCodePollResult.Pending
+                    }
+                ),
+                clock = virtualClock()
+            )
+        }
+        assertEquals("Device flow timed out", error.message)
+        // Node's Timeout clamps delays below 1ms to 1ms, so the flow wakes
+        // once and then finds the 0.5ms deadline already passed.
+        assertFalse(polled)
+    }
+
+    @Test
+    fun `infinite expires_in never times out`() = runTest {
+        var calls = 0
+        val value = pollOAuthDeviceCodeFlow(
+            OAuthDeviceCodePollOptions(
+                expiresInSeconds = Double.POSITIVE_INFINITY,
                 poll = {
                     calls += 1
                     if (calls >=

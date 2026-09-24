@@ -65,7 +65,7 @@ class XaiOAuthAuth(private val http: OAuthHttpClient, private val clock: Clock =
         val verificationUri: String,
         val verificationUriComplete: String?,
         val intervalSeconds: Double?,
-        val expiresInSeconds: Long
+        val expiresInSeconds: Double
     )
 
     internal suspend fun requestDeviceCode(): XaiDeviceCode {
@@ -193,7 +193,12 @@ class XaiOAuthAuth(private val http: OAuthHttpClient, private val clock: Clock =
         return OAuthCredential(
             access = access,
             refresh = refresh,
-            expires = clock.now().toEpochMilliseconds() + expiresInSeconds * 1000 - REFRESH_SKEW_MS
+            // pi computes the epoch in JS numbers; the Long conversion saturates
+            // at Long.MAX_VALUE where the double stays far in the future.
+            expires = (
+                clock.now().toEpochMilliseconds() + expiresInSeconds * 1000 -
+                    REFRESH_SKEW_MS
+                ).toLong()
         )
     }
 
@@ -211,10 +216,10 @@ class XaiOAuthAuth(private val http: OAuthHttpClient, private val clock: Clock =
         return value
     }
 
-    private fun positiveNumber(body: JsonObject, field: String): Long {
+    private fun positiveNumber(body: JsonObject, field: String): Double {
         val value = body.strictDouble(field)
         if (value == null || !value.isFinite() || value <= 0) throw invalidField(field)
-        return value.toLong()
+        return value
     }
 
     private fun invalidField(field: String): IllegalStateException =
@@ -295,7 +300,7 @@ class XaiOAuthAuth(private val http: OAuthHttpClient, private val clock: Clock =
         /** Refresh slightly before reported expiry so a token doesn't die mid-request. */
         const val REFRESH_SKEW_MS: Long = 5 * 60 * 1000
 
-        const val DEFAULT_TOKEN_LIFETIME_SECONDS: Long = 3600
+        const val DEFAULT_TOKEN_LIFETIME_SECONDS: Double = 3600.0
 
         const val REQUEST_TIMEOUT_MS: Int = 30_000
     }

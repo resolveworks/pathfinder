@@ -53,7 +53,13 @@ private fun fileUrlToPath(path: String): String {
     return percentDecode(rawPath.replace('\\', '/')).ifEmpty { "/" }
 }
 
-/** Percent-decodes UTF-8 `%XX` escapes; malformed escapes are rejected. */
+/** Percent-decodes UTF-8 `%XX` escapes; malformed escapes are rejected.
+ *
+ * Node `fileURLToPath` semantics — unlike the loopback OAuth server's shared
+ * `formQuery` (WHATWG `URLSearchParams`, which passes malformed escapes
+ * through), a malformed path escape is a hard error. The asymmetry is
+ * intentional: query parsing never fails upstream, file-URL decoding does.
+ */
 private fun percentDecode(value: String): String {
     if ('%' !in value) return value
     val input = value.toByteArray(Charsets.UTF_8)

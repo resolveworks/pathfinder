@@ -5,6 +5,7 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 
 /** pi's defaults.ts DEFAULT_THINKING_LEVEL. */
 internal val DEFAULT_THINKING_LEVEL = ModelThinkingLevel.MEDIUM
@@ -215,7 +216,7 @@ internal fun findExactModelReferenceMatch(
     modelReference: String,
     availableModels: List<Model>
 ): Model? {
-    val trimmed = modelReference.trim()
+    val trimmed = trimJsWhitespace(modelReference)
     if (trimmed.isEmpty()) return null
     val normalized = trimmed.lowercase()
 
@@ -227,8 +228,8 @@ internal fun findExactModelReferenceMatch(
 
     val slashIndex = trimmed.indexOf('/')
     if (slashIndex != -1) {
-        val provider = trimmed.substring(0, slashIndex).trim()
-        val modelId = trimmed.substring(slashIndex + 1).trim()
+        val provider = trimJsWhitespace(trimmed.substring(0, slashIndex))
+        val modelId = trimJsWhitespace(trimmed.substring(slashIndex + 1))
         if (provider.isNotEmpty() && modelId.isNotEmpty()) {
             val providerMatches = availableModels.filter {
                 it.provider.lowercase() == provider.lowercase() &&

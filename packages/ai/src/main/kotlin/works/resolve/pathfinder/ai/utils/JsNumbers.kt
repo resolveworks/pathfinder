@@ -1,6 +1,13 @@
 package works.resolve.pathfinder.ai.utils
 
 /**
+ * JS `Number.MAX_SAFE_INTEGER` (2^53 − 1): the largest integer a JS number
+ * holds exactly. pi uses it both as a validation bound (settings token
+ * budgets) and as a non-expiring epoch sentinel (OpenRouter keys).
+ */
+const val MAX_SAFE_INTEGER = 9007199254740991L
+
+/**
  * Renders a number the way JavaScript template literals and `String(x)` do
  * (5, not 5.0); null renders as "null" like `${null}`.
  */
@@ -56,11 +63,20 @@ fun jsParseFloatOrNull(raw: String): Double? {
 }
 
 /**
- * JS `String.prototype.trim()` — the same WhiteSpace ∪ LineTerminator set
- * that `Number()` and `parseFloat()` trim, which differs from Kotlin's
- * `trim()` (misses U+FEFF, trims U+001C-U+001F).
+ * JS `String.prototype.trim()` — the WhiteSpace ∪ LineTerminator set,
+ * which differs from Kotlin's `trim()` (misses U+FEFF, trims
+ * U+001C-U+001F). Every ported site whose upstream trims — `Number()` /
+ * `parseFloat()`, provider error bodies, SSE `data:` payloads, OAuth input
+ * pastes — trims here, never with Kotlin `trim()`.
  */
-internal fun trimJsWhitespace(raw: String): String = raw.trim(::isJsWhitespace)
+fun trimJsWhitespace(raw: String): String = raw.trim(::isJsWhitespace)
+
+/** JS `String.prototype.trimEnd()` over the same set as [trimJsWhitespace]. */
+fun trimJsWhitespaceEnd(raw: String): String {
+    var end = raw.length
+    while (end > 0 && isJsWhitespace(raw[end - 1])) end--
+    return raw.substring(0, end)
+}
 
 private fun isJsWhitespace(c: Char): Boolean =
     c in '\u0009'..'\u000D' || Character.isSpaceChar(c) || c == '\uFEFF'

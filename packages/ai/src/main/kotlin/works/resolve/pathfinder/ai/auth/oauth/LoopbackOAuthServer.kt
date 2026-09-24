@@ -48,7 +48,10 @@ internal interface LoopbackCallbackHandle<R> {
  * inline `node:http` callback servers. This class owns only the transport —
  * bind, accept, parse, respond, settle-once; all provider semantics (fixed vs
  * ephemeral port, route checks, state validation, exchange inside the handler,
- * 409 reuse guards) stay in flow code via [handler].
+ * 409 reuse guards) stay in flow code via [handler]. Callback queries parse
+ * with the shared WHATWG-lenient `formQuery` (URLSearchParams never fails on
+ * malformed escapes) — deliberately unlike PathUtils' strict
+ * `fileURLToPath` percent-decoding, which rejects them.
  *
  * Divergences from pi:
  * - Responses always carry `Cache-Control: no-store`; upstream sets it only

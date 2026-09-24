@@ -638,7 +638,9 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `raw reasoning field replayed verbatim without surrogate sanitization`() {
-        // Intentional parity: pi replays the raw reasoning field without sanitizeSurrogates.
+        // pi parity: openai-completions.ts replays `assistantMsg[signature] =
+        // thinking.join("\n")` with no sanitizeSurrogates (it sanitizes only
+        // content, text blocks, tool results, and thinking-as-text).
         val lone = buildString {
             append("think ")
             append(0xD800.toChar())
@@ -873,6 +875,37 @@ class OpenAiCompletionsPayloadTest {
         assertFalse(assistant.containsKey("reasoning"))
         assertFalse(assistant.containsKey("reasoning_content"))
         assertFalse(assistant.containsKey("reasoning_text"))
+    }
+
+    @Test
+    fun `reasoning_details replay verbatim without surrogate sanitization`() {
+        // pi parity: openai-completions.ts assigns `assistantMsg.reasoning_details
+        // = preservedReasoningDetails` with no sanitizeSurrogates — the details
+        // are opaque provider replay data, not text.
+        val lone = buildString {
+            append("[{\"type\":\"reasoning.encrypted\",\"id\":\"call_1\",\"data\":\"a")
+            append(0xD800.toChar())
+            append("\"}]")
+        }
+        val b = body(
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent("let me think", thinkingSignature = lone),
+                                TextContent("answer")
+                            ),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2"
+                        )
+                    )
+                )
+            )
+        )
+        val assistant = b["messages"]!!.jsonArray[0].jsonObject
+        assertEquals(Json.parseToJsonElement(lone), assistant["reasoning_details"])
     }
 
     @Test
