@@ -3,13 +3,17 @@ package works.resolve.pathfinder.ai.auth.oauth
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
@@ -370,7 +374,7 @@ class OpenAiCodexOAuthAuthTest {
     }
 
     @Test
-    fun `device code login is cancellable while polling`() = runTest {
+    fun `device code login cancelled while polling fails with Login cancelled`() = runTest {
         val http = FakeHttpClient()
         val polled = CompletableDeferred<Unit>()
         http.respond = {
@@ -382,12 +386,28 @@ class OpenAiCodexOAuthAuthTest {
             }
         }
 
-        val deferred = async {
-            auth(http).login(RecordingInteraction(mapOf("Select" to { "device_code" })))
+        // pi's poller rejects an aborted sleep with a plain
+        // Error("Login cancelled") that surfaces as a login failure; a bare
+        // CancellationException would be swallowed as a silent user-cancel.
+        val outcome = CompletableDeferred<Throwable?>()
+        lateinit var job: Job
+        job = launch {
+            try {
+                auth(http).login(RecordingInteraction(mapOf("Select" to { "device_code" })))
+                outcome.complete(null)
+            } catch (e: Throwable) {
+                outcome.complete(e)
+            }
         }
         polled.await()
-        deferred.cancel()
-        assertFailsWith<CancellationException> { deferred.await() }
+        job.cancel()
+        val error = assertNotNull(outcome.await())
+        // On Android CancellationException IS an IllegalStateException, so
+        // the discriminating check is that it is NOT a cancellation: pi's
+        // plain-Error abort must not collapse into the silent user-cancel
+        // channel.
+        assertFalse(error is CancellationException)
+        assertEquals("Login cancelled", error.message)
     }
 
     @Test

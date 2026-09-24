@@ -1,7 +1,10 @@
 package works.resolve.pathfinder.ai.auth
 
+import java.util.concurrent.TimeoutException
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -122,7 +125,11 @@ private const val DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 15_000L
  * minutes remaining lock, re-check expiry under the lock, and refresh once
  * globally. The refresh call is bounded by [withTimeoutOrNull], whose own
  * timeout is reported as an OAUTH error while external caller cancellation
- * propagates unchanged.
+ * propagates unchanged. A caller cancelled around a completing refresh
+ * never persists: pi's modify checks the caller signal after the refresh
+ * and before the write, discarding the result — the port mirrors that with
+ * a cancellation check before the refreshed credential is handed to the
+ * store.
  */
 private suspend fun resolveStoredOAuth(
     credentials: CredentialStore,
@@ -146,14 +153,10 @@ private suspend fun resolveStoredOAuth(
                 if (!expiresSoon(currentOAuth)) {
                     return@modify null // another request refreshed
                 }
-                try {
+                val refreshed = try {
                     withTimeoutOrNull(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS) {
                         oauth.refresh(currentOAuth)
                     }
-                        ?: throw ModelsError(
-                            ModelsErrorCode.OAUTH,
-                            "OAuth refresh timed out for $providerId after ${DEFAULT_OAUTH_REFRESH_TIMEOUT_MS}ms"
-                        )
                 } catch (error: CancellationException) {
                     throw error // caller cancellation (incl. an outer withTimeout) — never wrapped
                 } catch (error: Throwable) {
@@ -162,7 +165,23 @@ private suspend fun resolveStoredOAuth(
                         "OAuth refresh failed for $providerId",
                         error
                     )
-                }
+                } ?: throw ModelsError(
+                    // pi's refresh signal is AbortSignal.any([caller signal,
+                    // timeout]): its timeout surfaces as a TimeoutError cause
+                    // under the same "OAuth refresh failed" message as any other
+                    // refresh failure.
+                    ModelsErrorCode.OAUTH,
+                    "OAuth refresh failed for $providerId",
+                    TimeoutException(
+                        "Timed out waiting for ${DEFAULT_OAUTH_REFRESH_TIMEOUT_MS} ms"
+                    )
+                )
+                // pi's modify runs `throwIfAborted` after the refresh and
+                // before persisting: the completed refresh's result is
+                // discarded — never written — and the cancellation then
+                // rethrows to the caller.
+                currentCoroutineContext().ensureActive()
+                refreshed
             }
         } catch (error: ModelsError) {
             throw error

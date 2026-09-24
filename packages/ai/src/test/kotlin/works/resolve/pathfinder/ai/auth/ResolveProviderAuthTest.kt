@@ -3,9 +3,12 @@ package works.resolve.pathfinder.ai.auth
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.awaitCancellation
@@ -314,7 +317,7 @@ class ResolveProviderAuthTest {
     }
 
     @Test
-    fun `oauth refresh is bounded by the 15s internal timeout`() = runTest {
+    fun `oauth refresh timeout surfaces pi's refresh-failed message`() = runTest {
         val store = InMemoryCredentialStore()
         store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = nowMs) }
         val oauth = object : OAuthAuth by StubOAuthAuth(
@@ -338,8 +341,62 @@ class ResolveProviderAuthTest {
             )
         }
         assertEquals(ModelsErrorCode.OAUTH, error.code)
-        assertTrue(error.message.orEmpty().contains("timed out"))
-        // Internal timeout is not caller cancellation and does not tear down the caller.
+        // pi wraps the 15s refresh-signal timeout like any refresh failure:
+        // ModelsError("oauth", "OAuth refresh failed for X") with the
+        // TimeoutError as cause.
+        assertEquals(
+            "OAuth refresh failed for openai: Timed out waiting for 15000 ms",
+            error.message
+        )
+    }
+
+    @Test
+    fun `refresh completing as its caller is cancelled is discarded, not persisted`() = runTest {
+        val store = InMemoryCredentialStore()
+        val expiring = OAuthCredential(access = "a", refresh = "r", expires = nowMs)
+        store.modify("openai") { expiring }
+        val refreshed = OAuthCredential(
+            access = "a2",
+            refresh = "r2",
+            expires = nowMs + 60 * 60 * 1000L
+        )
+        var refreshCompleted = false
+        lateinit var loginJob: Job
+        val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = refreshed) {
+            override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
+                // The refresh finishes all its work with the caller's
+                // cancellation landing mid-flight — exactly where pi's modify
+                // task would complete the refresh and discard it via
+                // throwIfAborted before persisting.
+                loginJob.cancel()
+                refreshCompleted = true
+                return refreshed
+            }
+        }
+        val outcome = CompletableDeferred<Throwable?>()
+        loginJob = launch {
+            try {
+                resolveProviderAuth(
+                    provider(oauth = oauth),
+                    store,
+                    RecordingAuthContext(),
+                    clock = clock
+                )
+                outcome.complete(null)
+            } catch (e: Throwable) {
+                outcome.complete(e)
+            }
+        }
+        val error = assertNotNull(outcome.await())
+        // The discard rethrows the caller's cancellation after the decision.
+        assertTrue(
+            error is CancellationException,
+            "expected CancellationException but was ${error::class.qualifiedName}"
+        )
+        // The refresh ran to completion — side effects happened — but its
+        // result is never handed to the store.
+        assertTrue(refreshCompleted)
+        assertEquals(expiring, store.read("openai"))
     }
 
     @Test

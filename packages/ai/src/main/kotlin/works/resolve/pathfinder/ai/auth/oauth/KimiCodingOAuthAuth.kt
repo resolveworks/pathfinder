@@ -216,18 +216,23 @@ class KimiCodingOAuthAuth(
     }
 
     /**
-     * Cancellation: pi checks `signal.aborted` after each backoff sleep and
-     * its `sleep` rejects on abort; here [delay] throws
-     * [CancellationException] promptly, and [ensureActive] performs pi's
-     * explicit check before each attempt.
+     * Cancellation: pi checks `signal.aborted` before every attempt (its
+     * `sleep` also rejects on abort) and throws a plain
+     * `Error("Kimi Code token refresh aborted")`; the port retags that
+     * checkpoint onto [IllegalStateException] — a bare
+     * [CancellationException] would be swallowed as a silent user-cancel by
+     * the app instead of surfacing as a failure like pi's Error.
      */
     internal suspend fun refreshToken(refreshTokenValue: String): TokenResponse {
         var lastError: IllegalStateException? = null
         for (attempt in 0..REFRESH_MAX_RETRIES) {
             if (attempt > 0) {
                 delay(1000L shl (attempt - 1))
+            }
+            try {
                 currentCoroutineContext().ensureActive()
-                // pi: throw new Error("Kimi Code token refresh aborted") when the signal is aborted.
+            } catch (error: CancellationException) {
+                throw IllegalStateException("Kimi Code token refresh aborted", error)
             }
 
             val response: OAuthHttpResponse

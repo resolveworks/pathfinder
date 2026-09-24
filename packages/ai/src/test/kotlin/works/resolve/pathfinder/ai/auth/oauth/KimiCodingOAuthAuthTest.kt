@@ -3,10 +3,17 @@ package works.resolve.pathfinder.ai.auth.oauth
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
@@ -161,6 +168,39 @@ class KimiCodingOAuthAuthTest {
         val (flow, _) = newFlow { json(500, "boom") }
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
         assertEquals("Kimi Code device authorization failed with status 500: boom", error.message)
+    }
+
+    @Test
+    fun `login cancelled during device polling fails with Login cancelled`() = runTest {
+        // pi's poller rejects an aborted sleep with a plain
+        // Error("Login cancelled") that surfaces as a login failure; a bare
+        // CancellationException would be swallowed as a silent user-cancel.
+        val (flow, _) = newFlow { request ->
+            if (request.url.endsWith("device_authorization")) {
+                json(200, deviceAuthorizationBody())
+            } else {
+                json(400, "{\"error\":\"authorization_pending\"}")
+            }
+        }
+        val outcome = CompletableDeferred<Throwable?>()
+        lateinit var job: Job
+        job = launch {
+            try {
+                flow.login(RecordingInteraction())
+                outcome.complete(null)
+            } catch (e: Throwable) {
+                outcome.complete(e)
+            }
+        }
+        testScheduler.runCurrent() // device authorization, then the pre-poll sleep
+        job.cancel()
+        val error = assertNotNull(outcome.await())
+        // On Android CancellationException IS an IllegalStateException, so
+        // the discriminating check is that it is NOT a cancellation: pi's
+        // plain-Error abort must not collapse into the silent user-cancel
+        // channel.
+        assertFalse(error is CancellationException)
+        assertEquals("Login cancelled", error.message)
     }
 
     @Test
@@ -493,6 +533,31 @@ class KimiCodingOAuthAuthTest {
         job.cancel()
         job.join()
         assertTrue(job.isCancelled)
+    }
+
+    @Test
+    fun `cancelled caller at the refresh checkpoint fails with pi's abort message`() = runTest {
+        // pi checks `signal.aborted` before every refresh attempt and throws a
+        // plain Error("Kimi Code token refresh aborted"); the ATOMIC start
+        // runs the body with an already-cancelled job so the attempt-0
+        // checkpoint fires before any exchange.
+        val (flow, http) = newFlow {
+            json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}")
+        }
+        val outcome = CompletableDeferred<Throwable?>()
+        val job = launch(start = CoroutineStart.ATOMIC) {
+            try {
+                flow.refresh(OAuthCredential(access = "", refresh = "ref", expires = 0))
+                outcome.complete(null)
+            } catch (e: Throwable) {
+                outcome.complete(e)
+            }
+        }
+        job.cancel()
+        val error = assertNotNull(outcome.await())
+        assertFalse(error is CancellationException)
+        assertEquals("Kimi Code token refresh aborted", error.message)
+        assertEquals(0, http.requests.size)
     }
 
     @Test

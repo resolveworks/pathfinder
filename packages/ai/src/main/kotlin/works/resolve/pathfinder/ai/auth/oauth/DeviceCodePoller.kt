@@ -1,9 +1,9 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
-import kotlin.coroutines.coroutineContext
 import kotlin.math.max
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 
@@ -38,23 +38,28 @@ class OAuthDeviceCodePollOptions<T>(
 )
 
 /**
- * pi rejects an aborted sleep with a plain `Error`; Kotlin must keep
- * cancellation cooperative, so this rethrows a [CancellationException]
- * carrying [cancelMessage].
+ * pi rejects an aborted sleep with a plain `Error` carrying the cancel
+ * message; the port retags the same condition onto
+ * [IllegalStateException] — a bare [CancellationException] would be
+ * swallowed as a silent user-cancel by the app instead of surfacing as a
+ * login failure like pi's Error.
  */
 private suspend fun abortableSleep(ms: Long, cancelMessage: String) {
     try {
         delay(ms)
     } catch (e: CancellationException) {
-        throw CancellationException(cancelMessage, e)
+        throw IllegalStateException(cancelMessage, e)
     }
 }
 
 /**
- * Divergence from pi: pi cancels through an `AbortSignal`; here coroutine
- * cancellation surfaces as a [CancellationException] carrying the upstream
- * cancel message. [clock] is injectable for deterministic tests only, and
- * sleeping uses [delay], which virtual-time test schedulers skip
+ * Divergence from pi: pi cancels through an `AbortSignal` and observes it
+ * via `signal.aborted`; here coroutine cancellation surfaces as a
+ * [CancellationException], retagged onto [IllegalStateException] with the
+ * upstream cancel message so the abort surfaces as a login failure. pi's
+ * plain-Error checkpoints would otherwise collapse into Kotlin's silent
+ * user-cancel channel. [clock] is injectable for deterministic tests only,
+ * and sleeping uses [delay], which virtual-time test schedulers skip
  * automatically.
  */
 internal suspend fun <T> pollOAuthDeviceCodeFlow(
@@ -78,12 +83,13 @@ internal suspend fun <T> pollOAuthDeviceCodeFlow(
     }
 
     while (now() < deadline) {
-        // pi checks `signal.aborted` between polls; cancellation observed here
-        // is retagged with pi's cancel message.
+        // pi checks `signal.aborted` between polls and throws a plain Error;
+        // the retag keeps the abort a surfaced login failure, not a silent
+        // user-cancel.
         try {
-            coroutineContext.ensureActive()
+            currentCoroutineContext().ensureActive()
         } catch (error: CancellationException) {
-            throw CancellationException(CANCEL_MESSAGE, error)
+            throw IllegalStateException(CANCEL_MESSAGE, error)
         }
 
         when (val result = options.poll()) {
