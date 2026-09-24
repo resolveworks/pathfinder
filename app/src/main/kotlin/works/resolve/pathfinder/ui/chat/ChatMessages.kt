@@ -1,21 +1,18 @@
 package works.resolve.pathfinder.ui.chat
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -34,10 +31,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -83,14 +81,27 @@ private const val PARTIAL_OUTPUT_MAX_LINES = 4
 internal fun ConversationContent(
     uiState: ChatUiState,
     streamingState: StateFlow<StreamingUiState>,
-    scrollState: TranscriptScrollState,
+    scrollState: ScrollState,
     modifier: Modifier = Modifier
 ) {
     // Collected here — the streaming row's scope — so per-chunk updates
     // recompose nothing above this composable.
     val streaming by streamingState.collectAsStateWithLifecycle()
-    val listState = scrollState.listState
-    FollowTranscriptBottom(scrollState)
+    // Follow the bottom: content growth re-pins the bottom edge only when
+    // the reader was already there. There is no follow flag to lose —
+    // "was at bottom" is judged against the content's previous size at
+    // each growth, so neither user scrolls nor our own scrolls corrupt it.
+    val followThreshold = with(LocalDensity.current) { 48.dp.roundToPx() }
+    LaunchedEffect(scrollState) {
+        var end = 0
+        snapshotFlow { scrollState.maxValue }.collect { max ->
+            val wasAtBottom = scrollState.value >= end - followThreshold
+            end = max
+            if (wasAtBottom && !scrollState.isScrollInProgress) {
+                scrollState.scrollTo(max)
+            }
+        }
+    }
     val messageCount = uiState.messages.size
     val renderableMessages = remember(uiState.messages) {
         uiState.messages.filter(TranscriptRow::hasRenderableContent)
@@ -119,57 +130,66 @@ internal fun ConversationContent(
         if (messageCount == 0 && streaming.streaming == null) {
             EmptyStateText(text = stringResource(R.string.chat_empty))
         }
-        // Forward layout anchors the TOP of a visible message, so appending
-        // text below the reader does not move their position within that row.
-        LazyColumn(
-            state = listState,
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
-            modifier = Modifier.fillMaxSize().nestedScroll(scrollState.nestedScrollConnection)
+        // An eager column, not a LazyList: the scroll position is pixels
+        // from the top, so content growing below the reader cannot move
+        // them. minHeight + Bottom keeps short transcripts glued to the
+        // bottom edge like any chat view.
+        val density = LocalDensity.current
+        var viewportHeight by remember { mutableStateOf(0.dp) }
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .onSizeChanged { viewportHeight = with(density) { it.height.toDp() } }
+                .verticalScroll(scrollState)
         ) {
-            items(
-                renderableMessages,
-                key = TranscriptRow::id,
-                contentType = { it::class }
-            ) { row ->
-                when (row) {
-                    is TranscriptRow.Compacted -> CompactedDivider()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = viewportHeight)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom)
+            ) {
+                renderableMessages.forEach { row ->
+                    key(row.id) {
+                        when (row) {
+                            is TranscriptRow.Compacted -> CompactedDivider()
 
-                    is TranscriptRow.Tool -> ToolCallItem(
-                        call = row.call,
-                        result = row.result,
-                        running = row.result == null && isStreaming,
-                        partialOutput = if (row.result == null) toolPartials[row.call.id] else null,
-                        onOpenOutput = { openToolResultId = row.call.id }
-                    )
+                            is TranscriptRow.Tool -> ToolCallItem(
+                                call = row.call,
+                                result = row.result,
+                                running = row.result == null && isStreaming,
+                                partialOutput = if (row.result == null) {
+                                    toolPartials[row.call.id]
+                                } else {
+                                    null
+                                },
+                                onOpenOutput = { openToolResultId = row.call.id }
+                            )
 
-                    is TranscriptRow.Chat -> when (val message = row.message) {
-                        is UserMessage -> UserMessageItem(message)
+                            is TranscriptRow.Chat -> when (val message = row.message) {
+                                is UserMessage -> UserMessageItem(message)
 
-                        is AssistantMessage -> AssistantMessageItem(
-                            message = message,
-                            blocks = row.blocks,
-                            showThinking = showThinking
-                        )
+                                is AssistantMessage -> AssistantMessageItem(
+                                    message = message,
+                                    blocks = row.blocks,
+                                    showThinking = showThinking
+                                )
 
-                        // The projection never emits result messages as rows:
-                        // they render through their call's Tool row.
-                        is ToolResultMessage -> Unit
+                                // The projection never emits result messages as rows:
+                                // they render through their call's Tool row.
+                                is ToolResultMessage -> Unit
 
-                        is SystemMessage -> Unit
+                                is SystemMessage -> Unit
+                            }
+                        }
                     }
                 }
-            }
-            streaming.streaming?.let { streaming ->
-                item(key = "streaming") {
+                streaming.streaming?.let { streaming ->
                     StreamingAssistantMessageItem(
                         streaming = streaming,
                         showThinking = showThinking
                     )
                 }
-            }
-            item(key = "transcript-bottom-anchor") {
-                Spacer(Modifier.height(with(LocalDensity.current) { 1f.toDp() }))
             }
         }
 
@@ -283,8 +303,8 @@ private fun AssistantMessageItem(
     showThinking: Boolean,
     modifier: Modifier = Modifier
 ) {
-    // One container per message: LazyColumn rows recycle, so a container
-    // around the list itself could not span items.
+    // One container per message: selection spans a single reply, not the
+    // transcript.
     SelectionContainer(modifier = modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -719,7 +739,7 @@ private fun ConversationContentThinkingPreview() {
         ConversationContent(
             uiState = uiState,
             streamingState = remember { MutableStateFlow(StreamingUiState()) },
-            scrollState = rememberTranscriptScrollState(uiState.messages)
+            scrollState = rememberScrollState()
         )
     }
 }

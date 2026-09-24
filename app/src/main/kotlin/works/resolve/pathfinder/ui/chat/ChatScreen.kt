@@ -214,16 +214,15 @@ fun ChatScreen(
 
     // Panel scroll state lives above the Chat/Tree switch so each view keeps
     // its own position across view toggles. A different transcript starts
-    // with fresh list state positioned at its bottom anchor.
-    val chatScrollState =
-        key(uiState.activeSessionId) { rememberTranscriptScrollState(uiState.messages) }
+    // fresh, at the top; the follow effect lands it at the bottom.
+    val chatScrollState = key(uiState.activeSessionId) { rememberScrollState() }
     val treeListState = rememberLazyListState()
     // Session whose tree has been positioned on its current leaf at open.
     var positionedTreeSessionId by rememberSaveable { mutableStateOf<String?>(null) }
 
     val sendAndFollow: () -> Unit = {
-        chatScrollState.followBottom()
         onSend()
+        scope.launch { chatScrollState.scrollTo(chatScrollState.maxValue) }
     }
 
     // Resolve during composition: stringResource cannot run inside the effect.
@@ -474,6 +473,11 @@ fun ChatScreen(
                                                 // selection (even when navigation
                                                 // is rejected): return to the
                                                 // transcript.
+                                                scope.launch {
+                                                    chatScrollState.scrollTo(
+                                                        chatScrollState.maxValue
+                                                    )
+                                                }
                                                 onConversationViewChange(ConversationView.Chat)
                                             },
                                             listState = treeListState,

@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -61,7 +62,7 @@ internal fun ChatSurface(
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
     onSelectMachine: (machineId: String) -> Unit,
-    scrollState: TranscriptScrollState
+    scrollState: ScrollState
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ConversationContent(
