@@ -3,12 +3,15 @@ package works.resolve.pathfinder.ai.auth.oauth
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
@@ -279,27 +282,56 @@ class DeviceCodePollerTest {
     }
 
     @Test
-    fun `cancelling during sleep throws CancellationException with the cancel message`() = runTest {
-        var started = false
-        val job = async {
+    fun `cancelling during sleep fails with Login cancelled`() = runTest {
+        // pi rejects an aborted sleep with a plain Error("Login cancelled"),
+        // so the failure must surface as a non-cancellation exception.
+        val outcome = CompletableDeferred<Throwable?>()
+        lateinit var job: Job
+        job = launch {
             try {
                 pollOAuthDeviceCodeFlow(
                     OAuthDeviceCodePollOptions(
                         intervalSeconds = 5.0,
-                        poll = {
-                            started = true
-                            OAuthDeviceCodePollResult.Pending
-                        }
+                        poll = { OAuthDeviceCodePollResult.Pending }
                     ),
                     clock = virtualClock()
                 )
-            } catch (e: CancellationException) {
-                assertEquals("Login cancelled", e.message)
-                throw e
+                outcome.complete(null)
+            } catch (e: Throwable) {
+                outcome.complete(e)
             }
         }
-        while (!started) kotlinx.coroutines.yield()
+        testScheduler.runCurrent() // first poll, then the 5s sleep
         job.cancel()
-        assertFailsWith<CancellationException> { job.await() }
+        val error = assertNotNull(outcome.await())
+        // On Android CancellationException IS an IllegalStateException, so
+        // the discriminating check is that it is NOT a cancellation: pi's
+        // plain-Error abort must not collapse into the silent user-cancel
+        // channel.
+        assertFalse(error is CancellationException)
+        assertEquals("Login cancelled", error.message)
+    }
+
+    @Test
+    fun `cancellation observed before the first poll fails with Login cancelled`() = runTest {
+        // pi checks `signal.aborted` at the top of every poll iteration; the
+        // ATOMIC start runs the flow body with an already-cancelled job so
+        // the between-polls checkpoint fires before any poll happens.
+        val outcome = CompletableDeferred<Throwable?>()
+        val job = launch(start = CoroutineStart.ATOMIC) {
+            try {
+                pollOAuthDeviceCodeFlow(
+                    OAuthDeviceCodePollOptions(poll = { OAuthDeviceCodePollResult.Complete("ok") }),
+                    clock = virtualClock()
+                )
+                outcome.complete(null)
+            } catch (e: Throwable) {
+                outcome.complete(e)
+            }
+        }
+        job.cancel()
+        val error = assertNotNull(outcome.await())
+        assertFalse(error is CancellationException)
+        assertEquals("Login cancelled", error.message)
     }
 }
