@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.codingagent.core.tools
 
 import java.util.Base64
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 
 /**
  * Platform codec seam for the read tool's image path. The decision logic
@@ -193,7 +194,7 @@ private class NormalizedImage(
 )
 
 private fun baseMimeType(mimeType: String): String =
-    mimeType.split(";").firstOrNull()?.trim()?.lowercase() ?: mimeType.lowercase()
+    trimJsWhitespace(mimeType.substringBefore(";")).lowercase()
 
 private fun normalizeSupportedImageMimeType(mimeType: String): String? =
     when (baseMimeType(mimeType)) {

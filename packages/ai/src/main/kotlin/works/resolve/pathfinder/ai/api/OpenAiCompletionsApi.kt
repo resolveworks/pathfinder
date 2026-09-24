@@ -83,6 +83,7 @@ import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.strictDoubleOrNull
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
+import works.resolve.pathfinder.ai.utils.truthyString
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
@@ -469,8 +470,8 @@ class OpenAiCompletionsApi(
             return emptyList()
         }
 
-        chunk.str("id")
-            ?.takeIf { it.isNotEmpty() && state.responseId == null }
+        chunk.truthyString("id")
+            ?.takeIf { state.responseId == null }
             ?.let { state.responseId = it }
         chunk["model"].stringOrNull()
             ?.takeIf { it.isNotEmpty() && it != model.id && state.responseModel == null }
@@ -487,8 +488,7 @@ class OpenAiCompletionsApi(
         }
 
         choice
-            .str("finish_reason")
-            ?.takeIf { it.isNotEmpty() }
+            .truthyString("finish_reason")
             ?.let { raw ->
                 state.rawStopReason = raw
                 val (stopReason, errorMessage) = mapStopReason(raw)

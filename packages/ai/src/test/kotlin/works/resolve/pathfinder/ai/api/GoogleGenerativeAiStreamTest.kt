@@ -239,6 +239,20 @@ class GoogleGenerativeAiStreamTest {
     }
 
     @Test
+    fun `empty string finish reason is absent like pi truthiness`() = runTest {
+        // pi guards with `if (candidate?.finishReason)`, so "" leaves the
+        // stop reason pending and the stream ends with the no-finish-reason
+        // error instead of mapping an empty reason.
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse("""{"candidates":[{"content":{"parts":[{"text":"partial"}]},"finishReason":""}]}""")
+        )
+        val events = events(transport)
+        val error = assertIs<AssistantMessageEvent.Error>(events.last())
+        assertEquals("Google stream ended without a finish reason", error.error.errorMessage)
+    }
+
+    @Test
     fun `missing api key is a terminal error event`() = runTest {
         val transport = FakeTransport()
         val events = api(transport)

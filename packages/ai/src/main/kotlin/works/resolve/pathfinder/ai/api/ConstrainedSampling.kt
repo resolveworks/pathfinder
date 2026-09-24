@@ -11,6 +11,7 @@ import works.resolve.pathfinder.ai.GrammarFormat
 import works.resolve.pathfinder.ai.StrictJsonSchemaMode
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.utils.stringOrNull
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 
 /**
  * pi's Tool.parameters is a TypeBox TSchema; this port's [Tool.parameters] is
@@ -338,8 +339,8 @@ fun resolveGrammarConstrainedSampling(
 
     val larkDefinition = config.variants[GrammarFormat.OPENAI_LARK]
     val regexDefinition = config.variants[GrammarFormat.OPENAI_REGEX]
-    val hasLarkDefinition = larkDefinition?.let { it.trim().isNotEmpty() } == true
-    val hasRegexDefinition = regexDefinition?.let { it.trim().isNotEmpty() } == true
+    val hasLarkDefinition = larkDefinition?.let { trimJsWhitespace(it).isNotEmpty() } == true
+    val hasRegexDefinition = regexDefinition?.let { trimJsWhitespace(it).isNotEmpty() } == true
     if (!hasLarkDefinition && !hasRegexDefinition) {
         throw ConstrainedSamplingError(
             "Tool \"${tool.name}\" cannot use grammar constrained sampling: no supported grammar variant was provided."

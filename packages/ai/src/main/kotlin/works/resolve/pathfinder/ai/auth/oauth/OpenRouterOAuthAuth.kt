@@ -18,11 +18,13 @@ import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.oauth.PkceGenerator
+import works.resolve.pathfinder.ai.utils.MAX_SAFE_INTEGER
 import works.resolve.pathfinder.ai.utils.formQuery
 import works.resolve.pathfinder.ai.utils.formUrlEncode
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.ai.utils.urlQueryParamsOrNull
 
 /**
@@ -282,7 +284,7 @@ class OpenRouterOAuthAuth(
 
     companion object {
         /** JS `Number.MAX_SAFE_INTEGER`: the sentinel for a non-expiring key. */
-        const val NON_EXPIRING_EPOCH_MS: Long = 9_007_199_254_740_991L
+        const val NON_EXPIRING_EPOCH_MS: Long = MAX_SAFE_INTEGER
         const val AUTHORIZE_URL: String = "https://openrouter.ai/auth"
         const val TOKEN_URL: String = "https://openrouter.ai/api/v1/auth/keys"
 
@@ -293,7 +295,7 @@ class OpenRouterOAuthAuth(
 
         /** Extracts the code from a pasted URL, a bare `code=` query string, or raw code. */
         internal fun parseAuthorizationCodeInput(input: String): String? {
-            val value = input.trim()
+            val value = trimJsWhitespace(input)
             if (value.isEmpty()) return null
             urlQueryParamsOrNull(value)?.let { return it["code"] }
             if (value.contains("code=")) {

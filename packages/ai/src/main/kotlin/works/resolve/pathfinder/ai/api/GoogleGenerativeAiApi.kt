@@ -408,7 +408,7 @@ internal object GoogleStreamEngine {
 
             // responseId is output-only per the API; keep the first non-empty value.
             if (responseId.isNullOrEmpty()) {
-                responseId = chunk["responseId"].strOrNull()?.takeIf { it.isNotEmpty() }
+                responseId = chunk.truthyString("responseId")
             }
 
             val candidate = chunk.arr("candidates")?.filterIsInstance<JsonObject>()?.firstOrNull()
@@ -505,8 +505,7 @@ internal object GoogleStreamEngine {
                     id = toolCallId,
                     name = name,
                     arguments = args,
-                    thoughtSignature = part["thoughtSignature"].strOrNull()
-                        ?.takeIf { it.isNotEmpty() }
+                    thoughtSignature = part.truthyString("thoughtSignature")
                 )
                 content.add(toolCall)
                 events.add(AssistantMessageEvent.ToolCallStart(blockIndex(), snapshot()))

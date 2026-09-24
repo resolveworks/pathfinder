@@ -33,6 +33,7 @@ import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.resolveTranscript
 import works.resolve.pathfinder.ai.utils.resolveTranscriptTools
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
@@ -56,10 +57,10 @@ internal fun parseDeploymentNameMap(value: String?): Map<String, String> {
     if (value.isNullOrBlank()) return emptyMap()
     val map = mutableMapOf<String, String>()
     for (entry in value.split(",")) {
-        val trimmed = entry.trim()
+        val trimmed = trimJsWhitespace(entry)
         if (trimmed.isEmpty()) continue
-        val modelId = trimmed.substringBefore("=", "").trim()
-        val deploymentName = trimmed.substringAfter("=", "").trim()
+        val modelId = trimJsWhitespace(trimmed.substringBefore("=", ""))
+        val deploymentName = trimJsWhitespace(trimmed.substringAfter("=", ""))
         if (modelId.isEmpty() || deploymentName.isEmpty()) continue
         map[modelId] = deploymentName
     }
@@ -289,7 +290,7 @@ class AzureOpenAiResponsesApi(
 /** Query and fragment are preserved verbatim; only the Azure-host path
  * rewrite clears the query (pi clears url.search inside that branch only). */
 internal fun normalizeAzureBaseUrl(raw: String): String {
-    val trimmed = raw.trim().trimEnd('/')
+    val trimmed = trimJsWhitespace(raw).trimEnd('/')
     val url = try {
         java.net.URI(trimmed)
     } catch (_: Exception) {
@@ -329,11 +330,15 @@ internal fun resolveAzureConfig(model: Model, options: AzureOpenAiResponsesOptio
         ?: options?.env?.get("AZURE_OPENAI_API_VERSION")
         ?: DEFAULT_AZURE_API_VERSION
 
-    val envBaseUrl = options?.env?.get("AZURE_OPENAI_BASE_URL")?.trim()
-    val baseUrl = options?.azureBaseUrl?.trim() ?: envBaseUrl ?: envBaseUrl
+    val envBaseUrl = options?.env?.get("AZURE_OPENAI_BASE_URL")?.let(::trimJsWhitespace)
+    // pi's `azureBaseUrl?.trim() || env?.trim() || undefined`: an empty
+    // (post-trim) override falls through to the env value.
+    val baseUrl = options?.azureBaseUrl?.let(::trimJsWhitespace)
+        ?.takeIf { it.isNotEmpty() }
+        ?: envBaseUrl?.takeIf { it.isNotEmpty() }
     val resourceName = options?.azureResourceName ?: options?.env?.get("AZURE_OPENAI_RESOURCE_NAME")
 
-    var resolvedBaseUrl = baseUrl?.takeIf { it.isNotEmpty() }
+    var resolvedBaseUrl = baseUrl
     if (resolvedBaseUrl == null && resourceName != null) {
         resolvedBaseUrl = "https://$resourceName.openai.azure.com/openai/v1"
     }

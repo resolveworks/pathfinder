@@ -2,6 +2,7 @@ package works.resolve.pathfinder.codingagent.core.tools
 
 import com.github.difflib.DiffUtils
 import java.text.Normalizer
+import works.resolve.pathfinder.ai.utils.trimJsWhitespaceEnd
 
 /**
  * Shared diff computation utilities for the edit and similar tools.
@@ -46,7 +47,7 @@ private val SPECIAL_SPACES = "[         　]".toRegex()
 fun normalizeForFuzzyMatch(text: String): String = buildString(text.length) {
     append(Normalizer.normalize(text, Normalizer.Form.NFKC))
 }.split("\n").joinToString("\n") { line ->
-    line.trimEnd()
+    trimJsWhitespaceEnd(line)
 }.replace(SMART_SINGLE_QUOTES, "'").replace(SMART_DOUBLE_QUOTES, "\"").replace(UNICODE_DASHES, "-")
     .replace(SPECIAL_SPACES, " ")
 

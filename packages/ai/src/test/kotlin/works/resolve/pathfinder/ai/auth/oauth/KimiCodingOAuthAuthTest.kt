@@ -164,6 +164,32 @@ class KimiCodingOAuthAuthTest {
     }
 
     @Test
+    fun `fractional expires_in survives to the poll deadline like pi's JS number`() = runTest {
+        // pi passes `expires_in` through as a number: 2.5s yields polls at
+        // 1000ms and 2000ms (wait-before-first-poll) before the 2500ms
+        // deadline times out; a truncated Long would deadline at 2000ms.
+        val (flow, http) = newFlow { request ->
+            if (request.url.endsWith("device_authorization")) {
+                json(
+                    200,
+                    deviceAuthorizationBody(
+                        interval = "\"interval\":1",
+                        expires = "\"expires_in\":2.5"
+                    )
+                )
+            } else {
+                json(400, "{\"error\":\"authorization_pending\"}")
+            }
+        }
+        val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
+        assertEquals("Device flow timed out", error.message)
+        assertEquals(
+            listOf(1000L, 2000L),
+            http.requests.drop(1).map { it.first }
+        )
+    }
+
+    @Test
     fun `device authorization failure surfaces pi's status message`() = runTest {
         val (flow, _) = newFlow { json(500, "boom") }
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }

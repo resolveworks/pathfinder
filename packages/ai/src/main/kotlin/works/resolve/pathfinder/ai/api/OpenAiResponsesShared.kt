@@ -38,6 +38,7 @@ import works.resolve.pathfinder.ai.utils.shortHash
 import works.resolve.pathfinder.ai.utils.strictInt
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
+import works.resolve.pathfinder.ai.utils.truthyString
 
 /**
  * Shared OpenAI Responses API machinery: message/tool conversion and stream
@@ -849,7 +850,7 @@ object OpenAiResponsesShared {
                 item.string("type") == "function_call" && slot is Block.Tool &&
                     slot.customInput == null -> {
                     slot.arguments = parseStreamingJson(
-                        item.string("arguments")?.takeIf { it.isNotEmpty() }
+                        item.truthyString("arguments")
                             ?: slot.partialJson?.takeIf { it.isNotEmpty() }
                             ?: "{}"
                     )

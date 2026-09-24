@@ -96,9 +96,11 @@ private inline fun parseDateMsOrNull(value: String, parse: (String) -> java.time
  * V8's remaining legacy formats (RFC 1036/850 two-digit years, asctime) stay
  * unparsed: like any unparseable value they yield null, taking pi's NaN path
  * (provider-retry sleeps zero; the Copilot flow returns the 429 unretried).
+ * The trim is V8's too — `DateParser` skips the JS whitespace set around the
+ * value.
  */
 internal fun parseHttpDateMsOrNull(value: String): Long? {
-    val text = value.trim()
+    val text = trimJsWhitespace(value)
     return parseDateMsOrNull(text) {
         java.time.OffsetDateTime.parse(it).toInstant()
     } ?: parseDateMsOrNull(text) {

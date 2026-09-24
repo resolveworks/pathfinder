@@ -13,6 +13,7 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
 import works.resolve.pathfinder.ai.utils.DEFAULT_MAX_AGENT_RETRY_DELAY_MS
+import works.resolve.pathfinder.ai.utils.MAX_SAFE_INTEGER
 import works.resolve.pathfinder.ai.utils.boolean
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.long
@@ -71,9 +72,6 @@ private val DEFAULT_COMPACTION_TOKEN_SETTINGS = mapOf(
     "reserveTokens" to 16384L,
     "keepRecentTokens" to 20000L
 )
-
-/** JS `Number.MAX_SAFE_INTEGER` (2^53 - 1): pi's bound for token budgets. */
-private const val MAX_SAFE_INTEGER = 9007199254740991L
 
 /**
  * Atomic read-modify-write access to persisted settings content.

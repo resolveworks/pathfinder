@@ -270,6 +270,29 @@ class GitHubCopilotOAuthAuthTest {
     }
 
     @Test
+    fun `infinite expires_in keeps the device flow polling like pi`() = runTest {
+        // pi passes `expires_in` through as a JS number, so `Date.now() +
+        // Infinity` stays Infinity and the flow only ends through the poll;
+        // truncating to a Long first would overflow the deadline into timeout.
+        val http = FakeHttpClient()
+        http.script +=
+            {
+                ok(
+                    """{"device_code":"DC","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","interval":1,"expires_in":1e999}"""
+                )
+            }
+        http.script += { ok("""{"error":"authorization_pending"}""") }
+        http.script += { ok("""{"error":"authorization_pending"}""") }
+        http.script += { ok("""{"access_token":"gho_late"}""") }
+        http.script += { ok(copilotTokenJson()) }
+        http.script += { ok(modelsJson(modelEntry("gpt-4.1"))) }
+
+        val credential = auth(http, clock = virtualClock).login(RecordingInteraction())
+
+        assertEquals("gho_late", credential.refresh)
+    }
+
+    @Test
     fun `device flow error fails with pi's message`() = runTest {
         val http = FakeHttpClient()
         http.script += { ok(deviceCodeJson(interval = 1)) }

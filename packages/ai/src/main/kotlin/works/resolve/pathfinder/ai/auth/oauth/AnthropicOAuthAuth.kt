@@ -21,6 +21,7 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.requireString
 import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.ai.utils.urlQueryParamsOrNull
 
 /**
@@ -194,7 +195,7 @@ class AnthropicOAuthAuth(
 
     /** Extracts code/state from a pasted URL, `code#state`, bare `code=` query string, or raw code. */
     internal fun parseAuthorizationInput(input: String): ParsedAuthorizationInput {
-        val value = input.trim()
+        val value = trimJsWhitespace(input)
         if (value.isEmpty()) return ParsedAuthorizationInput(null, null)
 
         val urlParams = urlQueryParamsOrNull(value)

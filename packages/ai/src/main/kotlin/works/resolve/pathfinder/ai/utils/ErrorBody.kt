@@ -23,8 +23,7 @@ data class NormalizedProviderError(
  * a raw transport body cannot.
  */
 fun normalizeProviderError(error: ProviderHttpException): NormalizedProviderError {
-    val body = error.body
-        .trim()
+    val body = trimJsWhitespace(error.body)
         .takeIf { it.isNotEmpty() }
         ?.let { truncateErrorText(it, MAX_PROVIDER_ERROR_BODY_CHARS) }
     return NormalizedProviderError(

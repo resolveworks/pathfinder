@@ -23,7 +23,9 @@ import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.str
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.ai.utils.truncateErrorText
+import works.resolve.pathfinder.ai.utils.truthyString
 
 /**
  * web_search agent tool backed by the Brave Search API. Pathfinder-owned
@@ -113,8 +115,9 @@ class BraveWebSearchTool(
 
         val response = send(request)
         if (!response.successful) {
-            val reason = truncateErrorText(response.body.trim(), MAX_PROVIDER_ERROR_BODY_CHARS)
-                .ifEmpty { response.reasonPhrase }
+            val reason =
+                truncateErrorText(trimJsWhitespace(response.body), MAX_PROVIDER_ERROR_BODY_CHARS)
+                    .ifEmpty { response.reasonPhrase }
             return AgentToolResult(
                 content = listOf(TextContent("Search failed (${response.code}): $reason")),
                 details = EMPTY_DETAILS
@@ -134,7 +137,7 @@ class BraveWebSearchTool(
             val r = element as? JsonObject ?: JsonObject(emptyMap())
             val title = r.str("title") ?: ""
             val url = r.str("url") ?: ""
-            val description = r.str("description")?.takeIf { it.isNotEmpty() }
+            val description = r.truthyString("description")
             if (description == null) "- [$title]($url)" else "- [$title]($url): $description"
         }
 

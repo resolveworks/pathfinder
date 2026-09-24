@@ -67,7 +67,9 @@ import works.resolve.pathfinder.ai.utils.resolveTranscript
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
 import works.resolve.pathfinder.ai.utils.strOrNull
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.ai.utils.truncateErrorText
+import works.resolve.pathfinder.ai.utils.truthyString
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 typealias MistralReasoningEffort = String // "none" | "high"
@@ -323,7 +325,7 @@ class MistralConversationsApi(
         model: Model,
         state: MistralStreamingState
     ): List<AssistantMessageEvent> {
-        if (event.data.trim() == DONE) {
+        if (trimJsWhitespace(event.data) == DONE) {
             state.markDone()
             return emptyList()
         }
@@ -339,7 +341,8 @@ class MistralConversationsApi(
         }
         val data = chunk
 
-        data["id"].strOrNull()?.takeIf { it.isNotEmpty() && state.responseId == null }
+        data.truthyString("id")
+            ?.takeIf { state.responseId == null }
             ?.let { state.responseId = it }
 
         data.obj("usage")?.let { state.usage = parseChunkUsage(it, model) }
@@ -348,8 +351,8 @@ class MistralConversationsApi(
 
         // pi guards with truthiness (`if (choice.finish_reason)`), so an empty
         // string counts as absent and the stream must still yield a finish
-        // reason — same lenient read as the responseId check above.
-        choice["finish_reason"].strOrNull()?.takeIf { it.isNotEmpty() }?.let { raw ->
+        // reason.
+        choice.truthyString("finish_reason")?.let { raw ->
             state.rawStopReason = raw
             val (stopReason, errorMessage) = mapChatStopReason(raw)
             state.stopReason = stopReason
@@ -440,7 +443,7 @@ class MistralConversationsApi(
     /** Mistral-specific error formatting, as in pi — not the shared provider error formatter. */
     internal fun formatMistralError(error: Exception): String = when (error) {
         is ProviderHttpException -> {
-            val bodyText = error.body.trim()
+            val bodyText = trimJsWhitespace(error.body)
             if (bodyText.isNotEmpty()) {
                 "Mistral API error (${error.status}): ${truncateErrorText(
                     bodyText,
@@ -928,7 +931,7 @@ object MistralConversationsPayload {
                         when (block.type) {
                             ContentType.TEXT -> {
                                 val text = sanitize(block as TextContent)
-                                if (text.trim().isNotEmpty()) {
+                                if (trimJsWhitespace(text).isNotEmpty()) {
                                     contentParts.add(
                                         buildJsonObject {
                                             put("type", "text")
@@ -943,7 +946,7 @@ object MistralConversationsPayload {
                                     block as works.resolve.pathfinder.ai.ThinkingContent
                                 val thinking =
                                     sanitizeText(thinkingContent.thinking)
-                                if (thinking.trim().isNotEmpty()) {
+                                if (trimJsWhitespace(thinking).isNotEmpty()) {
                                     contentParts.add(
                                         buildJsonObject {
                                             put("type", "thinking")
@@ -1049,7 +1052,7 @@ object MistralConversationsPayload {
         supportsImages: Boolean,
         isError: Boolean
     ): String {
-        val trimmed = text.trim()
+        val trimmed = trimJsWhitespace(text)
         val errorPrefix = if (isError) "[tool error] " else ""
 
         if (trimmed.isNotEmpty()) {

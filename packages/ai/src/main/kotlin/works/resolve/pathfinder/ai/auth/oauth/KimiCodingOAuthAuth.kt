@@ -63,7 +63,7 @@ class KimiCodingOAuthAuth(
         val verificationUri: String,
         val verificationUriComplete: String,
         val intervalSeconds: Double,
-        val expiresInSeconds: Long
+        val expiresInSeconds: Double
     )
 
     internal data class TokenResponse(val access: String, val refresh: String, val expires: Long)
@@ -118,9 +118,9 @@ class KimiCodingOAuthAuth(
             expiresInSeconds = if (expiresIn != null && expiresIn.isFinite() &&
                 expiresIn > 0
             ) {
-                expiresIn.toLong()
+                expiresIn
             } else {
-                DEVICE_CODE_TIMEOUT_SECONDS
+                DEVICE_CODE_TIMEOUT_SECONDS.toDouble()
             }
         )
     }

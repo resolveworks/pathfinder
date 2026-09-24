@@ -24,6 +24,7 @@ import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.ai.utils.truthyString
 import works.resolve.pathfinder.ai.utils.urlQueryParamsOrNull
 
@@ -276,7 +277,7 @@ class OpenAiCodexOAuthAuth(
      * (Kotlin's `split(limit = 2)` would keep the whole remainder).
      */
     internal fun parseAuthorizationInput(input: String): AuthorizationInput {
-        val value = input.trim()
+        val value = trimJsWhitespace(input)
         if (value.isEmpty()) return AuthorizationInput(code = null, state = null)
 
         val urlParams = urlQueryParamsOrNull(value)
@@ -395,7 +396,7 @@ class OpenAiCodexOAuthAuth(
         pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(
                 intervalSeconds = device.intervalSeconds,
-                expiresInSeconds = DEVICE_CODE_TIMEOUT_SECONDS,
+                expiresInSeconds = DEVICE_CODE_TIMEOUT_SECONDS.toDouble(),
                 poll = {
                     val response = postJson(
                         DEVICE_TOKEN_URL,

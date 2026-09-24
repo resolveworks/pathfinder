@@ -32,7 +32,7 @@ sealed interface OAuthDeviceCodePollResult<out T> {
 
 class OAuthDeviceCodePollOptions<T>(
     val intervalSeconds: Double? = null,
-    val expiresInSeconds: Long? = null,
+    val expiresInSeconds: Double? = null,
     val waitBeforeFirstPoll: Boolean = false,
     val poll: suspend () -> OAuthDeviceCodePollResult<T>
 )
@@ -53,6 +53,13 @@ private suspend fun abortableSleep(ms: Long, cancelMessage: String) {
 }
 
 /**
+ * pi sleeps through `setTimeout(ms)`, which truncates fractional
+ * milliseconds and clamps sub-1ms delays to 1 (Node `Timeout` clamp,
+ * `insert`'s `MathTrunc`).
+ */
+private fun setTimeoutMs(ms: Double): Long = if (ms >= 1) ms.toLong() else 1L
+
+/**
  * Divergence from pi: pi cancels through an `AbortSignal` and observes it
  * via `signal.aborted`; here coroutine cancellation surfaces as a
  * [CancellationException], retagged onto [IllegalStateException] with the
@@ -67,8 +74,13 @@ internal suspend fun <T> pollOAuthDeviceCodeFlow(
     clock: Clock = Clock.System
 ): T {
     fun now() = clock.now().toEpochMilliseconds()
+
+    // pi's deadline math stays in JS numbers: `Date.now() + expiresInSeconds * 1000`
+    // can be fractional, and an infinite `expires_in` keeps the flow polling
+    // forever instead of wrapping a Long multiplication.
     val deadline =
-        options.expiresInSeconds?.let { now() + it * 1000 } ?: Long.MAX_VALUE
+        options.expiresInSeconds?.let { now() + it * 1000 }
+            ?: Double.POSITIVE_INFINITY
     var intervalMs = max(
         MINIMUM_INTERVAL_MS,
         Math.floor((options.intervalSeconds ?: DEFAULT_POLL_INTERVAL_SECONDS) * 1000).toLong()
@@ -78,7 +90,7 @@ internal suspend fun <T> pollOAuthDeviceCodeFlow(
     if (options.waitBeforeFirstPoll) {
         val remainingMs = deadline - now()
         if (remainingMs > 0) {
-            abortableSleep(minOf(intervalMs, remainingMs), CANCEL_MESSAGE)
+            abortableSleep(setTimeoutMs(minOf(intervalMs.toDouble(), remainingMs)), CANCEL_MESSAGE)
         }
     }
 
@@ -122,7 +134,7 @@ internal suspend fun <T> pollOAuthDeviceCodeFlow(
             break
         }
 
-        abortableSleep(minOf(intervalMs, remainingMs), CANCEL_MESSAGE)
+        abortableSleep(setTimeoutMs(minOf(intervalMs.toDouble(), remainingMs)), CANCEL_MESSAGE)
     }
 
     throw IllegalStateException(
