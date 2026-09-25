@@ -1,16 +1,16 @@
 [versions]
-agp = "9.3.1"
-kotlin = "2.4.10"
-spotless = "8.10.1"
+agp = "9.4.1"
+kotlin = "2.4.20"
+spotless = "8.10.2"
 ktlint = "1.8.0"
 activity = "1.13.0"
-composeBom = "2026.08.00"
+composeBom = "2026.09.00"
 datastore = "1.2.1"
-androidx-browser = "1.8.0"
-androidx-webkit = "1.16.0"
-androidx-exifinterface = "1.4.1"
-lifecycle = "2.10.0"
-nav3 = "1.1.6"
+androidx-browser = "1.10.0"
+androidx-webkit = "1.17.1"
+androidx-exifinterface = "1.4.2"
+lifecycle = "2.11.0"
+nav3 = "1.2.0"
 junit = "4.13.2"
 coroutines = "1.11.0"
 okhttp = "5.5.0"
@@ -18,13 +18,13 @@ okhttpSse = "5.5.0"
 markdownRenderer = "0.45.0"
 serializationJson = "1.11.0"
 # zstd request-body compression for the Codex SSE path
-zstd = "1.5.7-15"
+zstd = "1.5.7-19"
 # cbssh, the only SSH library; exact pin, confined to the app's ssh package
 cbssh = "0.4.2"
 # matches sshlib's slf4j-api so there is no version skew
 slf4j = "2.0.18"
 # line-diff engine for the edit tool's diffs and unified patches
-diffutils = "4.15"
+diffutils = "4.17"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
