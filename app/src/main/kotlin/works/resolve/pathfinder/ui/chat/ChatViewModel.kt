@@ -48,11 +48,6 @@ import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.codingagent.core.StreamingBehavior
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.AgentFactory
-import works.resolve.pathfinder.ssh.Machine
-import works.resolve.pathfinder.ssh.MachineStore
-import works.resolve.pathfinder.ssh.SshConnectionHelper
-import works.resolve.pathfinder.ssh.SshConnectionProvider
-import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
 /**
@@ -99,11 +94,6 @@ class ChatViewModel(
      */
     private val appForegroundGate: AppForegroundGate,
     private val searchProviderService: SearchProviderService,
-    private val machineStore: MachineStore,
-    /** Interactive TOFU host-key decisions; surfaced through the pending-host-key prompt. */
-    private val hostKeyConfirmer: TofuHostKeyConfirmer,
-    /** Process-wide SSH connections; the machines controller tests dials and machine deletion evicts. */
-    private val sshConnectionProvider: SshConnectionProvider,
     /** Where bulk transcript parses run; the test harness keeps them on virtual time. */
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) : ViewModel() {
@@ -156,46 +146,26 @@ class ChatViewModel(
 
     private val sessionSearch = SessionSearchController()
 
-    private val machinesController = MachinesController(
-        viewModelScope,
-        machineStore,
-        SshConnectionHelper(machineStore),
-        hostKeyConfirmer,
-        ::setError
-    )
-
     val uiState: StateFlow<ChatUiState> =
         combine(
             combine(
                 _uiState,
                 loginController.flow,
                 searchProviders.state,
-                sessionSearch.state,
-                combine(machinesController.machines, sshConnectionProvider.machine) {
-                        machines,
-                        selected
-                    ->
-                    machines to selected
-                }
-            ) { base, authFlow, searchProviders, sessionSearch, (machines, selectedMachine) ->
+                sessionSearch.state
+            ) { base, authFlow, searchProviders, sessionSearch ->
                 base.copy(
                     authFlow = authFlow,
                     searchProviderOptions = searchProviders.options,
-                    machines = machines,
-                    selectedMachine = selectedMachine,
                     sessionSearchQuery = sessionSearch.query,
                     sessionSearchSort = sessionSearch.sort,
                     sessionSearchResults = sessionSearch.results
                 )
             },
-            hostKeyConfirmer.pending,
-            machinesController.machineTest,
             providerCredentials.state,
             modelSettings.state
-        ) { base, pendingHostKey, machineTest, credentials, modelSettings ->
+        ) { base, credentials, modelSettings ->
             base.copy(
-                pendingHostKey = pendingHostKey,
-                machineTest = machineTest,
                 providerOptions = credentials.providerOptions,
                 modelOptions = credentials.modelOptions,
                 defaultModel = modelSettings.defaultModel,
@@ -423,52 +393,6 @@ class ChatViewModel(
             }
         }
     }
-
-    // ---- Machines (Settings ▸ Machines) ----
-
-    /**
-     * Persists the machine selection. Not busy-rejected:
-     * like a model pick, it applies to the next tool call. A store failure
-     * surfaces a settings-save error while the persisted selection keeps
-     * its previous value.
-     */
-    fun selectMachine(machineId: String) {
-        viewModelScope.launch {
-            try {
-                settingsStore.setSelectedMachineId(machineId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                setError(UiString(R.string.error_settings_save), e)
-            }
-        }
-    }
-
-    /** Trusts the pending unknown-host-key request (TOFU first connect). */
-    fun trustHostKey() = hostKeyConfirmer.answer(trust = true)
-
-    /** Refuses the pending unknown-host-key request; also the dialog-dismiss path (fail closed). */
-    fun refuseHostKey() = hostKeyConfirmer.answer(trust = false)
-
-    /** Creates a machine with a freshly generated keypair (see [MachinesController.addMachine]). */
-    fun addMachine(address: String, port: Int, username: String, cwd: String) =
-        machinesController.addMachine(address, port, username, cwd)
-
-    /** Persists edited connection fields of a machine. */
-    fun updateMachine(machine: Machine) = machinesController.updateMachine(machine)
-
-    /** Deletes a machine and its keypair, plus its cached connection. */
-    fun removeMachine(id: String) {
-        machinesController.removeMachine(id)
-        viewModelScope.launch { sshConnectionProvider.evict(id) }
-    }
-
-    /**
-     * Runs a connection test against [machineId] from the machine form; progress
-     * and the result land in [ChatUiState.machineTest].
-     */
-    fun testMachineConnection(machineId: String) =
-        machinesController.testMachineConnection(machineId)
 
     fun send() {
         viewModelScope.launch { sendInternal() }
@@ -922,7 +846,7 @@ class ChatViewModel(
             is AgentEvent.SummarizationRetryFinished
             -> Unit
 
-            // Streaming tool output (bash partials): retained until the
+            // Streaming tool output: retained until the
             // execution ends; the committed result takes over the row.
             is AgentEvent.ToolExecutionUpdate -> {
                 val partial = event.partialResult.content.textContent()

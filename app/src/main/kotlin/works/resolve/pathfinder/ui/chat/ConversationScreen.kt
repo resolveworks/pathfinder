@@ -44,7 +44,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.StateFlow
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.ModelThinkingLevel
-import works.resolve.pathfinder.ssh.Machine
 
 /**
  * The conversation transcript surface: messages plus the composer column.
@@ -61,7 +60,6 @@ internal fun ChatSurface(
     onStop: () -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
-    onSelectMachine: (machineId: String) -> Unit,
     scrollState: ScrollState
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -100,10 +98,7 @@ internal fun ChatSurface(
                 thinkingLevel = uiState.thinkingLevel,
                 availableThinkingLevels = uiState.availableThinkingLevels,
                 defaultThinkingLevel = uiState.defaultThinkingLevel,
-                onSelectThinkingLevel = onSelectThinkingLevel,
-                machines = uiState.machines,
-                selectedMachine = uiState.selectedMachine,
-                onSelectMachine = onSelectMachine
+                onSelectThinkingLevel = onSelectThinkingLevel
             )
         }
     }
@@ -120,14 +115,10 @@ private fun SelectionBar(
     availableThinkingLevels: List<ModelThinkingLevel>,
     defaultThinkingLevel: ModelThinkingLevel?,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
-    machines: List<Machine>,
-    selectedMachine: Machine?,
-    onSelectMachine: (machineId: String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var sheetOpen by rememberSaveable { mutableStateOf(false) }
     var thinkingSheetOpen by rememberSaveable { mutableStateOf(false) }
-    var machineSheetOpen by rememberSaveable { mutableStateOf(false) }
     // pi's footer condition `state.model?.reasoning`: a non-reasoning model's
     // only supported level is OFF, so >1 level means reasoning.
     val showThinkingChip = availableThinkingLevels.size > 1
@@ -178,26 +169,6 @@ private fun SelectionBar(
                 }
             )
         }
-        if (machines.isNotEmpty()) {
-            Spacer(Modifier.width(8.dp))
-            AssistChip(
-                onClick = { machineSheetOpen = true },
-                label = {
-                    Text(
-                        text = "${selectedMachine?.username}@${selectedMachine?.address}",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
-                trailingIcon = {
-                    Icon(
-                        Icons.Default.ArrowDropDown,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            )
-        }
     }
     if (sheetOpen) {
         ModelPickerSheet(
@@ -221,17 +192,6 @@ private fun SelectionBar(
                 onSelectThinkingLevel(level)
             },
             onDismiss = { thinkingSheetOpen = false }
-        )
-    }
-    if (machineSheetOpen) {
-        MachinePickerSheet(
-            machines = machines,
-            selectedMachine = selectedMachine,
-            onSelect = { machine ->
-                machineSheetOpen = false
-                onSelectMachine(machine.id)
-            },
-            onDismiss = { machineSheetOpen = false }
         )
     }
 }
@@ -321,50 +281,6 @@ private fun ThinkingLevelPickerSheet(
                             null
                         },
                         modifier = Modifier.clickable { onSelect(level) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** The machine picker sheet: one row per configured machine, the effective selection checked. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun MachinePickerSheet(
-    machines: List<Machine>,
-    selectedMachine: Machine?,
-    onSelect: (Machine) -> Unit,
-    onDismiss: () -> Unit
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .navigationBarsPadding()
-        ) {
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f, fill = false)
-                    .heightIn(max = 480.dp)
-            ) {
-                items(machines, key = Machine::id) { machine ->
-                    ListItem(
-                        headlineContent = { Text("${machine.username}@${machine.address}") },
-                        supportingContent = { Text(machine.cwd) },
-                        trailingContent = if (machine.id == selectedMachine?.id) {
-                            {
-                                Icon(
-                                    Icons.Default.Check,
-                                    contentDescription = stringResource(R.string.model_selected),
-                                    tint = MaterialTheme.colorScheme.secondary
-                                )
-                            }
-                        } else {
-                            null
-                        },
-                        modifier = Modifier.clickable { onSelect(machine) }
                     )
                 }
             }

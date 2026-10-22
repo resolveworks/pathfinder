@@ -28,8 +28,6 @@ class ToolResultRenderersTest {
 
     @Test
     fun `every other tool renders as monospace raw output (pi generic fallback)`() {
-        assertEquals(ToolResultFormat.MONO, ToolResultRenderers.formatFor("bash"))
-        assertEquals(ToolResultFormat.MONO, ToolResultRenderers.formatFor("read"))
         assertEquals(ToolResultFormat.MONO, ToolResultRenderers.formatFor("some_future_tool"))
     }
 }

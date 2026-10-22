@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -48,7 +47,6 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -88,8 +86,6 @@ import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.providers.AuthPrompt as CatalogAuthPrompt
 import works.resolve.pathfinder.codingagent.core.SessionInfo
-import works.resolve.pathfinder.ssh.HostKeyRequest
-import works.resolve.pathfinder.ssh.Machine
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 @Composable
@@ -123,7 +119,6 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         onToggleModelScope = viewModel::toggleModelScope,
         onSelectThinkingLevel = viewModel::selectThinkingLevel,
         onSetDefaultThinkingLevel = viewModel::setThinkingLevelDefault,
-        onSelectMachine = viewModel::selectMachine,
         onSaveProviderCredential = viewModel::saveProviderCredential,
         onRemoveProviderCredential = viewModel::removeProviderCredential,
         authPrompts = viewModel::providerAuthPrompts,
@@ -135,12 +130,6 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         onSaveSearchProviderCredential = viewModel::saveSearchProviderCredential,
         onRemoveSearchProviderCredential = viewModel::removeSearchProviderCredential,
         onRefreshSearchProviderStatus = viewModel::refreshSearchProviderStatus,
-        onAddMachine = viewModel::addMachine,
-        onUpdateMachine = viewModel::updateMachine,
-        onRemoveMachine = viewModel::removeMachine,
-        onTestMachineConnection = viewModel::testMachineConnection,
-        onTrustHostKey = viewModel::trustHostKey,
-        onRefuseHostKey = viewModel::refuseHostKey,
         searchAuthPrompts = viewModel::searchProviderAuthPrompts,
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
@@ -175,7 +164,6 @@ fun ChatScreen(
     onToggleModelScope: (providerId: String, modelId: String, checked: Boolean) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
     onSetDefaultThinkingLevel: (ModelThinkingLevel) -> Unit,
-    onSelectMachine: (machineId: String) -> Unit,
     onSaveProviderCredential: (
         providerId: String,
         apiKeyInput: String,
@@ -192,12 +180,6 @@ fun ChatScreen(
     onRemoveSearchProviderCredential: (providerId: String) -> Unit,
     onRefreshSearchProviderStatus: () -> Unit,
     searchAuthPrompts: (providerId: String) -> List<CatalogAuthPrompt>,
-    onAddMachine: (address: String, port: Int, username: String, cwd: String) -> Unit,
-    onUpdateMachine: (machine: Machine) -> Unit,
-    onRemoveMachine: (machineId: String) -> Unit,
-    onTestMachineConnection: (machineId: String) -> Unit,
-    onTrustHostKey: () -> Unit,
-    onRefuseHostKey: () -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
     onSessionSearchQueryChange: (query: String) -> Unit,
@@ -278,23 +260,12 @@ fun ChatScreen(
     }
 
     val pushSettings: () -> Unit = { backStack.add(SettingsNavKey) }
-    // The TOFU prompt sits above every destination: it unblocks a connect
-    // that any session-creating intent started, wherever the user is.
-    uiState.pendingHostKey?.let { request ->
-        HostKeyDialog(
-            request = request,
-            onTrust = onTrustHostKey,
-            onRefuse = onRefuseHostKey
-        )
-    }
     val pushDefaultModel: () -> Unit = { backStack.add(DefaultModelNavKey) }
     val pushDefaultThinking: () -> Unit = { backStack.add(DefaultThinkingNavKey) }
     val pushProviders: () -> Unit = { backStack.add(ProvidersNavKey) }
     val pushProviderAuth: (String) -> Unit = { backStack.add(ProviderAuthNavKey(it)) }
     val pushProviderApiKeyForm: (String) -> Unit = { backStack.add(ProviderApiKeyNavKey(it)) }
     val pushSearchProviders: () -> Unit = { backStack.add(SearchProvidersNavKey) }
-    val pushMachines: () -> Unit = { backStack.add(MachinesNavKey) }
-    val pushMachineEdit: (String?) -> Unit = { backStack.add(MachineEditNavKey(it)) }
     val pushSearchProviderAuth: (String) -> Unit = { backStack.add(SearchProviderAuthNavKey(it)) }
     val popBackStack: () -> Unit = {
         // Popping the login destination cancels its flow: a login must
@@ -401,16 +372,6 @@ fun ChatScreen(
 
                             SearchProvidersNavKey -> stringResource(R.string.search_providers_title)
 
-                            MachinesNavKey -> stringResource(R.string.machines_title)
-
-                            is MachineEditNavKey -> stringResource(
-                                if (topKey.machineId == null) {
-                                    R.string.machines_add
-                                } else {
-                                    R.string.machine_edit_title
-                                }
-                            )
-
                             is SearchProviderAuthNavKey ->
                                 stringResource(R.string.search_providers_title)
 
@@ -459,7 +420,6 @@ fun ChatScreen(
                                             onStop = onStop,
                                             onSelectModel = onSelectModel,
                                             onSelectThinkingLevel = onSelectThinkingLevel,
-                                            onSelectMachine = onSelectMachine,
                                             scrollState = chatScrollState
                                         )
 
@@ -493,7 +453,6 @@ fun ChatScreen(
                                         onStop = onStop,
                                         onSelectModel = onSelectModel,
                                         onSelectThinkingLevel = onSelectThinkingLevel,
-                                        onSelectMachine = onSelectMachine,
                                         scrollState = chatScrollState
                                     )
                                 }
@@ -509,7 +468,6 @@ fun ChatScreen(
                                     onOpenDefaultThinking = pushDefaultThinking,
                                     onOpenProviders = pushProviders,
                                     onOpenSearchProviders = pushSearchProviders,
-                                    onOpenMachines = pushMachines,
                                     onToggleShowThinking = onToggleShowThinking
                                 )
                             }
@@ -541,51 +499,6 @@ fun ChatScreen(
                                     onRefresh = onRefreshSearchProviderStatus,
                                     onOpenProvider = pushSearchProviderAuth
                                 )
-                            }
-                            entry<MachinesNavKey> {
-                                MachinesContent(
-                                    machines = uiState.machines,
-                                    onAddMachine = { pushMachineEdit(null) },
-                                    onOpenMachine = pushMachineEdit
-                                )
-                            }
-                            entry<MachineEditNavKey> { key ->
-                                val machine = key.machineId?.let { id ->
-                                    uiState.machines.firstOrNull { it.id == id }
-                                }
-                                if (key.machineId != null && machine == null) {
-                                    // Deleted elsewhere (or a stale restored
-                                    // entry): the form has nothing to edit.
-                                    LaunchedEffect(key) { popBackStack() }
-                                } else {
-                                    MachineEditContent(
-                                        machine = machine,
-                                        machineTest = uiState.machineTest?.takeIf {
-                                            it.machineId == machine?.id
-                                        },
-                                        onTestConnection = onTestMachineConnection,
-                                        onSave = { address, port, username, cwd ->
-                                            if (machine == null) {
-                                                onAddMachine(address, port, username, cwd)
-                                            } else {
-                                                onUpdateMachine(
-                                                    machine.copy(
-                                                        address = address.trim(),
-                                                        port = port,
-                                                        username = username.trim(),
-                                                        cwd = cwd.trim()
-                                                    )
-                                                )
-                                            }
-                                            popBackStack()
-                                        },
-                                        onRemove = {
-                                            machine?.let { onRemoveMachine(it.id) }
-                                            popBackStack()
-                                        },
-                                        onClose = popBackStack
-                                    )
-                                }
                             }
                             entry<SearchProviderAuthNavKey> { key ->
                                 val option = uiState.searchProviderOptions
@@ -677,41 +590,6 @@ fun ChatScreen(
             }
         }
     }
-}
-
-/**
- * Unknown-host-key confirmation (TOFU first connect): shows the machine, key
- * type, and SHA-256 fingerprint. Both the Refuse action and dismissing
- * the dialog refuse — verification fails closed. Trusting persists the
- * fingerprint (the verifier owns that), so the prompt appears once per
- * machine; a later pinned-mismatch is a hard error, never this dialog.
- */
-@Composable
-private fun HostKeyDialog(request: HostKeyRequest, onTrust: () -> Unit, onRefuse: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onRefuse,
-        title = { Text(stringResource(R.string.host_key_title)) },
-        text = {
-            Text(
-                stringResource(
-                    R.string.host_key_body,
-                    request.machineLabel,
-                    request.keyType,
-                    request.fingerprint
-                )
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = onTrust) {
-                Text(stringResource(R.string.host_key_trust))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onRefuse) {
-                Text(stringResource(R.string.host_key_refuse))
-            }
-        }
-    )
 }
 
 @Composable
@@ -1022,17 +900,6 @@ private val PREVIEW_AUTH_METHODS = listOf(
 
 private val PREVIEW_SELECTED_MODEL = PREVIEW_MODEL_OPTIONS.first()
 
-private val PREVIEW_MACHINES = listOf(
-    Machine(
-        id = "h1",
-        address = "server.example",
-        port = 22,
-        username = "user",
-        cwd = "/home/user/project",
-        publicKeyLine = ""
-    )
-)
-
 @Composable
 private fun PreviewChatScreen(
     uiState: ChatUiState,
@@ -1059,7 +926,6 @@ private fun PreviewChatScreen(
             onToggleModelScope = { _, _, _ -> },
             onSelectThinkingLevel = { },
             onSetDefaultThinkingLevel = { },
-            onSelectMachine = { },
             onSaveProviderCredential = { _, _, _ -> },
             onRemoveProviderCredential = { },
             authPrompts = authPrompts,
@@ -1072,12 +938,6 @@ private fun PreviewChatScreen(
             onRemoveSearchProviderCredential = { _ -> },
             onRefreshSearchProviderStatus = {},
             searchAuthPrompts = searchAuthPrompts,
-            onAddMachine = { _, _, _, _ -> },
-            onUpdateMachine = { },
-            onRemoveMachine = { },
-            onTestMachineConnection = { },
-            onTrustHostKey = { },
-            onRefuseHostKey = { },
             onNewSession = {},
             onSwitchSession = {},
             onSessionSearchQueryChange = {},
@@ -1353,8 +1213,6 @@ private fun ChatScreenChatViewPreview() {
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            machines = PREVIEW_MACHINES,
-            selectedMachine = PREVIEW_MACHINES.first(),
             activeSessionId = "s1",
             sessionSummariesLoaded = true,
             sessionSummaries = listOf(
