@@ -12,9 +12,21 @@ package works.resolve.pathfinder.telemetry
  * business callback — each recording call and settlement takes and releases
  * it.
  */
-class InMemoryTelemetryContext : TelemetryContext {
+class InMemoryTelemetryContext :
+    TelemetryContext,
+    TelemetryMetrics {
 
     data class RecordedTelemetryEvent(val name: String, val attributes: SpanAttributes)
+
+    data class RecordedTelemetryMeasurement(
+        val kind: String,
+        val name: String,
+        val description: String? = null,
+        val unit: String? = null,
+        val boundaries: List<Double>? = null,
+        val value: Double,
+        val attributes: SpanAttributes
+    )
 
     data class RecordedTelemetrySpan(
         val id: Int,
@@ -37,11 +49,28 @@ class InMemoryTelemetryContext : TelemetryContext {
         var endSequence: Int? = null
     }
 
-    /** Guards [spans] and the id/sequence counters. */
+    /** Guards [spans], [measurements], and the id/sequence counters. */
     private val lock = Any()
     private val spans = mutableListOf<MutableSpan>()
+    private val measurements = mutableListOf<RecordedTelemetryMeasurement>()
     private var nextSpanId = 1
     private var nextEndSequence = 1
+
+    override val metrics: TelemetryMetrics get() = this
+
+    override fun counter(name: String, options: InstrumentOptions?): TelemetryCounter =
+        TelemetryCounterImpl("counter", name, options?.description, options?.unit, null)
+
+    override fun upDownCounter(name: String, options: InstrumentOptions?): TelemetryUpDownCounter =
+        TelemetryUpDownCounterImpl("upDownCounter", name, options?.description, options?.unit)
+
+    override fun histogram(name: String, options: HistogramOptions?): TelemetryHistogram =
+        TelemetryHistogramImpl(
+            name,
+            options?.description,
+            options?.unit,
+            options?.boundaries?.toList()
+        )
 
     override suspend fun <T> startSpan(
         options: SpanOptions,
@@ -76,6 +105,8 @@ class InMemoryTelemetryContext : TelemetryContext {
         val recorded = admitted ?: return NOOP_TELEMETRY_CONTEXT.startSpan(options, callback)
 
         val span: TelemetrySpan = object : TelemetrySpan {
+            override val metrics: TelemetryMetrics get() = this@InMemoryTelemetryContext
+
             override suspend fun <R> startSpan(
                 options: SpanOptions,
                 callback: suspend (TelemetrySpan) -> R
@@ -132,6 +163,72 @@ class InMemoryTelemetryContext : TelemetryContext {
             }
             span.settled = true
             span.endSequence = nextEndSequence++
+        }
+    }
+
+    private fun record(
+        kind: String,
+        name: String,
+        description: String?,
+        unit: String?,
+        boundaries: List<Double>?,
+        value: Double,
+        attributes: SpanAttributes
+    ) {
+        synchronized(lock) {
+            measurements += RecordedTelemetryMeasurement(
+                kind = kind,
+                name = name,
+                description = description,
+                unit = unit,
+                boundaries = boundaries?.toList(),
+                value = value,
+                attributes = copyAttributes(attributes)
+            )
+        }
+    }
+
+    private inner class TelemetryCounterImpl(
+        private val kind: String,
+        private val name: String,
+        private val description: String?,
+        private val unit: String?,
+        private val boundaries: List<Double>?
+    ) : TelemetryCounter {
+        override fun add(value: Double, attributes: SpanAttributes) {
+            record(kind, name, description, unit, boundaries, value, attributes)
+        }
+    }
+
+    private inner class TelemetryUpDownCounterImpl(
+        private val kind: String,
+        private val name: String,
+        private val description: String?,
+        private val unit: String?
+    ) : TelemetryUpDownCounter {
+        override fun add(value: Double, attributes: SpanAttributes) {
+            record(kind, name, description, unit, null, value, attributes)
+        }
+    }
+
+    private inner class TelemetryHistogramImpl(
+        private val name: String,
+        private val description: String?,
+        private val unit: String?,
+        private val boundaries: List<Double>?
+    ) : TelemetryHistogram {
+        override fun record(value: Double, attributes: SpanAttributes, context: TelemetryContext?) {
+            record("histogram", name, description, unit, boundaries, value, attributes)
+        }
+    }
+
+    /** Detached measurements in recording order. */
+    fun getMetrics(): List<RecordedTelemetryMeasurement> = synchronized(lock) {
+        measurements.map { measurement ->
+            measurement.copy(
+                boundaries = measurement.boundaries?.toList(),
+                attributes = copyAttributes(measurement.attributes)
+            )
         }
     }
 

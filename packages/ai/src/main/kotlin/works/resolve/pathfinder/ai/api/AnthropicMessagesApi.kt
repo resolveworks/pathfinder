@@ -606,7 +606,7 @@ internal fun buildBaseOptions(
     headers = options.headers,
     onPayload = options.onPayload,
     onResponse = options.onResponse,
-    telemetryContext = options.telemetryContext
+    telemetryContext = options.telemetry
 )
 
 internal fun isOAuthToken(apiKey: String): Boolean = apiKey.contains("sk-ant-oat")

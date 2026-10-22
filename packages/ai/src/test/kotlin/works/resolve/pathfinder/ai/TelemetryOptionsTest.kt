@@ -27,11 +27,13 @@ import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.normalizeContext
 import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
+import works.resolve.pathfinder.telemetry.NOOP_TELEMETRY_CONTEXT
+import works.resolve.pathfinder.telemetry.SpanOptions
 
-/** telemetryContext is dormant: no adapter reads it, and none may emit spans. */
+/** The parent telemetry span reaches every request option surface. */
 class TelemetryOptionsTest {
 
-    private val telemetry = InMemoryTelemetryContext()
+    private val telemetry = NOOP_TELEMETRY_CONTEXT
     private val context = normalizeContext(Context(messages = emptyList()))
 
     private val model = Model(
@@ -48,17 +50,15 @@ class TelemetryOptionsTest {
     )
 
     @Test
-    fun `telemetryContext is inherited by every request option surface`() {
-        val stream = StreamOptions(telemetryContext = telemetry)
-        assertSame(telemetry, stream.telemetryContext)
-        val simple = SimpleStreamOptions(telemetryContext = telemetry)
-        assertSame(telemetry, simple.telemetryContext)
+    fun `telemetry is inherited by the core stream option surfaces`() {
+        assertSame(telemetry, StreamOptions(telemetry = telemetry).telemetry)
+        assertSame(telemetry, SimpleStreamOptions(telemetry = telemetry).telemetry)
     }
 
     @Test
-    fun `telemetryContext defaults to null on every request option surface`() {
-        assertNull(StreamOptions().telemetryContext)
-        assertNull(SimpleStreamOptions().telemetryContext)
+    fun `telemetry defaults to null on every request option surface`() {
+        assertNull(StreamOptions().telemetry)
+        assertNull(SimpleStreamOptions().telemetry)
         assertNull(OpenAiCompletionsOptions().telemetryContext)
         assertNull(OpenAiResponsesOptions().telemetryContext)
         assertNull(AzureOpenAiResponsesOptions().telemetryContext)
@@ -69,8 +69,8 @@ class TelemetryOptionsTest {
     }
 
     @Test
-    fun `telemetryContext survives every simple to base conversion by identity`() {
-        val options = SimpleStreamOptions(telemetryContext = telemetry)
+    fun `telemetry survives every simple to base conversion by identity`() {
+        val options = SimpleStreamOptions(telemetry = telemetry)
         assertSame(telemetry, options.toStreamOptions(null).telemetryContext)
         assertSame(telemetry, buildBaseOptions(model, context, options).telemetryContext)
         assertSame(
@@ -90,10 +90,16 @@ class TelemetryOptionsTest {
     }
 
     @Test
-    fun `toString renders telemetryContext presence only, never the object`() {
-        val rendered = listOf(
-            StreamOptions(telemetryContext = telemetry).toString(),
-            SimpleStreamOptions(telemetryContext = telemetry).toString(),
+    fun `toString renders telemetry presence only, never the object`() {
+        val core = listOf(
+            StreamOptions(telemetry = telemetry).toString(),
+            SimpleStreamOptions(telemetry = telemetry).toString()
+        )
+        for (text in core) {
+            assertTrue("telemetry=true" in text, text)
+            assertFalse("InMemoryTelemetryContext" in text, text)
+        }
+        val provider = listOf(
             OpenAiCompletionsOptions(telemetryContext = telemetry).toString(),
             OpenAiResponsesOptions(telemetryContext = telemetry).toString(),
             AzureOpenAiResponsesOptions(telemetryContext = telemetry).toString(),
@@ -102,16 +108,17 @@ class TelemetryOptionsTest {
             GoogleGenerativeAiApi.GoogleOptions(telemetryContext = telemetry).toString(),
             MistralOptions(telemetryContext = telemetry).toString()
         )
-        for (text in rendered) {
+        for (text in provider) {
             assertTrue("telemetryContext=true" in text, text)
             assertFalse("InMemoryTelemetryContext" in text, text)
         }
         // Same presence-only convention as onPayload/onResponse.
-        assertTrue("telemetryContext=false" in SimpleStreamOptions().toString())
+        assertTrue("telemetry=false" in SimpleStreamOptions().toString())
     }
 
     @Test
-    fun `streaming emits zero spans even with a telemetryContext present`() = runTest {
+    fun `direct adapter streaming emits zero spans even with a telemetry span present`() = runTest {
+        val recorder = InMemoryTelemetryContext()
         val transport = FakeTransport()
         transport.enqueueResponse(
             listOf(
@@ -119,21 +126,22 @@ class TelemetryOptionsTest {
                 "[DONE]"
             )
         )
-        val events = OpenAiCompletionsApi(
+        val api = OpenAiCompletionsApi(
             transport,
             ProviderRetry(sleep = {
             }, clock = FakeClock(0L), random = { 0.0 })
         )
-            .streamSimple(
+        val events = recorder.startSpan(SpanOptions("test-parent")) { parent ->
+            api.streamSimple(
                 model,
                 normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
-                SimpleStreamOptions(apiKey = "k", telemetryContext = telemetry)
-            )
-            .toList()
+                SimpleStreamOptions(apiKey = "k", telemetry = parent)
+            ).toList()
+        }
         assertEquals(
             works.resolve.pathfinder.ai.StopReason.STOP,
             (events.last() as AssistantMessageEvent.Done).reason
         )
-        assertEquals(0, telemetry.getSpans().size)
+        assertEquals(listOf("test-parent"), recorder.getSpans().map { it.name })
     }
 }

@@ -826,7 +826,7 @@ internal fun buildOpenAICodexResponsesOptions(
     onResponse = options.onResponse,
     transport = options.transport,
     websocketConnectTimeoutMs = options.websocketConnectTimeoutMs,
-    telemetryContext = options.telemetryContext
+    telemetryContext = options.telemetry
 )
 
 /**

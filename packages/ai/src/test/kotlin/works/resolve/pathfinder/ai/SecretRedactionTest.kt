@@ -38,12 +38,12 @@ class SecretRedactionTest {
         // strings lock its format.
         assertEquals(
             "StreamOptions(apiKey=<redacted>, sessionId=s1, temperature=0.5, maxTokens=null, " +
-                "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, telemetryContext=false)",
+                "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, telemetry=false)",
             StreamOptions(apiKey = secret, sessionId = "s1", temperature = 0.5).toString()
         )
         assertEquals(
             "StreamOptions(apiKey=null, sessionId=null, temperature=null, maxTokens=null, " +
-                "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, telemetryContext=false)",
+                "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, telemetry=false)",
             StreamOptions().toString()
         )
 
@@ -53,7 +53,7 @@ class SecretRedactionTest {
                 "timeoutMs=null, maxRetries=1, " +
                 "maxRetryDelayMs=60000, env=[PI_ENV_A], headers=[Authorization], " +
                 "onPayload=true, onResponse=false, samplingParams=[top_k], transport=null, " +
-                "websocketConnectTimeoutMs=null, telemetryContext=false)",
+                "websocketConnectTimeoutMs=null, telemetry=false)",
             SimpleStreamOptions(
                 apiKey = secret,
                 sessionId = "s1",
@@ -73,7 +73,7 @@ class SecretRedactionTest {
                 "reasoning=null, toolChoice=null, cacheRetention=null, " +
                 "timeoutMs=null, maxRetries=0, " +
                 "maxRetryDelayMs=60000, env=[], headers=[], onPayload=false, onResponse=false, " +
-                "samplingParams=null, transport=null, websocketConnectTimeoutMs=null, telemetryContext=false)",
+                "samplingParams=null, transport=null, websocketConnectTimeoutMs=null, telemetry=false)",
             SimpleStreamOptions().toString()
         )
 

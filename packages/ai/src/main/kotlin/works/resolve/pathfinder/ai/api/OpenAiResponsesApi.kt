@@ -252,7 +252,7 @@ internal fun buildOpenAiResponsesOptions(
     onPayload = options.onPayload,
     onResponse = options.onResponse,
     samplingParams = mergeSamplingParams(model, options),
-    telemetryContext = options.telemetryContext
+    telemetryContext = options.telemetry
 )
 
 class OpenAiResponsesApi(

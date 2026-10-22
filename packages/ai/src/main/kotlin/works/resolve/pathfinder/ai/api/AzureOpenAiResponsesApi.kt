@@ -164,7 +164,7 @@ internal fun buildAzureOpenAiResponsesOptions(
     onPayload = options.onPayload,
     onResponse = options.onResponse,
     samplingParams = mergeSamplingParams(model, options),
-    telemetryContext = options.telemetryContext
+    telemetryContext = options.telemetry
 )
 
 /**

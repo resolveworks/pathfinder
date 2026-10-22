@@ -577,7 +577,7 @@ internal fun buildGoogleOptions(
         options.reasoning,
         options.thinkingBudgets
     ),
-    telemetryContext = options.telemetryContext
+    telemetryContext = options.telemetry
 )
 
 /**
