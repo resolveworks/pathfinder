@@ -2,11 +2,11 @@ package works.resolve.pathfinder.telemetry
 
 /**
  * Telemetry describes what the app did while running: timed [spans][TelemetrySpan]
- * with attributes, point [events][TelemetrySpan.addEvent], and a final
- * [status][TelemetrySpan.setStatus]. It is diagnostic data, not business state:
- * recording must never change whether an operation runs, succeeds, fails, or
- * persists, and every implementation is passive — a recording failure must
- * never propagate.
+ * with attributes, point [events][TelemetrySpan.addEvent], a final
+ * [status][TelemetrySpan.setStatus], and optional low-cardinality metrics. It is
+ * diagnostic data, not business state: recording must never change whether an
+ * operation runs, succeeds, fails, or persists, and every implementation is
+ * passive — a recording failure must never propagate.
  *
  * Divergences from pi:
  * - **Promises → coroutines.** pi's `startSpan` callback returns `T |
@@ -17,20 +17,10 @@ package works.resolve.pathfinder.telemetry
  * - pi's typed-schema layer (`TelemetrySchemaDefinition` and friends) is
  *   omitted: its exact-type inference is TypeScript-only. Span vocabularies
  *   are documented constants next to their producers instead.
- *
- * Scope vs pi (verified at pin b8b873b98): this file and
- * [InMemoryTelemetryContext] are clean twins of the `pi-telemetry` package core
- * (`packages/telemetry/src/index.ts` + `memory.ts`) — the runtime contract
- * only. pi's agent-side `harness/telemetry.ts` is intentionally absent, not
- * folded in: at the pin it is pure exported vocabulary — `AI_TELEMETRY_SCHEMA`
- * (the single `pi.ai.request` span), `HARNESS_TELEMETRY_SCHEMA` (the harness
- * span taxonomy), and the `startAiSpan`/`startHarnessSpan` wrappers — with
- * zero producer call sites anywhere in packages/ai, packages/agent, or
- * packages/coding-agent. Porting span-name constants with no producer would
- * be dead code, and pathfinder matches the pin exactly: the `telemetryContext`
- * option is plumbed through request options (presence-redacted) but no
- * adapter starts a span. No harness span or attribute is
- * port-relevant but missing; revisit if post-pin pi wires real producers.
+ * - Propagation carriers, span links, stored traces, and trace rendering are
+ *   omitted. No ported runtime code consumes them; only the metrics capability
+ *   is carried because `pi.ai.request` instrumentation records histograms and
+ *   counters through its parent span.
  *
  * Security: telemetry is operational metadata. Credentials, message text,
  * and model responses must never be passed as attributes or error messages.
@@ -66,6 +56,38 @@ sealed interface SpanStatus {
     data class Error(val error: TelemetryError? = null) : SpanStatus
 }
 
+data class InstrumentOptions(val description: String? = null, val unit: String? = null)
+
+data class HistogramOptions(
+    val description: String? = null,
+    val unit: String? = null,
+    /** Finite, strictly increasing bucket hints; adapters own aggregation. */
+    val boundaries: List<Double>? = null
+)
+
+interface TelemetryCounter {
+    fun add(value: Double, attributes: SpanAttributes = emptyMap())
+}
+
+interface TelemetryUpDownCounter {
+    fun add(value: Double, attributes: SpanAttributes = emptyMap())
+}
+
+interface TelemetryHistogram {
+    fun record(
+        value: Double,
+        attributes: SpanAttributes = emptyMap(),
+        context: TelemetryContext? = null
+    )
+}
+
+/** Optional adapter capability with synchronous factories and recording methods. */
+interface TelemetryMetrics {
+    fun counter(name: String, options: InstrumentOptions? = null): TelemetryCounter
+    fun upDownCounter(name: String, options: InstrumentOptions? = null): TelemetryUpDownCounter
+    fun histogram(name: String, options: HistogramOptions? = null): TelemetryHistogram
+}
+
 /** Also a [TelemetryContext], so child spans nest under this span. */
 interface TelemetrySpan : TelemetryContext {
     fun addEvent(name: String, attributes: SpanAttributes = emptyMap())
@@ -82,8 +104,13 @@ interface TelemetrySpan : TelemetryContext {
  * when the callback returns (status ok unless overridden) or throws (status
  * error built from the exception unless [TelemetrySpan.setStatus] already
  * set one); the callback's result or exception propagates unchanged.
+ *
+ * [metrics] is the adapter capability carried by roots, spans, and extracted
+ * parents. Null means a tracing-only adapter.
  */
 interface TelemetryContext {
+    val metrics: TelemetryMetrics? get() = null
+
     suspend fun <T> startSpan(options: SpanOptions, callback: suspend (TelemetrySpan) -> T): T
 }
 
@@ -114,8 +141,32 @@ fun automaticErrorStatus(error: Throwable): SpanStatus = try {
     SpanStatus.Error()
 }
 
+private object NoopCounter : TelemetryCounter {
+    override fun add(value: Double, attributes: SpanAttributes) {}
+}
+
+private object NoopUpDownCounter : TelemetryUpDownCounter {
+    override fun add(value: Double, attributes: SpanAttributes) {}
+}
+
+private object NoopHistogram : TelemetryHistogram {
+    override fun record(value: Double, attributes: SpanAttributes, context: TelemetryContext?) {}
+}
+
+/** Shared instruments that never inspect or retain metadata or measurements. */
+object NoopTelemetryMetrics : TelemetryMetrics {
+    override fun counter(name: String, options: InstrumentOptions?): TelemetryCounter = NoopCounter
+    override fun upDownCounter(name: String, options: InstrumentOptions?): TelemetryUpDownCounter =
+        NoopUpDownCounter
+
+    override fun histogram(name: String, options: HistogramOptions?): TelemetryHistogram =
+        NoopHistogram
+}
+
 /** The span is its own context so child spans stay no-ops too. */
 object NoopTelemetry : TelemetrySpan {
+    override val metrics: TelemetryMetrics get() = NoopTelemetryMetrics
+
     override suspend fun <T> startSpan(
         options: SpanOptions,
         callback: suspend (TelemetrySpan) -> T
@@ -126,4 +177,6 @@ object NoopTelemetry : TelemetrySpan {
     override fun setStatus(status: SpanStatus) {}
 }
 
-val NOOP_TELEMETRY_CONTEXT: TelemetryContext = NoopTelemetry
+val NOOP_TELEMETRY_METRICS: TelemetryMetrics = NoopTelemetryMetrics
+
+val NOOP_TELEMETRY_CONTEXT: TelemetrySpan = NoopTelemetry

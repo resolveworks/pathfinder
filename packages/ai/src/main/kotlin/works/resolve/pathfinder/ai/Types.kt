@@ -9,7 +9,7 @@ import works.resolve.pathfinder.ai.api.OpenAiCompletionsOptions
 import works.resolve.pathfinder.ai.utils.AssistantMessageDiagnostic
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
-import works.resolve.pathfinder.telemetry.TelemetryContext
+import works.resolve.pathfinder.telemetry.TelemetrySpan
 
 /**
  * Twin of pi's `packages/ai/src/types.ts` (one file upstream; sections here
@@ -21,6 +21,11 @@ import works.resolve.pathfinder.telemetry.TelemetryContext
  */
 
 enum class ThinkingLevel { MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX }
+
+/** Opaque per-model sampling parameters; adapters merge them into the request body. */
+typealias SamplingParams = Map<String, JsonElement>
+
+typealias SamplingParamsByThinkingLevel = Map<ModelThinkingLevel, SamplingParams>
 
 /**
  * Thinking level including "off". [wire] is the persisted wire name
@@ -214,7 +219,13 @@ data class AssistantMessage(
     val diagnostics: List<AssistantMessageDiagnostic> = emptyList(),
     /** Codex end-of-turn flag from the terminal response. */
     val endTurn: Boolean? = null,
-    override val timestamp: Long = 0L
+    /** Unix timestamp in milliseconds when the request started. */
+    override val timestamp: Long = 0L,
+    /**
+     * Milliseconds from [timestamp] until the response ended, measured with a monotonic clock. Set by
+     * [Models.stream] on the final message of a response it saw start; absent for legacy messages.
+     */
+    val durationMs: Long? = null
 ) : Message() {
     override val role: MessageRole get() = MessageRole.ASSISTANT
 }
@@ -259,7 +270,12 @@ data class Cost(
     val output: Double = 0.0,
     val cacheRead: Double = 0.0,
     val cacheWrite: Double = 0.0,
-    val total: Double = 0.0
+    val total: Double = 0.0,
+    /**
+     * True when [total] is the billed cost reported by the provider; false when it is a
+     * catalog estimate. Absent also means false.
+     */
+    val totalFromProvider: Boolean = false
 )
 
 /** pi's ai StopReason; the classic stack never produces DEFERRED (only the un-ported harness does). */
@@ -467,11 +483,10 @@ data class StreamOptions(
     /** Cap on server-requested retry delays; delays above this fail immediately. 0 disables. */
     val maxRetryDelayMs: Long = DEFAULT_MAX_RETRY_DELAY_MS,
     /**
-     * Explicit parent context for telemetry produced by this logical request.
-     * Dormant: carried for shape fidelity through the conversion paths, with
-     * no consumer of its own. Presence boolean only in toString().
+     * Explicit parent span for telemetry produced by this logical request.
+     * Presence boolean only in toString().
      */
-    val telemetryContext: TelemetryContext? = null
+    val telemetry: TelemetrySpan? = null
 ) {
     override fun toString(): String = optionsToString(
         "StreamOptions",
@@ -482,7 +497,7 @@ data class StreamOptions(
         "timeoutMs" to timeoutMs,
         "maxRetries" to maxRetries,
         "maxRetryDelayMs" to maxRetryDelayMs,
-        "telemetryContext" to (telemetryContext != null)
+        "telemetry" to (telemetry != null)
     )
 
     companion object {
@@ -533,7 +548,7 @@ data class SimpleStreamOptions(
      * OpenAI-compatible adapters; other APIs ignore it. Only keys (never
      * values) may appear in toString().
      */
-    val samplingParams: Map<String, JsonElement>? = null,
+    val samplingParams: SamplingParams? = null,
     /**
      * Transport selection for providers that support more than SSE. Only the
      * Codex adapter consumes it; other APIs ignore it. Null defaults to the
@@ -543,11 +558,10 @@ data class SimpleStreamOptions(
     /** WebSocket handshake timeout. Only the Codex adapter consumes it; other APIs ignore it. */
     val websocketConnectTimeoutMs: Long? = null,
     /**
-     * Explicit parent context for telemetry produced by this logical request.
-     * Dormant: carried for shape fidelity and preserved (same object) through
-     * every conversion. Presence boolean only in toString().
+     * Explicit parent span for telemetry produced by this logical request.
+     * Preserved (same object) through every conversion. Presence boolean only in toString().
      */
-    val telemetryContext: TelemetryContext? = null
+    val telemetry: TelemetrySpan? = null
 ) {
     override fun toString(): String = optionsToString(
         "SimpleStreamOptions",
@@ -568,7 +582,7 @@ data class SimpleStreamOptions(
         "samplingParams" to samplingParams?.keys,
         "transport" to transport,
         "websocketConnectTimeoutMs" to websocketConnectTimeoutMs,
-        "telemetryContext" to (telemetryContext != null)
+        "telemetry" to (telemetry != null)
     )
 
     fun toStreamOptions(reasoningEffort: ModelThinkingLevel?): OpenAiCompletionsOptions =
@@ -589,7 +603,7 @@ data class SimpleStreamOptions(
             onPayload = onPayload,
             onResponse = onResponse,
             samplingParams = samplingParams,
-            telemetryContext = telemetryContext
+            telemetryContext = telemetry
         )
 }
 
@@ -656,11 +670,12 @@ data class Model(
     val headers: Map<String, String> = emptyMap(),
     /**
      * Default sampling parameters for this model, merged under per-request
-     * [SimpleStreamOptions.samplingParams] keys by [mergeSamplingParams] and
-     * applied only by OpenAI-compatible adapters. Not carried by the
-     * generated model catalog.
+     * [SimpleStreamOptions.samplingParams] keys and applied only by
+     * OpenAI-compatible adapters. Not carried by the generated model catalog.
      */
-    val samplingParams: Map<String, JsonElement>? = null
+    val samplingParams: SamplingParams? = null,
+    /** Sampling parameter overrides selected by the effective pi thinking level. */
+    val samplingParamsByThinkingLevel: SamplingParamsByThinkingLevel? = null
 )
 
 /** Per-million-token reference rates. */

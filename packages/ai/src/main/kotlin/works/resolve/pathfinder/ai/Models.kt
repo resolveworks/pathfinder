@@ -1,6 +1,12 @@
 package works.resolve.pathfinder.ai
 
+import java.util.Collections
+import java.util.WeakHashMap
+import kotlin.math.roundToLong
 import kotlin.time.Clock
+import kotlin.time.DurationUnit
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
@@ -28,6 +34,16 @@ import works.resolve.pathfinder.ai.providers.filterGitHubCopilotModels
 import works.resolve.pathfinder.ai.utils.normalizeContext
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.telemetry.HistogramOptions
+import works.resolve.pathfinder.telemetry.InstrumentOptions
+import works.resolve.pathfinder.telemetry.NOOP_TELEMETRY_CONTEXT
+import works.resolve.pathfinder.telemetry.NOOP_TELEMETRY_METRICS
+import works.resolve.pathfinder.telemetry.SpanOptions
+import works.resolve.pathfinder.telemetry.SpanStatus
+import works.resolve.pathfinder.telemetry.TelemetryError
+import works.resolve.pathfinder.telemetry.TelemetryMetrics
+import works.resolve.pathfinder.telemetry.TelemetrySpan
+import works.resolve.pathfinder.telemetry.attr
 
 /**
  * A resolved provider credential: the API key (or, for header-auth providers,
@@ -113,7 +129,11 @@ class Provider(
  * refreshed or replaced. Runtime-published model lists would need an
  * explicit decision (a store + refresh surface) if ever needed.
  */
-class Models(providers: List<Provider>, private val clock: Clock = Clock.System) {
+class Models(
+    providers: List<Provider>,
+    private val clock: Clock = Clock.System,
+    private val timeSource: TimeSource = TimeSource.Monotonic
+) {
     private val byId = providers.associateBy { it.id }
 
     fun getProviders(): List<Provider> = byId.values.toList()
@@ -213,16 +233,44 @@ class Models(providers: List<Provider>, private val clock: Clock = Clock.System)
         options: SimpleStreamOptions = SimpleStreamOptions()
     ): Flow<AssistantMessageEvent> {
         val transcript = normalizeContext(context)
+        val startedAt = clock.now().toEpochMilliseconds()
+        val startedMark = timeSource.markNow()
         return flow {
-            val apiStream = try {
-                resolveApiStream(model, transcript, options)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                emit(AssistantMessageEvent.Error(StopReason.ERROR, setupError(model, error)))
-                return@flow
+            val startAttributes = buildMap {
+                put("provider", attr(model.provider))
+                put("api", attr(model.api))
+                put("model", attr(model.id))
+                options.reasoning?.let { put("reasoning", attr(it.name.lowercase())) }
             }
-            apiStream.collect { emit(it) }
+            val parent = options.telemetry ?: NOOP_TELEMETRY_CONTEXT
+            parent.startSpan(SpanOptions("pi.ai.request", startAttributes)) { span ->
+                val observer = ModelRequestObserver(model, startedMark, span)
+                val apiStream = try {
+                    resolveApiStream(model, transcript, options)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    val message = setupError(model, error, startedAt)
+                    val event = AssistantMessageEvent.Error(StopReason.ERROR, message)
+                        .withStreamDuration(startedAt, startedMark)
+                    emit(event)
+                    observer.onEvent(event)
+                    observer.onResult(message)
+                    return@startSpan
+                }
+                var result: AssistantMessage? = null
+                apiStream.collect { raw ->
+                    val event = raw.withStreamDuration(startedAt, startedMark)
+                    emit(event)
+                    observer.onEvent(event)
+                    when (event) {
+                        is AssistantMessageEvent.Done -> result = event.message
+                        is AssistantMessageEvent.Error -> result = event.error
+                        else -> {}
+                    }
+                }
+                observer.onResult(result)
+            }
         }
     }
 
@@ -249,16 +297,197 @@ class Models(providers: List<Provider>, private val clock: Clock = Clock.System)
         return terminal.await()
     }
 
-    /** pi's lazyStream createSetupErrorMessage: zeroed usage, error stop. */
-    private fun setupError(model: Model, error: Exception): AssistantMessage = AssistantMessage(
-        content = emptyList(),
-        api = model.api,
-        provider = model.provider,
-        model = model.id,
-        stopReason = StopReason.ERROR,
-        errorMessage = error.message,
-        timestamp = clock.now().toEpochMilliseconds()
+    /** pi's lazyStream createSetupErrorMessage: zeroed usage, error stop, stream-start timestamp. */
+    private fun setupError(model: Model, error: Exception, timestamp: Long): AssistantMessage =
+        AssistantMessage(
+            content = emptyList(),
+            api = model.api,
+            provider = model.provider,
+            model = model.id,
+            stopReason = StopReason.ERROR,
+            errorMessage = error.message,
+            timestamp = timestamp
+        )
+}
+
+private class RequestInstruments(metrics: TelemetryMetrics) {
+    val requestDuration = metrics.histogram(
+        "pi.ai.request.duration",
+        HistogramOptions(description = "Logical request or poll duration.", unit = "ms")
     )
+    val firstChunkDuration = metrics.histogram(
+        "pi.ai.first_chunk.duration",
+        HistogramOptions(description = "Time to the first normalized stream event.", unit = "ms")
+    )
+    val tokens = metrics.counter(
+        "pi.ai.tokens",
+        InstrumentOptions(
+            description = "Reported model token usage; pending and deferred polls are excluded.",
+            unit = "token"
+        )
+    )
+    val cost = metrics.counter(
+        "pi.ai.cost",
+        InstrumentOptions(
+            description = "Reported model cost; pending and deferred polls are excluded.",
+            unit = "USD"
+        )
+    )
+}
+
+private val instrumentCacheLock = Any()
+private val instrumentCache =
+    Collections.synchronizedMap(WeakHashMap<TelemetryMetrics, RequestInstruments>())
+
+private fun requestInstruments(metrics: TelemetryMetrics): RequestInstruments =
+    synchronized(instrumentCacheLock) {
+        instrumentCache.getOrPut(metrics) { RequestInstruments(metrics) }
+    }
+
+/**
+ * pi's `observeModelRequest` for the Models stream path. It records metadata
+ * and bounded block sizes, never message content, tool arguments, or error
+ * text beyond the status message.
+ */
+private class ModelRequestObserver(
+    model: Model,
+    private val started: TimeMark,
+    private val span: TelemetrySpan
+) {
+    private val attributes = mapOf("provider" to attr(model.provider), "model" to attr(model.id))
+    private val instruments = requestInstruments(span.metrics ?: NOOP_TELEMETRY_METRICS)
+    private val toolChars = mutableMapOf<Int, Int>()
+    private var first = true
+
+    fun onEvent(event: AssistantMessageEvent) {
+        if (first) {
+            first = false
+            span.addEvent("pi.ai.first_chunk")
+            instruments.firstChunkDuration.record(elapsedMs(), attributes, span)
+        }
+        when (event) {
+            is AssistantMessageEvent.TextEnd -> span.addEvent(
+                "pi.ai.block",
+                mapOf(
+                    "type" to attr("text"),
+                    "index" to attr(event.contentIndex),
+                    "chars" to attr(event.content.length)
+                )
+            )
+
+            is AssistantMessageEvent.ThinkingEnd -> span.addEvent(
+                "pi.ai.block",
+                mapOf(
+                    "type" to attr("thinking"),
+                    "index" to attr(event.contentIndex),
+                    "chars" to attr(event.content.length)
+                )
+            )
+
+            is AssistantMessageEvent.ToolCallDelta -> {
+                toolChars[event.contentIndex] =
+                    (toolChars[event.contentIndex] ?: 0) + event.delta.length
+            }
+
+            is AssistantMessageEvent.ToolCallEnd -> {
+                val chars = toolChars.remove(event.contentIndex) ?: 0
+                span.addEvent(
+                    "pi.ai.block",
+                    mapOf(
+                        "type" to attr("tool_call"),
+                        "index" to attr(event.contentIndex),
+                        "chars" to attr(chars),
+                        "tool" to attr(event.toolCall.name)
+                    )
+                )
+            }
+
+            else -> {}
+        }
+    }
+
+    fun onResult(message: AssistantMessage?) {
+        if (message == null) return
+        val stop = message.stopReason.telemetryWire()
+        span.setAttributes(
+            buildMap {
+                put("stop", attr(stop))
+                put("usage.input", attr(message.usage.input))
+                put("usage.output", attr(message.usage.output))
+                put("usage.cache_read", attr(message.usage.cacheRead))
+                put("usage.cache_write", attr(message.usage.cacheWrite))
+                put("cost.total", attr(message.usage.cost.total))
+                message.responseId?.let { put("response.id", attr(it)) }
+            }
+        )
+        if (message.stopReason == StopReason.ERROR) {
+            span.setStatus(
+                SpanStatus.Error(
+                    TelemetryError("provider_error", message.errorMessage?.take(500) ?: "")
+                )
+            )
+        }
+        instruments.requestDuration.record(
+            elapsedMs(),
+            attributes + ("stop" to attr(stop)),
+            span
+        )
+        if (message.stopReason != StopReason.PENDING && message.stopReason != StopReason.DEFERRED) {
+            instruments.tokens.add(
+                message.usage.input.toDouble(),
+                attributes + ("kind" to attr("input"))
+            )
+            instruments.tokens.add(
+                message.usage.output.toDouble(),
+                attributes + ("kind" to attr("output"))
+            )
+            instruments.tokens.add(
+                message.usage.cacheRead.toDouble(),
+                attributes + ("kind" to attr("cache_read"))
+            )
+            instruments.tokens.add(
+                message.usage.cacheWrite.toDouble(),
+                attributes + ("kind" to attr("cache_write"))
+            )
+            instruments.cost.add(message.usage.cost.total, attributes)
+        }
+    }
+
+    private fun elapsedMs(): Double = started.elapsedNow().toDouble(DurationUnit.MILLISECONDS)
+}
+
+private fun StopReason.telemetryWire(): String = when (this) {
+    StopReason.PENDING -> "pending"
+    StopReason.STOP -> "stop"
+    StopReason.LENGTH -> "length"
+    StopReason.TOOL_USE -> "toolUse"
+    StopReason.ERROR -> "error"
+    StopReason.ABORTED -> "aborted"
+    StopReason.DEFERRED -> "deferred"
+}
+
+private fun AssistantMessageEvent.withStreamDuration(
+    startedAt: Long,
+    startedMark: TimeMark
+): AssistantMessageEvent = when (this) {
+    is AssistantMessageEvent.Done -> copy(
+        message = message.withStreamDuration(startedAt, startedMark)
+    )
+
+    is AssistantMessageEvent.Error -> copy(
+        error = error.withStreamDuration(startedAt, startedMark)
+    )
+
+    else -> this
+}
+
+private fun AssistantMessage.withStreamDuration(
+    startedAt: Long,
+    startedMark: TimeMark
+): AssistantMessage {
+    if (durationMs != null || timestamp < startedAt) return this
+    val elapsed = startedMark.elapsedNow().toDouble(DurationUnit.MILLISECONDS)
+    return copy(durationMs = elapsed.roundToLong().coerceAtLeast(0))
 }
 
 /**
@@ -284,7 +513,8 @@ fun calculateCost(model: Model, usage: Usage): Cost {
         input = (rates.input / 1_000_000.0) * usage.input,
         output = (rates.output / 1_000_000.0) * usage.output,
         cacheRead = (rates.cacheRead / 1_000_000.0) * usage.cacheRead,
-        cacheWrite = (rates.cacheWrite * shortWrite + rates.input * 2 * longWrite) / 1_000_000.0
+        cacheWrite = (rates.cacheWrite * shortWrite + rates.input * 2 * longWrite) / 1_000_000.0,
+        totalFromProvider = false
     )
     return cost.copy(total = cost.input + cost.output + cost.cacheRead + cost.cacheWrite)
 }

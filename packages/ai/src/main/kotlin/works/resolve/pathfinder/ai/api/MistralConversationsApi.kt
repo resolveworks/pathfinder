@@ -171,7 +171,7 @@ internal fun buildMistralOptions(
         } else {
             null
         },
-        telemetryContext = options.telemetryContext
+        telemetryContext = options.telemetry
     )
 }
 

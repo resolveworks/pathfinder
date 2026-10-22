@@ -272,4 +272,64 @@ class TelemetryContractTest {
             span.setStatus(SpanStatus.Ok)
         }
     }
+
+    @Test
+    fun `metrics record instrument metadata and detached measurements`() = runTest {
+        val context = InMemoryTelemetryContext()
+        val histogram = context.histogram(
+            "pf.duration",
+            HistogramOptions(description = "Duration", unit = "ms", boundaries = listOf(1.0, 2.0))
+        )
+        var attributes = mapOf("tags" to attr(*arrayOf("original")))
+        context.startSpan(SpanOptions("pf.request")) { span ->
+            histogram.record(1.0, attributes, span)
+            attributes = mapOf("tags" to attr(*arrayOf("mutated")))
+        }
+        context.counter("pf.bytes", InstrumentOptions(description = "Bytes", unit = "By"))
+            .add(128.0, mapOf("direction" to attr("out")))
+        context.upDownCounter("pf.active").add(-1.0)
+
+        val measurements = context.getMetrics()
+        assertEquals(
+            listOf("pf.duration", "pf.bytes", "pf.active"),
+            measurements.map { it.name }
+        )
+        assertEquals(
+            InMemoryTelemetryContext.RecordedTelemetryMeasurement(
+                kind = "histogram",
+                name = "pf.duration",
+                description = "Duration",
+                unit = "ms",
+                boundaries = listOf(1.0, 2.0),
+                value = 1.0,
+                attributes = mapOf("tags" to attr(*arrayOf("original")))
+            ),
+            measurements[0]
+        )
+        assertEquals("counter", measurements[1].kind)
+        assertEquals("By", measurements[1].unit)
+        assertEquals("upDownCounter", measurements[2].kind)
+
+        val snapshot = measurements[0]
+        (snapshot.boundaries as MutableList<Double>).add(3.0)
+        (snapshot.attributes as MutableMap<String, AttributeValue>)["tags"] = attr("changed")
+        assertEquals(listOf(1.0, 2.0), context.getMetrics()[0].boundaries)
+        assertEquals(attr(*arrayOf("original")), context.getMetrics()[0].attributes["tags"])
+    }
+
+    @Test
+    fun `noop metric instruments are shared and inert`() = runTest {
+        assertSame(NOOP_TELEMETRY_METRICS.counter("bytes"), NOOP_TELEMETRY_METRICS.counter("other"))
+        assertSame(
+            NOOP_TELEMETRY_METRICS.upDownCounter("active"),
+            NOOP_TELEMETRY_METRICS.upDownCounter("other")
+        )
+        assertSame(
+            NOOP_TELEMETRY_METRICS.histogram("duration"),
+            NOOP_TELEMETRY_METRICS.histogram("other")
+        )
+        NOOP_TELEMETRY_CONTEXT.metrics!!.counter("bytes").add(1.0)
+        NOOP_TELEMETRY_CONTEXT.metrics!!.histogram("duration").record(1.0)
+        assertSame(NOOP_TELEMETRY_METRICS, NOOP_TELEMETRY_CONTEXT.metrics)
+    }
 }

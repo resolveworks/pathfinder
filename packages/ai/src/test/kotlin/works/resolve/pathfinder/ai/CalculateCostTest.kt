@@ -26,6 +26,7 @@ class CalculateCostTest {
         assertEquals(40 * 0.3 / 1_000_000, cost.cacheRead, 1e-12)
         assertEquals(10 * 3.75 / 1_000_000, cost.cacheWrite, 1e-12)
         assertEquals(cost.input + cost.output + cost.cacheRead + cost.cacheWrite, cost.total, 1e-12)
+        assertEquals(false, cost.totalFromProvider)
     }
 
     @Test
