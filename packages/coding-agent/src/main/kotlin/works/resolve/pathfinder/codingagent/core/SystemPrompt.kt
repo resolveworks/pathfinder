@@ -1,0 +1,156 @@
+package works.resolve.pathfinder.codingagent.core
+
+import works.resolve.pathfinder.agent.AgentTool
+import works.resolve.pathfinder.ai.SystemMessage
+import works.resolve.pathfinder.ai.utils.getSystemMessageText
+
+/**
+ * Ordered system prompt sections, keyed by name. `preamble` is untagged
+ * text; every other section is wrapped in a tag of the same name so the
+ * model can match later updates to it. These become `SystemMessage.sections`
+ * in the transcript.
+ */
+typealias SystemPromptSections = Map<String, String>
+
+/**
+ * User-configurable prompt inputs: a custom prompt replacing the default
+ * prefix, and text appended as the `addendum` section.
+ */
+data class PromptConfig(
+    /** Custom system prompt replacing the default prefix (pi's customPrompt). */
+    val customPrompt: String? = null,
+    /** Text appended as the `addendum` section (pi's appendSystemPrompt). */
+    val appendSystemPrompt: String = ""
+)
+
+// pi's static persona header; the harness name is pathfinder's.
+private const val PREAMBLE =
+    "You are an expert research assistant operating inside pathfinder, a research agent harness. " +
+        "You help users by searching the web, fetching pages, and synthesizing information."
+
+/**
+ * pi's buildRules: set-deduped on the trimmed rule, insertion-ordered —
+ * pi's file-exploration rule first (only the bash branch can fire here:
+ * grep/find/ls/powershell are unported, and no tool of those names reaches
+ * this prompt), then per-tool guidelines in tool order, then the
+ * always-on pair.
+ */
+private fun buildRules(activeTools: List<AgentTool>): String {
+    val rules = mutableListOf<String>()
+    val seen = HashSet<String>()
+    fun addRule(rule: String) {
+        val normalized = rule.trim()
+        if (normalized.isEmpty() || !seen.add(normalized)) return
+        rules.add(normalized)
+    }
+
+    val toolNames = activeTools.map { it.definition.name }.toSet()
+    if ("bash" in toolNames) {
+        addRule("Use bash for file operations like ls, rg, find")
+    }
+
+    for (tool in activeTools) {
+        for (guideline in tool.promptGuidelines) {
+            addRule(guideline)
+        }
+    }
+    addRule("Be concise in your responses")
+    addRule("Show file paths clearly when working with files")
+    return rules.joinToString("\n") { "- $it" }
+}
+
+/**
+ * Build the ordered, independently replaceable sections of the structured
+ * system prompt: `preamble`, `tools`, `rules`, and an optional `addendum`
+ * from [PromptConfig.appendSystemPrompt] as the final section after
+ * `rules`. A custom prompt replaces the default prefix, so the `tools` and
+ * `rules` sections are not emitted.
+ *
+ * Divergences from pi (reduced producers):
+ * - Pi also emits `docs` (pi-docs paths), `project_context`, `skills`,
+ *   forced prompts, and extension-contributed sections; none has a
+ *   pathfinder producer. The custom-tools remark under `tools` is likewise
+ *   an unported pi-only concern, as are pi's option-normalization and
+ *   prompt-state layers (`normalizeBuildSystemPromptOptions`,
+ *   `buildSystemPromptState`), which exist to hand extensions a mutable
+ *   options object and to carry forced prompts.
+ * - Like pi, a persona prompt is always sent — an empty tool set yields
+ *   the preamble with "(none)" in `tools`, never an absent prompt.
+ *
+ * Note on pi's `packages/ai/src/session-resources.ts`: it is NOT a
+ * system-prompt resources concept — it is a session-scoped cleanup registry
+ * (`registerSessionResourceCleanup`/`cleanupSessionResources`) whose only
+ * registration closes the Codex adapter's cached WebSockets on session
+ * dispose. That omission is documented on the Codex adapter's own KDoc (its
+ * connection pool owns cleanup via idle TTL / max connection age); nothing
+ * here is un-ported. The system-prompt-adjacent "resources" pi does have —
+ * skill and prompt-template invocation formatting (`harness/skills.ts`,
+ * `harness/prompt-templates.ts`, tested by `resource-formatting.test.ts`;
+ * loaded at HEAD by coding-agent's fs-based `resource-loader.ts`) — belong
+ * to the unported harness skills / prompt-template surface, which this
+ * file's first divergence bullet already covers. Not planned unless pi's
+ * interactive path starts feeding loaded resources into the agent-level
+ * system prompt.
+ */
+fun buildSystemPromptSections(
+    activeTools: List<AgentTool>,
+    config: PromptConfig = PromptConfig()
+): SystemPromptSections {
+    val promptSections = LinkedHashMap<String, String>()
+    if (!config.customPrompt.isNullOrEmpty()) {
+        promptSections["preamble"] = config.customPrompt
+    } else {
+        // Inclusion rule: pi's `!!toolSnippets[name]` — only a null or empty
+        // snippet hides a tool; the snippet text is used verbatim.
+        val visibleTools = activeTools.mapNotNull { tool ->
+            tool.promptSnippet?.takeIf { it.isNotEmpty() }?.let { tool.definition.name to it }
+        }
+        val toolsList =
+            if (visibleTools.isNotEmpty()) {
+                visibleTools.joinToString("\n") { (name, snippet) -> "- $name: $snippet" }
+            } else {
+                "(none)"
+            }
+
+        promptSections["preamble"] = PREAMBLE
+        promptSections["tools"] = toolsList
+        promptSections["rules"] = buildRules(activeTools)
+    }
+    if (config.appendSystemPrompt.isNotEmpty()) {
+        promptSections["addendum"] = config.appendSystemPrompt
+    }
+
+    val sections = LinkedHashMap<String, String>()
+    for ((name, content) in promptSections) {
+        sections[name] = if (name == "preamble") content else "<$name>\n$content\n</$name>"
+    }
+    return sections
+}
+
+/** Build the system prompt text, rendered exactly as the transcript's system message replays it. */
+fun buildSystemPrompt(activeTools: List<AgentTool>, config: PromptConfig = PromptConfig()): String =
+    getSystemMessageText(
+        SystemMessage(
+            content = emptyList(),
+            sections = buildSystemPromptSections(activeTools, config)
+        )
+    )
+
+/**
+ * Diff the sections the model currently has (replayed from the transcript,
+ * so never null) against the desired ones. Returns a `SystemMessage.sections`
+ * patch, or null when nothing changed.
+ */
+fun diffSystemPromptSections(
+    previous: Map<String, String?>,
+    current: SystemPromptSections
+): Map<String, String?>? {
+    val patch = LinkedHashMap<String, String?>()
+    for ((name, text) in current) {
+        if (previous[name] != text) patch[name] = text
+    }
+    for (name in previous.keys) {
+        if (!current.containsKey(name)) patch[name] = null
+    }
+    return if (patch.isEmpty()) null else patch
+}

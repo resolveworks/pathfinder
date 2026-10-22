@@ -130,7 +130,7 @@ class JsonlCodecTest {
         )
         entries.forEach { assertEquals(it, roundtripEntry(it)) }
 
-        // Compaction usage roundtrips.
+        // Compaction usage and system-message replay roundtrip.
         val compaction = CompactionEntry(
             id = "e5",
             parentId = "e4",
@@ -138,7 +138,12 @@ class JsonlCodecTest {
             summary = "sum2",
             firstKeptEntryId = "e4",
             tokensBefore = 200,
-            usage = Usage(1, 2, 0, 0, 0, 0, 3, Cost(0.0, 0.0, 0.0, 0.0, 0.0))
+            usage = Usage(1, 2, 0, 0, 0, 0, 3, Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
+            systemMessage = SystemMessage(
+                content = listOf(TextContent("prompt")),
+                sections = mapOf("preamble" to "researcher"),
+                timestamp = 5L
+            )
         )
         assertEquals(compaction, roundtripEntry(compaction))
     }

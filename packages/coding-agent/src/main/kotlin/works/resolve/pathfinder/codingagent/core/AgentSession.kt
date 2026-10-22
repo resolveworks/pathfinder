@@ -34,6 +34,7 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.clampThinkingLevel
@@ -43,6 +44,7 @@ import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
 import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.ai.utils.contentText
+import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
 import works.resolve.pathfinder.ai.utils.isContextOverflow
 import works.resolve.pathfinder.ai.utils.isRecoverableLength
 import works.resolve.pathfinder.ai.utils.retryDelayMs
@@ -82,10 +84,12 @@ data class QueuedMessages(
  * Layering mirrors pi: [Agent] keeps only the single-run
  * prompt/continue/abort primitives, and everything session-scoped — retry
  * counter lifetime across continues, event emission, tree persistence
- * points — lives here. The tool loadout is transcript state: tool changes
- * are declared by the agent loop. Like pi, a storage failure propagates out
- * of the event sink and fails the run: the [Agent] awaits the sink inline,
- * so a failed append surfaces from [prompt].
+ * points — lives here. The system prompt and tool loadout are transcript
+ * state (mid-conversation system messages): each request records desired
+ * prompt changes as a section-patch system message, and tool changes are
+ * declared by the agent loop. Like pi, a storage failure propagates out of the
+ * event sink and fails the run: the [Agent] awaits the sink inline, so a
+ * failed append surfaces from [prompt].
  *
  * Tree mutation is serialized by the manager's internal mutex (pi relies on
  * JS single-threadedness); no additional conversation lock exists here.
@@ -100,6 +104,10 @@ class AgentSession(
     scopedModels: List<ScopedModel> = emptyList(),
     /** Tools available for per-session activation. */
     private val tools: List<AgentTool> = emptyList(),
+    /** Custom system prompt replacing the default prefix (pi's customPrompt). */
+    private val customPrompt: String? = null,
+    /** Text appended as the addendum section (pi's appendSystemPrompt). */
+    private val appendSystemPrompt: String = "",
     /** Provider stack for compaction summarization; null disables automatic compaction. */
     private val models: Models? = null,
     /** Injectable backoff sleep so tests never wait. */
@@ -221,6 +229,12 @@ class AgentSession(
             autoCompactionInProgress ||
             branchSummaryJob != null
 
+    /** The session's complete prompt configuration, derived once from the constructor inputs. */
+    private val promptConfig = PromptConfig(
+        customPrompt = customPrompt,
+        appendSystemPrompt = appendSystemPrompt
+    )
+
     /** Name→tool registry over the constructor list. */
     private val toolRegistry: Map<String, AgentTool> = tools.associateBy { it.definition.name }
 
@@ -248,19 +262,25 @@ class AgentSession(
         // branch fold's transcript/thinking/model restoration and seeds the
         // new-session configuration entries. The default loadout is the full
         // registry (pi's _buildRuntime activates its built-in subset; the
-        // app layer narrows via setActiveToolsByName).
+        // app layer narrows via setActiveToolsByName), and a transcript that
+        // declares a loadout overrides it (pi's constructor-time
+        // _restoreToolsFromTranscript).
         if (tools.isNotEmpty()) {
             agent.setTools(resolveTools(tools.map { it.definition.name }))
         }
+        restoreToolsFromTranscript()
         installAgentNextTurnRefresh()
     }
 
     /**
      * pi's _installAgentNextTurnRefresh: before every assistant response
      * after the first, run the mid-run compaction checkpoint, then refresh
-     * context (tools, messages) and model/thinkingLevel from the live agent
-     * state — this is what makes mid-run setter calls take effect on the next
-     * turn. Tool changes are declared by the agent loop.
+     * context (tools, prompt sections, messages) and model/thinkingLevel
+     * from the live agent state — this is what makes mid-run setter calls
+     * take effect on the next turn. The desired prompt is applied as a
+     * section-patch system message carried by [AgentLoopTurnUpdate.messages]
+     * (pi's run-options refresh), so mid-run loadout changes reach the
+     * model — and the transcript — like any other prompt update.
      *
      * The hook is also invoked once more inside the loop's post-abort
      * [NonCancellable] tail. pi's hook does not consult the run's abort
@@ -273,9 +293,10 @@ class AgentSession(
     private fun installAgentNextTurnRefresh() {
         agent.prepareNextTurnWithContext = { turn ->
             val context = compactBeforeNextAssistantResponse(turn.context)
-            applyToolLoadout(getActiveToolNames())
+            val updateMessage = preparePromptAndToolLoadout(getActiveToolNames(), context.messages)
             AgentLoopTurnUpdate(
                 context = context.copy(tools = agent.state.value.tools.toList()),
+                messages = updateMessage?.let(::listOf),
                 model = agent.state.value.model,
                 thinkingLevel = agent.state.value.thinkingLevel
             )
@@ -310,13 +331,28 @@ class AgentSession(
     private fun findLastAssistantMessage(): AssistantMessage? =
         agent.state.value.messages.lastOrNull { it is AssistantMessage } as AssistantMessage?
 
+    /**
+     * Current effective system prompt, including changes not yet sent to
+     * the model (pi's getter; its run/base prompt-options distinction has
+     * no pathfinder producer — extension mutations and forced prompts — so
+     * this renders the live loadout).
+     */
+    val systemPrompt: String get() = buildSystemPrompt(
+        agent.state.value.tools.toList(),
+        promptConfig
+    )
+
     fun getActiveToolNames(): List<String> = agent.state.value.tools.map { it.definition.name }
 
     /**
      * Set active tools by name: only tools in the registry can be enabled,
      * unknown names are ignored, and a name appearing twice resolves to two
-     * entries (no dedupe — the request-time loadout in [applyToolLoadout]
-     * dedupes). Takes effect on the next request.
+     * entries (no dedupe — the request-time loadout in
+     * [preparePromptAndToolLoadout] dedupes). Takes effect on the next
+     * request, where the desired prompt is re-derived and recorded as a
+     * section patch; the loadout itself is durable through the
+     * transcript's system-message tool declarations, restored by
+     * [restoreToolsFromTranscript] on reload and navigation.
      */
     fun setActiveToolsByName(toolNames: List<String>) {
         agent.setTools(toolNames.mapNotNull(toolRegistry::get))
@@ -325,9 +361,52 @@ class AgentSession(
     private fun resolveTools(toolNames: List<String>): List<AgentTool> =
         toolNames.mapNotNull(toolRegistry::get)
 
-    /** Apply the executable tool loadout for the next request, registry-filtered and deduped. */
-    private fun applyToolLoadout(toolNames: List<String>) {
-        agent.setTools(resolveTools(toolNames.distinct().filter(toolRegistry::containsKey)))
+    /**
+     * pi's _preparePromptAndToolLoadout: apply the prompt and tool loadout
+     * for the next request. Sets the executable tools from [toolNames]
+     * (deduped, registry-filtered) and returns a system message patching
+     * the prompt sections the model currently has (replayed from
+     * [messages]), or null when the prompt is unchanged. Tool changes are
+     * declared by the agent loop before the request.
+     *
+     * Divergence: pi threads a mutable normalized-options object —
+     * extensions edit it in before_agent_start and may force a prompt that
+     * replaces the provider's leading system message without being
+     * recorded. Pathfinder has no producer for either, so the loadout is
+     * the live tool set and the transcript always records section patches.
+     */
+    private fun preparePromptAndToolLoadout(
+        toolNames: List<String>,
+        messages: List<Message> = agent.state.value.messages
+    ): SystemMessage? {
+        val activeToolNames = toolNames.distinct().filter(toolRegistry::containsKey)
+        agent.setTools(resolveTools(activeToolNames))
+        val sections = diffSystemPromptSections(
+            getCurrentSystemMessage(messages)?.sections ?: emptyMap(),
+            buildSystemPromptSections(resolveTools(activeToolNames), promptConfig)
+        )
+        return sections?.let {
+            SystemMessage(
+                content = emptyList(),
+                sections = it,
+                timestamp = clock.now().toEpochMilliseconds()
+            )
+        }
+    }
+
+    /**
+     * pi's _restoreToolsFromTranscript: restore the active tool loadout the
+     * session transcript declares, if it declares one. A leading system
+     * message without tool declarations restores an empty loadout (pi
+     * transcripts always declare their tools); the constructor's default
+     * loadout applies only when the transcript has no system message.
+     */
+    private fun restoreToolsFromTranscript() {
+        val current = getCurrentSystemMessage(manager.buildSessionContext().messages) ?: return
+        val toolNames = current.toolsAdded.orEmpty()
+            .map { it.name }
+            .filter(toolRegistry::containsKey)
+        agent.setTools(resolveTools(toolNames))
     }
 
     /**
@@ -412,9 +491,14 @@ class AgentSession(
                 runPrePromptCompaction(lastAssistant)
             }
 
-            applyToolLoadout(getActiveToolNames())
             val promptMessage = UserMessage.ofText(text, clock.now().toEpochMilliseconds())
-            val promptMessages = listOf(promptMessage)
+            // pi's before_agent_start block, minus the extension producers:
+            // the live loadout is authoritative, so apply the prompt/tool
+            // loadout and record the desired prompt as a system message
+            // ahead of the user message (pi's unshift).
+            val updateMessage =
+                preparePromptAndToolLoadout(getActiveToolNames(), agent.state.value.messages)
+            val promptMessages = listOfNotNull(updateMessage, promptMessage)
             // The loop runs on loopDispatcher: prompt() is Main-friendly in the app
             // (per-token reduce, event emission, and tool execution leave the
             // UI thread) while staying dispatcher-agnostic in tests. Tools
@@ -892,6 +976,9 @@ class AgentSession(
         }
 
         agent.replaceTranscript(manager.buildSessionContext().messages)
+        // pi's _restoreToolsFromTranscript: the target's transcript
+        // declares the loadout at that point in the tree.
+        restoreToolsFromTranscript()
 
         return NavigationResult(
             outcome = if (userMessage != null) {

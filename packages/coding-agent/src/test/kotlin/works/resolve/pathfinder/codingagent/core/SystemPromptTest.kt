@@ -1,0 +1,242 @@
+package works.resolve.pathfinder.codingagent.core
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import works.resolve.pathfinder.agent.AgentTool
+import works.resolve.pathfinder.agent.AgentToolResult
+import works.resolve.pathfinder.agent.AgentToolUpdateCallback
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.Tool
+
+class SystemPromptTest {
+
+    private class FakeTool(
+        val name: String,
+        override val promptSnippet: String? = null,
+        override val promptGuidelines: List<String> = emptyList()
+    ) : AgentTool {
+        override val definition =
+            Tool(name, "$name tool", buildJsonObject { put("type", "object") })
+        override val label = name
+
+        override suspend fun execute(
+            toolCallId: String,
+            arguments: JsonObject,
+            onUpdate: AgentToolUpdateCallback
+        ) = AgentToolResult(content = listOf(TextContent("ok")))
+    }
+
+    @Test
+    fun `empty active tools still yield the preamble`() {
+        val persona =
+            "You are an expert research assistant operating inside pathfinder, " +
+                "a research agent harness. You help users by searching the web, " +
+                "fetching pages, and synthesizing information."
+        assertEquals(
+            persona + "\n\n" +
+                "<tools>\n" +
+                "(none)\n" +
+                "</tools>\n" +
+                "\n" +
+                "<rules>\n" +
+                "- Be concise in your responses\n" +
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
+            buildSystemPrompt(emptyList())
+        )
+    }
+
+    @Test
+    fun `tools without snippets render none and only always-on guidelines`() {
+        val prompt = buildSystemPrompt(listOf(FakeTool("web_search")))
+        assertEquals(
+            "You are an expert research assistant operating inside pathfinder, " +
+                "a research agent harness. " +
+                "You help users by searching the web, fetching pages, " +
+                "and synthesizing information.\n\n" +
+                "<tools>\n" +
+                "(none)\n" +
+                "</tools>\n" +
+                "\n" +
+                "<rules>\n" +
+                "- Be concise in your responses\n" +
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
+            prompt
+        )
+    }
+
+    @Test
+    fun `mixed tools list only snippet-bearing tools`() {
+        val prompt = buildSystemPrompt(
+            listOf(
+                FakeTool("bash", promptSnippet = "Run shell commands"),
+                FakeTool("hidden"),
+                FakeTool("read", promptSnippet = "Read file contents")
+            )
+        )
+        assertEquals(
+            "You are an expert research assistant operating inside pathfinder, " +
+                "a research agent harness. " +
+                "You help users by searching the web, fetching pages, " +
+                "and synthesizing information.\n\n" +
+                "<tools>\n" +
+                "- bash: Run shell commands\n" +
+                "- read: Read file contents\n" +
+                "</tools>\n" +
+                "\n" +
+                "<rules>\n" +
+                "- Use bash for file operations like ls, rg, find\n" +
+                "- Be concise in your responses\n" +
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
+            prompt
+        )
+    }
+
+    @Test
+    fun `tool guidelines come first in tool order and are deduped keeping first occurrence`() {
+        val prompt = buildSystemPrompt(
+            listOf(
+                FakeTool(
+                    "web_search",
+                    promptSnippet = "Search the web",
+                    promptGuidelines = listOf("Cite sources", "  Cite sources  ", "", "   ")
+                ),
+                FakeTool(
+                    "web_fetch",
+                    promptSnippet = "Fetch a URL",
+                    promptGuidelines = listOf("Cite sources", "Prefer web_fetch over guessing URLs")
+                )
+            )
+        )
+        assertEquals(
+            "You are an expert research assistant operating inside pathfinder, " +
+                "a research agent harness. " +
+                "You help users by searching the web, fetching pages, " +
+                "and synthesizing information.\n\n" +
+                "<tools>\n" +
+                "- web_search: Search the web\n" +
+                "- web_fetch: Fetch a URL\n" +
+                "</tools>\n" +
+                "\n" +
+                "<rules>\n" +
+                "- Cite sources\n" +
+                "- Prefer web_fetch over guessing URLs\n" +
+                "- Be concise in your responses\n" +
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
+            prompt
+        )
+    }
+
+    @Test
+    fun `always-on guidelines dedupe against tool guidelines`() {
+        val prompt = buildSystemPrompt(
+            listOf(FakeTool("echo", promptGuidelines = listOf("Be concise in your responses")))
+        )
+        assertEquals(
+            "You are an expert research assistant operating inside pathfinder, " +
+                "a research agent harness. " +
+                "You help users by searching the web, fetching pages, " +
+                "and synthesizing information.\n\n" +
+                "<tools>\n" +
+                "(none)\n" +
+                "</tools>\n" +
+                "\n" +
+                "<rules>\n" +
+                "- Be concise in your responses\n" +
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
+            prompt
+        )
+    }
+
+    @Test
+    fun `whitespace-only snippet is kept verbatim like pi truthiness`() {
+        val prompt = buildSystemPrompt(
+            listOf(
+                FakeTool("bash", promptSnippet = "   "),
+                FakeTool("read", promptSnippet = "Read file contents")
+            )
+        )
+        assertEquals(
+            "You are an expert research assistant operating inside pathfinder, " +
+                "a research agent harness. " +
+                "You help users by searching the web, fetching pages, " +
+                "and synthesizing information.\n\n" +
+                "<tools>\n" +
+                "- bash:    \n" +
+                "- read: Read file contents\n" +
+                "</tools>\n" +
+                "\n" +
+                "<rules>\n" +
+                "- Use bash for file operations like ls, rg, find\n" +
+                "- Be concise in your responses\n" +
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
+            prompt
+        )
+    }
+
+    @Test
+    fun `multi-line snippet is preserved verbatim`() {
+        val prompt = buildSystemPrompt(
+            listOf(FakeTool("web_search", promptSnippet = "Search\n  the   web\r\nfor facts  "))
+        )
+        assertEquals(
+            "You are an expert research assistant operating inside pathfinder, " +
+                "a research agent harness. " +
+                "You help users by searching the web, fetching pages, " +
+                "and synthesizing information.\n\n" +
+                "<tools>\n" +
+                "- web_search: Search\n  the   web\r\nfor facts  \n" +
+                "</tools>\n" +
+                "\n" +
+                "<rules>\n" +
+                "- Be concise in your responses\n" +
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
+            prompt
+        )
+    }
+
+    @Test
+    fun `custom prompt replaces the default prefix and omits tools and rules`() {
+        val prompt = buildSystemPrompt(
+            listOf(FakeTool("web_search", promptSnippet = "Search the web")),
+            PromptConfig(customPrompt = "You are a custom research assistant.")
+        )
+        assertEquals("You are a custom research assistant.", prompt)
+    }
+
+    @Test
+    fun `append prompt emits the addendum after rules`() {
+        val prompt = buildSystemPrompt(
+            emptyList(),
+            PromptConfig(appendSystemPrompt = "Prefer primary sources.")
+        )
+        assertEquals(
+            "You are an expert research assistant operating inside pathfinder, " +
+                "a research agent harness. " +
+                "You help users by searching the web, fetching pages, " +
+                "and synthesizing information.\n\n" +
+                "<tools>\n" +
+                "(none)\n" +
+                "</tools>\n" +
+                "\n" +
+                "<rules>\n" +
+                "- Be concise in your responses\n" +
+                "- Show file paths clearly when working with files\n" +
+                "</rules>\n" +
+                "\n" +
+                "<addendum>\n" +
+                "Prefer primary sources.\n" +
+                "</addendum>",
+            prompt
+        )
+    }
+}

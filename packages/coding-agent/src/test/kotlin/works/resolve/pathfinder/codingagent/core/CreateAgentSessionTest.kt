@@ -162,7 +162,9 @@ class CreateAgentSessionTest {
             // restores model-b over the settings default.
             assertEquals(otherModel, result.session.model)
             assertEquals(ModelThinkingLevel.LOW, result.session.thinkingLevel)
-            // The restored transcript is the branch fold as-is.
+            // The restored transcript is the branch fold as-is: the prompt
+            // is transcript state now, recorded as a section patch at the
+            // next prompt rather than a seeded leading system message.
             assertEquals(2, result.session.state.value.messages.size)
             assertTrue(result.session.state.value.messages[0] is UserMessage)
             assertEquals(

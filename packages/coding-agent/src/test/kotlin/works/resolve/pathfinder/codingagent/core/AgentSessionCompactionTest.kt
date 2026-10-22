@@ -2,6 +2,7 @@ package works.resolve.pathfinder.codingagent.core
 
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.io.path.createTempDirectory
+import kotlin.test.assertIs
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
@@ -24,6 +25,7 @@ import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
@@ -57,7 +59,7 @@ class AgentSessionCompactionTest {
                 maxTokens = 100
             )
             val faux = FauxProvider(model)
-            val toolResult = "large-tool-result:" + "x".repeat(8_000)
+            val toolResult = "large-tool-result:" + "x".repeat(6_800)
             val largeTool = object : AgentTool {
                 override val definition = Tool(
                     "large_result",
@@ -75,6 +77,7 @@ class AgentSessionCompactionTest {
             val session = AgentSession(
                 agent = Agent(
                     model = model,
+                    systemPrompt = "You are a test assistant.",
                     tools = listOf(largeTool),
                     streamFn = modelsStreamFn(faux.models)
                 ),
@@ -150,6 +153,9 @@ class AgentSessionCompactionTest {
 
     @Test
     fun `estimatedTokensAfter uses the compaction-local estimator`() = runTest {
+        // pi's compaction-local estimator counts system messages as prompt
+        // state (0 tokens): the replayed prompt and mid-conversation
+        // patches do not inflate the post-compaction estimate.
         val faux = FauxProvider()
         faux.setResponses(assistant("4"), assistant("SUMMARY"), assistant("SUMMARY"))
         val manager = SessionManager.create(
@@ -173,10 +179,18 @@ class AgentSessionCompactionTest {
         )
 
         session.prompt("What is 2+2? Reply with just the number.")
+        manager.appendMessage(
+            SystemMessage(
+                content = listOf(TextContent("patch:".repeat(2_000))),
+                timestamp = 3L
+            )
+        )
         val result = session.compact()
 
         val context = manager.buildSessionContext().messages
+        assertTrue(context.any { it is SystemMessage })
         val expected = context
+            .filterNot { it is SystemMessage }
             .sumOf { works.resolve.pathfinder.ai.utils.estimateMessageTokens(it) }
         assertEquals(expected, result.estimatedTokensAfter)
     }
@@ -218,7 +232,9 @@ class AgentSessionCompactionTest {
         assertTrue(result.tokensBefore > 0)
         val messages = session.state.value.messages
         assertTrue(messages.isNotEmpty())
-        val firstMessage = messages.first() as UserMessage
+        // The compacted context leads with the replayed system message.
+        assertIs<SystemMessage>(messages.first())
+        val firstMessage = messages.first { it is UserMessage } as UserMessage
         assertTrue((firstMessage.content.single() as TextContent).text.contains(result.summary))
     }
 

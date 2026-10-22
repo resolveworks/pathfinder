@@ -54,6 +54,7 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.constrainedSamplingToJson
+import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
@@ -93,7 +94,9 @@ data class MessageEntry(
 /**
  * A compaction cut: the summary replacing the compacted history and the id
  * of the first entry kept after it (entries between the previous leaf path
- * root and that id are summarized away).
+ * root and that id are summarized away). [systemMessage] is the complete
+ * prompt and tool state replayed at this boundary; it leads the compacted
+ * context in place of the system messages dropped from the kept cut.
  */
 data class CompactionEntry(
     override val id: String,
@@ -103,7 +106,8 @@ data class CompactionEntry(
     val firstKeptEntryId: String,
     val tokensBefore: Int,
     /** Usage from the LLM call(s) that generated this summary. */
-    val usage: Usage? = null
+    val usage: Usage? = null,
+    val systemMessage: SystemMessage? = null
 ) : SessionEntry()
 
 /**
@@ -264,8 +268,10 @@ data class SessionContext(
 fun sessionEntryToContextMessages(entry: SessionEntry): List<Message> = when (entry) {
     is MessageEntry -> listOf(entry.message)
 
-    is CompactionEntry ->
-        listOf(createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp))
+    is CompactionEntry -> buildList {
+        entry.systemMessage?.let(::add)
+        add(createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp))
+    }
 
     // Upstream guards summary truthiness; with a non-null summary here, that
     // reduces to excluding the empty string.
@@ -304,7 +310,10 @@ fun buildContextEntries(
     for (i in 0 until compactionIndex) {
         val entry = pathEntries[i]
         if (entry.id == compaction!!.firstKeptEntryId) foundFirstKept = true
-        if (foundFirstKept) contextEntries.add(entry)
+        // System messages among the kept entries are dropped: the compaction
+        // entry's systemMessage already carries their replay.
+        val isSystemMessage = entry is MessageEntry && entry.message is SystemMessage
+        if (foundFirstKept && !isSystemMessage) contextEntries.add(entry)
     }
     contextEntries.addAll(pathEntries.subList(compactionIndex + 1, pathEntries.size))
     return contextEntries
@@ -469,6 +478,7 @@ internal object JsonlCodec {
                     put("firstKeptEntryId", entry.firstKeptEntryId)
                     put("tokensBefore", entry.tokensBefore)
                     entry.usage?.let { put("usage", encodeUsage(it)) }
+                    entry.systemMessage?.let { put("systemMessage", encodeMessage(it)) }
                 }
 
                 is ModelChangeEntry -> {
@@ -537,7 +547,10 @@ internal object JsonlCodec {
                 summary = obj.string("summary") ?: invalid(),
                 firstKeptEntryId = obj.string("firstKeptEntryId") ?: invalid(),
                 tokensBefore = obj.strictDouble("tokensBefore")?.toInt() ?: invalid(),
-                usage = obj["usage"]?.let(::decodeUsage)
+                usage = obj["usage"]?.let(::decodeUsage),
+                systemMessage = obj["systemMessage"]?.let {
+                    decodeMessage(it, timestamp) as? SystemMessage ?: invalid()
+                }
             )
 
             "model_change" -> ModelChangeEntry(
@@ -1120,7 +1133,9 @@ class SessionManager private constructor(
                 summary,
                 firstKeptEntryId,
                 tokensBefore,
-                usage
+                usage,
+                systemMessage = getCurrentSystemMessage(buildSessionContext().messages)
+                    ?.copy(timestamp = timestamp)
             )
         }
     }

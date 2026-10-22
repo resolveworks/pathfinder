@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentTool
@@ -25,6 +26,7 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.TranscriptContext
+import works.resolve.pathfinder.ai.utils.getCurrentSystemPrompt
 import works.resolve.pathfinder.ai.utils.getCurrentTools
 import works.resolve.pathfinder.codingagent.core.SessionManager
 
@@ -38,7 +40,11 @@ class AgentSessionToolsTest {
         baseUrl = "https://a.example.invalid"
     )
 
-    private class FakeTool(override val definition: Tool) : AgentTool {
+    private class FakeTool(
+        override val definition: Tool,
+        override val promptSnippet: String? = null,
+        override val promptGuidelines: List<String> = emptyList()
+    ) : AgentTool {
         override val label: String = definition.name
         override suspend fun execute(
             toolCallId: String,
@@ -47,7 +53,10 @@ class AgentSessionToolsTest {
         ): AgentToolResult = AgentToolResult(content = emptyList())
     }
 
-    private fun tool(name: String) = FakeTool(Tool(name, "tool $name", JsonObject(emptyMap())))
+    private fun tool(name: String, snippet: String? = "does $name") = FakeTool(
+        Tool(name, "tool $name", JsonObject(emptyMap())),
+        promptSnippet = snippet
+    )
 
     private fun assistant(text: String) = AssistantMessage(
         content = listOf(TextContent(text)),
@@ -99,9 +108,13 @@ class AgentSessionToolsTest {
             }
 
             assertEquals(
-                "registry default: all tools active",
+                "registry default: all tools active, prompt built",
                 listOf("web_search", "web_fetch"),
                 s.getActiveToolNames()
+            )
+            assertEquals(
+                buildSystemPrompt(listOf(webSearch, webFetch)),
+                s.systemPrompt
             )
 
             s.setActiveToolsByName(listOf("web_fetch", "nope", "web_search"))
@@ -115,12 +128,20 @@ class AgentSessionToolsTest {
                 listOf(webFetch, webSearch),
                 s.agent.state.value.tools
             )
+            assertEquals(
+                buildSystemPrompt(listOf(webFetch, webSearch)),
+                s.systemPrompt
+            )
             assertEquals("no session entry is appended", 0, s.sessionManager.getEntries().size)
 
             s.prompt("go")
             assertEquals(
                 listOf("web_fetch", "web_search"),
                 getCurrentTools(contexts.single().messages).map { it.name }
+            )
+            assertEquals(
+                buildSystemPrompt(listOf(webFetch, webSearch)),
+                getCurrentSystemPrompt(contexts.single().messages)
             )
         }
 
@@ -136,12 +157,13 @@ class AgentSessionToolsTest {
     }
 
     @Test
-    fun `an empty selection disables every tool`() = runTest {
+    fun `an empty selection still yields the persona prompt`() = runTest {
         val s = session(tools = listOf(tool("web_search")))
 
         s.setActiveToolsByName(emptyList())
 
         assertEquals(emptyList<String>(), s.getActiveToolNames())
+        assertEquals(buildSystemPrompt(emptyList()), s.systemPrompt)
     }
 
     @Test
@@ -152,6 +174,10 @@ class AgentSessionToolsTest {
         val s = session(tools = listOf(webSearch, webFetch))
 
         assertEquals(listOf("web_search", "web_fetch"), s.getActiveToolNames())
+        assertEquals(
+            buildSystemPrompt(listOf(webSearch, webFetch)),
+            s.systemPrompt
+        )
     }
 
     @Test
@@ -159,6 +185,7 @@ class AgentSessionToolsTest {
         val s = session()
 
         assertEquals(emptyList<String>(), s.getActiveToolNames())
+        assertEquals(buildSystemPrompt(emptyList()), s.systemPrompt)
 
         s.setActiveToolsByName(listOf("web_search"))
         assertEquals(
@@ -166,5 +193,6 @@ class AgentSessionToolsTest {
             emptyList<String>(),
             s.getActiveToolNames()
         )
+        assertEquals(buildSystemPrompt(emptyList()), s.systemPrompt)
     }
 }

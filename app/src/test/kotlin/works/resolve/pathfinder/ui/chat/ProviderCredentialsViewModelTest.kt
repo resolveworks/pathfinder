@@ -510,7 +510,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
 
             vm.onDraftChange("Hello")
             vm.send()
-            vm.awaitState { !it.isStreaming && it.messages.size == 2 }
+            vm.awaitState { !it.isStreaming && it.messages.size == 3 }
 
             vm.closeForTest()
         }
