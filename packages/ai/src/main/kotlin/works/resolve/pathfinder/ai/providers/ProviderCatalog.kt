@@ -492,7 +492,8 @@ private data class CompatDto(
         supportsAdditionalTools = supportsAdditionalTools ?: false,
         supportsToolSearch = supportsToolSearch ?: false,
         supportsExplicitPromptCacheMode = supportsExplicitPromptCacheMode ?: false,
-        supportsMaxOutputTokens = supportsMaxOutputTokens ?: true
+        supportsMaxOutputTokens = supportsMaxOutputTokens ?: true,
+        supportsMidConvoEffort = supportsMidConvoEffort ?: false
     )
 
     /** Per-field defaults mirror pi's getAnthropicCompat. */

@@ -11,6 +11,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -959,6 +960,75 @@ class OpenAiResponsesSharedTest {
             "gpt-5.5"
         )
         assertEquals(25.0, priorityGpt55.cost.input, 1e-9)
+
+        // GPT-6 reports Fast mode as "fast"; it prices like priority.
+        val fast = applyServiceTierPricing(
+            Usage(cost = works.resolve.pathfinder.ai.Cost(input = 10.0)),
+            "fast",
+            "gpt-6-luna"
+        )
+        assertEquals(20.0, fast.cost.input, 1e-9)
+    }
+
+    @Test
+    fun `completed streams with an unfinished tool call are rejected`() {
+        val s = state()
+        s.onEvent(
+            event(
+                """{"type":"response.output_item.added","output_index":0,
+                    "item":{"type":"function_call","id":"fc_1","call_id":"call_1",
+                        "name":"bash","arguments":""}}"""
+            )
+        )
+        s.onEvent(
+            event(
+                """{"type":"response.function_call_arguments.delta","output_index":0,
+                    "delta":"{\"command\":\"rm -rf /tmp/build"}"""
+            )
+        )
+        s.onEvent(
+            event("""{"type":"response.completed","response":{"id":"r","status":"completed"}}""")
+        )
+        val failure = assertFailsWith<ProviderStreamException> { s.assertTerminalEvent() }
+        assertEquals(
+            "OpenAI Responses stream completed with an unfinished tool call: bash (call_1|fc_1)",
+            failure.message
+        )
+    }
+
+    @Test
+    fun `finished malformed arguments replace the parsed prefix with an error`() {
+        val s = state()
+        val raw = """{"path":"README.md","content":"updated","mode":.5}"""
+        s.onEvent(
+            event(
+                """{"type":"response.output_item.added","output_index":0,
+                    "item":{"type":"function_call","id":"fc_1","call_id":"call_1",
+                        "name":"edit","arguments":""}}"""
+            )
+        )
+        s.onEvent(
+            event(
+                """{"type":"response.function_call_arguments.delta","output_index":0,
+                    "delta":"{\"path\":\"README.md\"}"}"""
+            )
+        )
+        s.onEvent(
+            event(
+                """{"type":"response.function_call_arguments.done","output_index":0,
+                    "arguments":${JsonPrimitive(raw)}}"""
+            )
+        )
+        s.onEvent(
+            event(
+                """{"type":"response.output_item.done","output_index":0,
+                    "item":{"type":"function_call","id":"fc_1","call_id":"call_1",
+                        "name":"edit","arguments":${JsonPrimitive(raw)}}}"""
+            )
+        )
+        val toolCall = s.partialSnapshot().content.single() as ToolCall
+        assertEquals(JsonObject(emptyMap()), toolCall.arguments)
+        assertTrue(toolCall.argumentsError!!.endsWith("Received arguments:\n$raw"))
     }
 
     @Test
@@ -1535,26 +1605,27 @@ class OpenAiResponsesSharedTest {
 
     @Test
     fun `empty text tool results use the no-output placeholder`() {
-        // pi b8b873b98 openai-responses-empty-tool-result: a text block with
-        // an empty string is not output — the placeholder is used and never
-        // mentions an attached image.
-        val input = OpenAiResponsesShared.convertResponsesMessages(
-            model(),
-            normalizeContext(
-                Context(
-                    messages = listOf(
-                        ToolResultMessage(
-                            toolCallId = "c",
-                            toolName = "t",
-                            content = listOf(TextContent(""))
+        // pi b8b873b98 openai-responses-empty-tool-result + #8720: whitespace-only
+        // output is empty, so the placeholder is used and never mentions an image.
+        for (text in listOf("", "\r\n", " \n\t")) {
+            val input = OpenAiResponsesShared.convertResponsesMessages(
+                model(),
+                normalizeContext(
+                    Context(
+                        messages = listOf(
+                            ToolResultMessage(
+                                toolCallId = "c",
+                                toolName = "t",
+                                content = listOf(TextContent(text))
+                            )
                         )
                     )
-                )
-            ),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
-        )
-        val output = input.single()["output"]!!.jsonPrimitive.content
-        assertEquals("(no tool output)", output)
+                ),
+                OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
+            )
+            val output = input.single()["output"]!!.jsonPrimitive.content
+            assertEquals("(no tool output)", output)
+        }
     }
 
     @Test

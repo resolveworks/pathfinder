@@ -11,6 +11,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -21,6 +22,7 @@ import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelCost
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.UserMessage
@@ -477,5 +479,37 @@ class AzureOpenAiResponsesApiTest {
             bodyOf(transport)["tools"]!!.jsonArray.single().jsonObject["strict"]!!
                 .jsonPrimitive.content.toBoolean()
         )
+    }
+
+    @Test
+    fun `thinking-level sampling params sit between model and request params`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completed().toTypedArray()))
+        val sampled = model.copy(
+            reasoning = true,
+            samplingParams = mapOf(
+                "temperature" to JsonPrimitive(1.0),
+                "top_p" to JsonPrimitive(0.95)
+            ),
+            samplingParamsByThinkingLevel = mapOf(
+                ModelThinkingLevel.LOW to mapOf(
+                    "temperature" to JsonPrimitive(0.6),
+                    "top_k" to JsonPrimitive(64)
+                )
+            )
+        )
+        api(transport).stream(
+            sampled,
+            context,
+            AzureOpenAiResponsesOptions(
+                apiKey = "k",
+                reasoningEffort = ModelThinkingLevel.LOW,
+                samplingParams = mapOf("top_p" to JsonPrimitive(0.5))
+            )
+        ).toList()
+        val body = bodyOf(transport)
+        assertEquals(0.6, body["temperature"]!!.jsonPrimitive.content.toDouble())
+        assertEquals(0.5, body["top_p"]!!.jsonPrimitive.content.toDouble())
+        assertEquals(64, body["top_k"]!!.jsonPrimitive.content.toInt())
     }
 }

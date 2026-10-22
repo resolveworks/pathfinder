@@ -28,7 +28,6 @@ import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.hasHeader
 import works.resolve.pathfinder.ai.headersToRecord
 import works.resolve.pathfinder.ai.mergeHeaders
-import works.resolve.pathfinder.ai.mergeSamplingParams
 import works.resolve.pathfinder.ai.toModelThinkingLevel
 import works.resolve.pathfinder.ai.toToolChoice
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
@@ -44,6 +43,7 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.ai.utils.resolveSamplingParams
 import works.resolve.pathfinder.ai.utils.resolveTranscript
 import works.resolve.pathfinder.ai.utils.resolveTranscriptTools
 import works.resolve.pathfinder.telemetry.TelemetryContext
@@ -58,6 +58,23 @@ import works.resolve.pathfinder.telemetry.TelemetryContext
 
 // OpenAI Responses rejects max_output_tokens below 16.
 private const val OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16
+private const val CHATGPT_USAGE_URL = "https://chatgpt.com/settings/usage"
+private const val CHATGPT_WORKSPACE_LIMIT_HINT =
+    "You've reached your ChatGPT workspace's usage limit. " +
+        "Ask your workspace admin to increase it at " +
+        "admin.openai.com → Workspace → Usage limits."
+
+// Fixed reasoning.effort while configuration_update items carry the thinking level.
+private const val CONFIGURATION_UPDATE_REQUEST_EFFORT = "medium"
+
+/**
+ * OpenAI API keys start with `sk-`; a different credential sent directly to OpenAI
+ * is a Sign in with ChatGPT access token.
+ */
+private fun isChatGPTSignIn(model: Model, apiKey: String?): Boolean = model.provider == "openai" &&
+    model.baseUrl == "https://api.openai.com/v1" &&
+    apiKey != null &&
+    !apiKey.startsWith("sk-")
 
 /** Header-based auth stands in for a key ("unused" sentinel). */
 internal fun getClientApiKey(
@@ -93,7 +110,8 @@ internal fun getCompat(model: Model): ResolvedResponsesCompat {
         supportsAdditionalTools = compat?.supportsAdditionalTools ?: false,
         supportsToolSearch = compat?.supportsToolSearch ?: false,
         supportsExplicitPromptCacheMode = compat?.supportsExplicitPromptCacheMode ?: false,
-        supportsMaxOutputTokens = compat?.supportsMaxOutputTokens ?: true
+        supportsMaxOutputTokens = compat?.supportsMaxOutputTokens ?: true,
+        supportsMidConvoEffort = compat?.supportsMidConvoEffort ?: false
     )
 }
 
@@ -108,8 +126,28 @@ internal data class ResolvedResponsesCompat(
     val supportsToolSearch: Boolean,
     val supportsExplicitPromptCacheMode: Boolean,
     /** Default true; when false, `max_output_tokens` is not sent (some gateways reject it). */
-    val supportsMaxOutputTokens: Boolean
+    val supportsMaxOutputTokens: Boolean,
+    val supportsMidConvoEffort: Boolean
 )
+
+/** Effort to send in configuration_update items, or null to send it as reasoning.effort. */
+private fun getConfigurationUpdateEffort(
+    model: Model,
+    options: OpenAiResponsesOptions?,
+    compat: ResolvedResponsesCompat
+): String? {
+    val reasoningEffort = options?.reasoningEffort
+    if (!compat.supportsMidConvoEffort ||
+        reasoningEffort == null ||
+        // Sign in with ChatGPT rejects configuration_update items.
+        isChatGPTSignIn(model, options.apiKey)
+    ) {
+        return null
+    }
+    return model.thinkingLevelMap?.takeIf { it.isSpecified(reasoningEffort) }
+        ?.forLevel(reasoningEffort)
+        ?: reasoningEffort.name.lowercase()
+}
 
 internal fun getPromptCacheRetention(
     compat: ResolvedResponsesCompat,
@@ -255,7 +293,7 @@ internal fun buildOpenAiResponsesOptions(
     identity = options.identity,
     onPayload = options.onPayload,
     onResponse = options.onResponse,
-    samplingParams = mergeSamplingParams(model, options),
+    samplingParams = options.samplingParams,
     telemetryContext = options.telemetry
 )
 
@@ -287,12 +325,13 @@ class OpenAiResponsesApi(
         options: OpenAiResponsesOptions = OpenAiResponsesOptions()
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = clock.now().toEpochMilliseconds()
+        val compat = getCompat(model)
+        val configurationUpdateEffort = getConfigurationUpdateEffort(model, options, compat)
         val normalizedContext =
-            resolveTranscript(context, getCompat(model).supportsMidConvoSystemMessages)
-        val compatForGrammar = getCompat(model)
+            resolveTranscript(context, compat.supportsMidConvoSystemMessages)
         val grammarToolInputProperties = createGrammarToolInputProperties(
             getDeclaredTools(normalizedContext.messages),
-            compatForGrammar.supportsOpenAIGrammarTools
+            compat.supportsOpenAIGrammarTools
         )
         val state = OpenAiResponsesShared.ResponsesStreamState(
             model,
@@ -303,7 +342,8 @@ class OpenAiResponsesApi(
                 applyServiceTierPricing = { usage, tier ->
                     applyServiceTierPricing(usage, tier, model.id)
                 }
-            )
+            ),
+            configurationUpdateEffort
         )
         try {
             val apiKey = getClientApiKey(
@@ -311,7 +351,6 @@ class OpenAiResponsesApi(
                 options.apiKey,
                 options.headers
             )
-            val compat = getCompat(model)
             val cacheRetention = resolveCacheRetention(options.cacheRetention, options.env)
             val cacheSessionId = if (cacheRetention ==
                 CacheRetention.NONE
@@ -332,7 +371,15 @@ class OpenAiResponsesApi(
                 compat,
                 options.headers
             ) + mapOf("Accept" to "text/event-stream")
-            var params = buildParams(model, normalizedContext, options, compat, cacheRetention)
+            var params = buildParams(
+                model,
+                normalizedContext,
+                options,
+                compat,
+                cacheRetention,
+                grammarToolInputProperties,
+                configurationUpdateEffort
+            )
             options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
             val body = params
                 .toString().toByteArray(Charsets.UTF_8)
@@ -368,15 +415,28 @@ class OpenAiResponsesApi(
             emit(AssistantMessageEvent.Done(state.stopReason, state.partialSnapshot()))
         } catch (error: Exception) {
             if (error is CancellationException) throw error
+            val errorMessage = formatResponsesProviderError(
+                error,
+                "${if (model.provider == "openai") "OpenAI" else model.provider} API error"
+            )
+            // Sign in with ChatGPT shares the subscription's usage limit with other apps.
+            // On ChatGPT Business plans, the workspace admin also sets a per-user limit.
+            val errorMessageWithHint = when {
+                errorMessage.contains("subscription_sharing_usage_limit_exceeded") ->
+                    "$errorMessage\nCheck your ChatGPT usage: $CHATGPT_USAGE_URL"
+
+                errorMessage.contains(
+                    "subscription_sharing_workplace_individual_usage_limit_exceeded"
+                ) -> "$errorMessage\n$CHATGPT_WORKSPACE_LIMIT_HINT"
+
+                else -> errorMessage
+            }
             emit(
                 AssistantMessageEvent.Error(
                     StopReason.ERROR,
                     state.partialSnapshot().copy(
                         stopReason = StopReason.ERROR,
-                        errorMessage = formatResponsesProviderError(
-                            error,
-                            "${if (model.provider == "openai") "OpenAI" else model.provider} API error"
-                        )
+                        errorMessage = errorMessageWithHint
                     )
                 )
             )
@@ -425,11 +485,16 @@ internal fun buildParams(
     grammarToolInputProperties: Map<String, String> = createGrammarToolInputProperties(
         getDeclaredTools(context.messages),
         compat.supportsOpenAIGrammarTools
-    )
+    ),
+    configurationUpdateEffort: String? = null
 ): JsonObject {
     val transcriptTools = resolveTranscriptTools(
         context.messages,
-        compat.supportsAdditionalTools || compat.supportsToolSearch
+        OpenAiResponsesShared.getResponsesToolSupport(
+            compat.supportsMidConvoSystemMessages,
+            compat.supportsAdditionalTools,
+            compat.supportsToolSearch
+        )
     )
     val messages = OpenAiResponsesShared.convertResponsesMessages(
         model,
@@ -443,10 +508,15 @@ internal fun buildParams(
             toolOptions = OpenAiResponsesShared.ConvertResponsesToolsOptions(
                 supportsStrictMode = compat.supportsStrictMode,
                 supportsOpenAIGrammarTools = compat.supportsOpenAIGrammarTools
-            )
+            ),
+            configurationUpdateEffort = configurationUpdateEffort
         )
     )
 
+    // Sign in with ChatGPT rejects these request fields.
+    val omitUnsupportedFields = isChatGPTSignIn(model, options?.apiKey)
+    val reasoningEffort = options?.reasoningEffort
+        ?: if (options?.reasoningSummary != null) ModelThinkingLevel.MEDIUM else null
     var params = buildJsonObject {
         put("model", model.id)
         put("input", kotlinx.serialization.json.JsonArray(messages))
@@ -456,22 +526,28 @@ internal fun buildParams(
                 put("prompt_cache_key", it)
             }
         }
-        getPromptCacheRetention(compat, cacheRetention)?.let {
-            put("prompt_cache_retention", it)
-        }
-        getPromptCacheOptions(compat, cacheRetention)?.let { options ->
-            put("prompt_cache_options", options)
+        if (!omitUnsupportedFields) {
+            getPromptCacheRetention(compat, cacheRetention)?.let {
+                put("prompt_cache_retention", it)
+            }
+            getPromptCacheOptions(compat, cacheRetention)?.let { options ->
+                put("prompt_cache_options", options)
+            }
         }
         put("store", false)
 
         // Some gateways reject max_output_tokens with 400.
-        if (options?.maxTokens != null && compat.supportsMaxOutputTokens) {
+        if (options?.maxTokens != null && compat.supportsMaxOutputTokens &&
+            !omitUnsupportedFields
+        ) {
             put(
                 "max_output_tokens",
                 maxOf(options.maxTokens, OPENAI_RESPONSES_MIN_OUTPUT_TOKENS)
             )
         }
-        options?.temperature?.let { put("temperature", it) }
+        if (!omitUnsupportedFields) {
+            options?.temperature?.let { put("temperature", it) }
+        }
         options?.serviceTier?.let { put("service_tier", it) }
         if (transcriptTools.requestTools.isNotEmpty()) {
             put(
@@ -490,12 +566,18 @@ internal fun buildParams(
         options?.toolChoice?.let { put("tool_choice", it) }
 
         if (model.reasoning) {
-            if (options?.reasoningEffort != null || options?.reasoningSummary != null) {
-                val effort = OpenAiResponsesShared.resolveReasoningEffort(
+            if (reasoningEffort != null) {
+                val requestedEffort = OpenAiResponsesShared.resolveReasoningEffort(
                     model,
                     options?.reasoningEffort,
                     "medium"
                 )
+                val effort =
+                    if (configurationUpdateEffort == null) {
+                        requestedEffort
+                    } else {
+                        CONFIGURATION_UPDATE_REQUEST_EFFORT
+                    }
                 put(
                     "reasoning",
                     buildJsonObject {
@@ -538,15 +620,19 @@ internal fun buildParams(
             }
         }
     }
-    // Merged last so custom keys override the named request fields.
-    options?.samplingParams?.let { params = JsonObject(params.toMap() + it) }
+    // Last so model and request sampling parameters override named request fields.
+    resolveSamplingParams(
+        model,
+        reasoningEffort ?: ModelThinkingLevel.OFF,
+        options?.samplingParams
+    )?.let { params = JsonObject(params.toMap() + it) }
     return params
 }
 
 internal fun getServiceTierCostMultiplier(modelId: String, serviceTier: String?): Double =
     when (serviceTier) {
         "flex" -> 0.5
-        "priority" -> if (modelId == "gpt-5.5") 2.5 else 2.0
+        "priority", "fast" -> if (modelId == "gpt-5.5") 2.5 else 2.0
         else -> 1.0
     }
 

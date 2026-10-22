@@ -797,7 +797,9 @@ data class OpenAiResponsesCompat(
     val supportsToolSearch: Boolean = false,
     val supportsExplicitPromptCacheMode: Boolean = false,
     /** Whether to send the `max_output_tokens` param. */
-    val supportsMaxOutputTokens: Boolean = true
+    val supportsMaxOutputTokens: Boolean = true,
+    /** Whether the exact model accepts mid-conversation `configuration_update` items carrying the reasoning effort. Default: false. */
+    val supportsMidConvoEffort: Boolean = false
 )
 
 data class AnthropicMessagesCompat(

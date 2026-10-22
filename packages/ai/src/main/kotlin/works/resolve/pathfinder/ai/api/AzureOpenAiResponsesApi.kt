@@ -21,7 +21,6 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.headersToRecord
 import works.resolve.pathfinder.ai.mergeHeaders
-import works.resolve.pathfinder.ai.mergeSamplingParams
 import works.resolve.pathfinder.ai.toModelThinkingLevel
 import works.resolve.pathfinder.ai.toToolChoice
 import works.resolve.pathfinder.ai.transport.TransportRequest
@@ -32,6 +31,7 @@ import works.resolve.pathfinder.ai.utils.getDeclaredTools
 import works.resolve.pathfinder.ai.utils.getIdentityHeaders
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.ai.utils.resolveSamplingParams
 import works.resolve.pathfinder.ai.utils.resolveTranscript
 import works.resolve.pathfinder.ai.utils.resolveTranscriptTools
 import works.resolve.pathfinder.ai.utils.trimJsWhitespace
@@ -167,7 +167,7 @@ internal fun buildAzureOpenAiResponsesOptions(
     identity = options.identity,
     onPayload = options.onPayload,
     onResponse = options.onResponse,
-    samplingParams = mergeSamplingParams(model, options),
+    samplingParams = options.samplingParams,
     telemetryContext = options.telemetry
 )
 
@@ -369,7 +369,11 @@ internal fun buildAzureParams(
     val supportsToolSearch = model.responsesCompat?.supportsToolSearch ?: false
     val transcriptTools = resolveTranscriptTools(
         context.messages,
-        supportsAdditionalTools || supportsToolSearch
+        OpenAiResponsesShared.getResponsesToolSupport(
+            model.responsesCompat?.supportsMidConvoSystemMessages ?: false,
+            supportsAdditionalTools,
+            supportsToolSearch
+        )
     )
     val messages = OpenAiResponsesShared.convertResponsesMessages(
         model,
@@ -423,7 +427,9 @@ internal fun buildAzureParams(
         options?.toolChoice?.let { put("tool_choice", it) }
 
         if (model.reasoning) {
-            if (options?.reasoningEffort != null || options?.reasoningSummary != null) {
+            val reasoningEffort = options?.reasoningEffort
+                ?: if (options?.reasoningSummary != null) ModelThinkingLevel.MEDIUM else null
+            if (reasoningEffort != null) {
                 val effort = OpenAiResponsesShared.resolveReasoningEffort(
                     model,
                     options?.reasoningEffort,
@@ -460,7 +466,17 @@ internal fun buildAzureParams(
             }
         }
     }
-    // Merged last so custom keys override the named request fields.
-    options?.samplingParams?.let { params = JsonObject(params.toMap() + it) }
+    // Last so model and request sampling parameters override named request fields.
+    val reasoningEffortForSampling = options?.reasoningEffort
+        ?: if (options?.reasoningSummary !=
+            null
+        ) {
+            ModelThinkingLevel.MEDIUM
+        } else {
+            ModelThinkingLevel.OFF
+        }
+    resolveSamplingParams(model, reasoningEffortForSampling, options?.samplingParams)?.let {
+        params = JsonObject(params.toMap() + it)
+    }
     return params
 }

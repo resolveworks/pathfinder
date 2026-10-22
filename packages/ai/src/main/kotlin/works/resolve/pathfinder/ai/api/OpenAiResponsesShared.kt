@@ -25,11 +25,13 @@ import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.calculateCost
+import works.resolve.pathfinder.ai.utils.TranscriptToolSupport
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.parseStreamingJson
+import works.resolve.pathfinder.ai.utils.parseToolCallArguments
 import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
 import works.resolve.pathfinder.ai.utils.resolveTranscript
 import works.resolve.pathfinder.ai.utils.resolveTranscriptTools
@@ -38,6 +40,7 @@ import works.resolve.pathfinder.ai.utils.shortHash
 import works.resolve.pathfinder.ai.utils.strictInt
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.ai.utils.truthyString
 
 /**
@@ -102,8 +105,66 @@ object OpenAiResponsesShared {
         val supportsMidConvoSystemMessages: Boolean = false,
         val supportsAdditionalTools: Boolean = false,
         val supportsToolSearch: Boolean = false,
-        val toolOptions: ConvertResponsesToolsOptions = ConvertResponsesToolsOptions()
+        val toolOptions: ConvertResponsesToolsOptions = ConvertResponsesToolsOptions(),
+        /**
+         * Effort for the reply being generated. When set, the thinking level is sent as
+         * configuration_update items instead of a changing reasoning.effort, which would invalidate
+         * the prompt cache. Each item sets the effort from that point on: one goes before every
+         * earlier reply with the level recorded on it (`providerThinkingLevel`), and one with this
+         * effort goes at the end. Earlier input therefore never changes. OpenAI documents the item
+         * before user messages only. After tool results it was verified on gpt-6-luna (October 2026)
+         * to be accepted and to apply to the next reply.
+         */
+        val configurationUpdateEffort: String? = null
     )
+
+    /**
+     * How a Responses transport expresses tool changes.
+     *
+     * `additional_tools` items accumulate: a later item adds tools and replaces same-name
+     * definitions from earlier items, but it cannot replace a top-level tool and cannot remove any
+     * tool (verified with strict schemas on the OpenAI, Codex, and Copilot backends, October 2026).
+     * Like Codex, every tool is therefore declared in `additional_tools` items, starting with one
+     * at the head of the input, and removals are announced as text. Synthetic tool search can only
+     * add tools. Without mid-conversation system messages there is nothing to anchor.
+     */
+    fun getResponsesToolSupport(
+        supportsMidConvoSystemMessages: Boolean = false,
+        supportsAdditionalTools: Boolean = false,
+        supportsToolSearch: Boolean = false
+    ): TranscriptToolSupport {
+        if (supportsMidConvoSystemMessages && supportsAdditionalTools) {
+            return TranscriptToolSupport.CHANGES
+        }
+        return if (supportsToolSearch) {
+            TranscriptToolSupport.ADDITIONS
+        } else {
+            TranscriptToolSupport.NONE
+        }
+    }
+
+    /**
+     * Precedes every additional_tools item after the first. Without it, models read the latest item
+     * as the complete tool set once a removal was announced; Codex precedes its incremental tool
+     * batches with the same guidance. Restating the tools that are still unavailable keeps smaller
+     * models (gpt-5.6-luna, gpt-6-luna) from calling them again after later loads (verified October
+     * 2026).
+     */
+    private fun renderIncrementalToolsNotice(unavailable: Set<String>): String {
+        val notice =
+            "This is an incremental tools update. Previously declared tools remain available " +
+                "unless explicitly marked unavailable. A tool declared again here is available " +
+                "again, and its latest definition replaces the earlier one."
+        return if (unavailable.isNotEmpty()) {
+            "$notice\nStill unavailable: ${unavailable.joinToString(", ")}."
+        } else {
+            notice
+        }
+    }
+
+    private fun renderToolRemovalNotice(names: List<String>): String =
+        "The following tools are no longer available. Do not call them:\n" +
+            names.joinToString("\n") { "- $it" }
 
     fun convertResponsesMessages(
         model: Model,
@@ -152,19 +213,37 @@ object OpenAiResponsesShared {
 
         val transformedMessages =
             transformMessages(normalizedContext.messages, model, normalizeToolCallId)
-        val transcriptTools = resolveTranscriptTools(
-            normalizedContext.messages,
-            options.supportsAdditionalTools || options.supportsToolSearch
+        val toolSupport = getResponsesToolSupport(
+            options.supportsMidConvoSystemMessages,
+            options.supportsAdditionalTools,
+            options.supportsToolSearch
         )
+        val transcriptTools = resolveTranscriptTools(normalizedContext.messages, toolSupport)
+        var declaredAdditionalTools = false
+
+        /** Tools announced as removed and not declared again since. */
+        val unavailableTools = linkedSetOf<String>()
+        val instructionRole =
+            if (model.reasoning && model.responsesCompat?.supportsDeveloperRole != false) {
+                "developer"
+            } else {
+                "system"
+            }
 
         fun appendSystemToolAdditions(message: SystemMessage, seed: String) {
-            val tools = if (transcriptTools.anchorsAdditions) {
-                message.toolsAdded.orEmpty()
-            } else {
-                emptyList()
-            }
+            val tools = message.toolsAdded.orEmpty()
+            for (tool in tools) unavailableTools.remove(tool.name)
             if (tools.isEmpty()) return
-            if (options.supportsAdditionalTools) {
+            if (toolSupport == TranscriptToolSupport.CHANGES) {
+                if (declaredAdditionalTools) {
+                    messages.add(
+                        buildJsonObject {
+                            put("role", instructionRole)
+                            put("content", renderIncrementalToolsNotice(unavailableTools))
+                        }
+                    )
+                }
+                declaredAdditionalTools = true
                 messages.add(
                     buildJsonObject {
                         put("type", "additional_tools")
@@ -174,7 +253,7 @@ object OpenAiResponsesShared {
                 )
                 return
             }
-            if (!options.supportsToolSearch) return
+            if (toolSupport != TranscriptToolSupport.ADDITIONS) return
             val names = tools.map { it.name }
             val callId = "pi_tool_load_${shortHash("$seed:${names.joinToString(",")}")}"
             messages.add(
@@ -212,13 +291,16 @@ object OpenAiResponsesShared {
         }
 
         val includeInitialSystemMessage = options.includeSystemPrompt
-        val instructionRole =
-            if (model.reasoning && model.responsesCompat?.supportsDeveloperRole != false) {
-                "developer"
-            } else {
-                "system"
-            }
+        fun pushConfigurationUpdate(effort: String) {
+            messages.add(
+                buildJsonObject {
+                    put("type", "configuration_update")
+                    put("reasoning", buildJsonObject { put("effort", effort) })
+                }
+            )
+        }
         val initialSystemMessage = transformedMessages.firstOrNull() as? SystemMessage
+        var systemIndex = 0
 
         transformedMessages.forEachIndexed { index, msg ->
             val isLeadingSystemMessage = index == 0 && msg is SystemMessage
@@ -226,14 +308,30 @@ object OpenAiResponsesShared {
             val msgIndex = if (initialSystemMessage != null) index - 1 else index
             when (msg) {
                 is SystemMessage -> {
-                    if (!isLeadingSystemMessage) appendSystemToolAdditions(msg, "system:$msgIndex")
+                    // transformMessages keeps system messages in order, so their position matches the transcript.
+                    val anchorsToolChanges =
+                        systemIndex++ >= transcriptTools.foldedSystemMessages
+                    if (anchorsToolChanges) appendSystemToolAdditions(msg, "system:$msgIndex")
                     if (!isLeadingSystemMessage || includeInitialSystemMessage) {
-                        val text =
+                        val parts = mutableListOf(
                             if (isLeadingSystemMessage) {
                                 getSystemMessageText(msg)
                             } else {
                                 renderSystemMessageUpdate(msg)
                             }
+                        )
+                        if (anchorsToolChanges) {
+                            // A redefinition is a removal plus an addition of the same name;
+                            // only true removals are announced.
+                            val added = msg.toolsAdded.orEmpty().map { it.name }.toSet()
+                            val removed = msg.toolsRemoved.orEmpty().map { it.name }
+                                .filter { it !in added }
+                            if (removed.isNotEmpty()) parts.add(renderToolRemovalNotice(removed))
+                            // Recorded after this message's additions, whose notice precedes this
+                            // removal notice.
+                            unavailableTools.addAll(removed)
+                        }
+                        val text = parts.filter { it.isNotEmpty() }.joinToString("\n\n")
                         if (text.isNotEmpty()) {
                             messages.add(
                                 buildJsonObject {
@@ -339,16 +437,20 @@ object OpenAiResponsesShared {
                                 var itemId: String? = idParts.getOrNull(1)
                                 val customInputProperty =
                                     options.grammarToolInputProperties[block.name]
-                                // For different-model messages drop fc_ ids to avoid
-                                // pairing validation. When replaying a custom-tool call
-                                // its ctc_* id is kept; only function_call replay needs
-                                // fc_* item ids.
-                                if ((isDifferentModel && itemId?.startsWith("fc_") == true) ||
-                                    (
-                                        customInputProperty == null &&
-                                            itemId?.startsWith("fc_") != true
-                                        )
+                                // For different-model messages drop item ids to avoid pairing
+                                // validation. Also drop ids that do not match the replayed item
+                                // type: function_call ids must be fc_* and custom_tool_call ids
+                                // must be ctc_*. Foreign tool call ids are normalized to fc_*, and
+                                // a call can switch between the two types when grammar tool support
+                                // differs.
+                                val itemIdPrefix = if (customInputProperty ==
+                                    null
                                 ) {
+                                    "fc_"
+                                } else {
+                                    "ctc_"
+                                }
+                                if (isDifferentModel || itemId?.startsWith(itemIdPrefix) != true) {
                                     itemId = null
                                 }
                                 val canReplayNamespace = isSameModel
@@ -396,6 +498,13 @@ object OpenAiResponsesShared {
                             else -> {}
                         }
                     }
+                    if (output.isEmpty()) return@forEachIndexed
+                    if (options.configurationUpdateEffort != null &&
+                        isSameModel &&
+                        msg.providerThinkingLevel != null
+                    ) {
+                        pushConfigurationUpdate(msg.providerThinkingLevel)
+                    }
                     messages.addAll(output)
                 }
 
@@ -419,6 +528,10 @@ object OpenAiResponsesShared {
                 }
             }
         }
+        if (options.configurationUpdateEffort != null) {
+            pushConfigurationUpdate(options.configurationUpdateEffort)
+        }
+
         return messages
     }
 
@@ -426,7 +539,7 @@ object OpenAiResponsesShared {
         val texts = content.filterIsInstance<TextContent>().map { it.text }
         val images = content.filterIsInstance<ImageContent>()
         val textResult = texts.joinToString("\n")
-        val hasText = textResult.isNotEmpty()
+        val hasText = trimJsWhitespace(textResult).isNotEmpty()
 
         if (images.isEmpty() || !model.input.contains(InputModality.IMAGE)) {
             val text = when {
@@ -544,6 +657,7 @@ object OpenAiResponsesShared {
             /** Scratch buffer of streamed fragments; null for custom tool calls. */
             var partialJson: String? = ""
             var namespace: String? = null
+            var argumentsError: String? = null
             var customInput: CustomToolInput? = null
             override var built: Content? = null
         }
@@ -583,7 +697,8 @@ object OpenAiResponsesShared {
     class ResponsesStreamState(
         private val model: Model,
         private val timestampMs: Long,
-        private val options: StreamProcessingOptions = StreamProcessingOptions()
+        private val options: StreamProcessingOptions = StreamProcessingOptions(),
+        private val providerThinkingLevel: String? = null
     ) {
         private val blocks = mutableListOf<Block>()
         private val slots = mutableMapOf<Int, Block>() // output_index -> live block
@@ -614,7 +729,8 @@ object OpenAiResponsesShared {
                 id = block.id,
                 name = block.name,
                 arguments = block.arguments,
-                namespace = block.namespace
+                namespace = block.namespace,
+                argumentsError = block.argumentsError
             )
         }
 
@@ -631,6 +747,7 @@ object OpenAiResponsesShared {
             errorMessage = errorMessage,
             rawStopReason = rawStopReason,
             responseId = responseId,
+            providerThinkingLevel = providerThinkingLevel,
             timestamp = timestampMs
         )
 
@@ -849,11 +966,12 @@ object OpenAiResponsesShared {
 
                 item.string("type") == "function_call" && slot is Block.Tool &&
                     slot.customInput == null -> {
-                    slot.arguments = parseStreamingJson(
+                    val parsed = parseToolCallArguments(
                         item.truthyString("arguments")
                             ?: slot.partialJson?.takeIf { it.isNotEmpty() }
-                            ?: "{}"
                     )
+                    slot.arguments = parsed.arguments
+                    slot.argumentsError = parsed.argumentsError
                     item.string("namespace")?.let { slot.namespace = it }
                     // The scratch buffer is stripped so replay only carries
                     // parsed arguments.
@@ -972,6 +1090,21 @@ object OpenAiResponsesShared {
                 throw ProviderStreamException(
                     "OpenAI Responses stream ended before a terminal response event"
                 )
+            }
+            // The agent runs every tool call in the final message. Refuse to hand over calls whose
+            // output_item.done never arrived: their arguments may be cut off or mixed up, e.g. when
+            // a non-compliant server omits output_index. Finished calls have their scratch buffers
+            // removed.
+            if (stopReason == StopReason.TOOL_USE) {
+                for (block in blocks) {
+                    if (block !is Block.Tool) continue
+                    if (block.partialJson != null || block.customInput != null) {
+                        throw ProviderStreamException(
+                            "OpenAI Responses stream completed with an unfinished tool call: " +
+                                "${block.name} (${block.id})"
+                        )
+                    }
+                }
             }
         }
     }

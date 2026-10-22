@@ -863,7 +863,11 @@ internal fun buildCodexRequestBody(
     val supportsToolSearch = model.responsesCompat?.supportsToolSearch ?: false
     val transcriptTools = resolveTranscriptTools(
         context.messages,
-        supportsAdditionalTools || supportsToolSearch
+        OpenAiResponsesShared.getResponsesToolSupport(
+            model.responsesCompat?.supportsMidConvoSystemMessages ?: false,
+            supportsAdditionalTools,
+            supportsToolSearch
+        )
     )
     val messages = OpenAiResponsesShared.convertResponsesMessages(
         model,
