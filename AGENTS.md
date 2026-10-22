@@ -1,7 +1,8 @@
 # pathfinder
 
-A minimal native Android client for [pi](https://pi.dev). Pathfinder ports the
-required pi runtime to Kotlin and keeps the Android application thin.
+A minimal native Android research agent powered by a selective Kotlin port of
+[pi](https://pi.dev)'s runtime. Its only tools are web search and web fetch, and
+the Android application stays thin.
 
 ## Direction
 
@@ -19,9 +20,7 @@ required pi runtime to Kotlin and keeps the Android application thin.
 - Target the latest GrapheneOS, Android platform, and toolchain. Resolve
   compatibility issues by moving forward rather than downgrading.
 
-## Scope
-
-Port only:
+## Port only
 
 - The `packages/ai` chat runtime needed by APIs registered in
   `ChatApiRegistry`: messages, models, streaming, tool calls, reasoning, usage,
@@ -31,9 +30,7 @@ Port only:
 - The classic `packages/agent` Agent and agent loop.
 - The classic `packages/coding-agent` `AgentSession` behavior used by the app:
   retry, compaction, conversation trees, JSONL persistence, and recovery, plus
-  selected interaction semantics adapted into native Android UX. The built-in
-  coding tools (read/bash/edit/write) with their Operations seam are ported
-  scope; SSH transport is an app-layer adapter over that seam.
+  selected interaction semantics adapted into native Android UX.
 - The minimum telemetry contract required by those runtime pieces.
 
 Do not port:
@@ -46,13 +43,14 @@ Do not port:
 - Extensions, hooks for third-party customization, Chord plugins/facets, pi
   packages, skills, prompt templates, themes, or resource discovery.
 - The TUI, CLI, print/JSON/RPC/SDK modes, terminal keybindings, project trust,
-  context-file discovery, or pi's local-file Operations adapter (the built-in
-  tools run over remote SSH operations instead).
+  or context-file discovery.
+- The built-in coding tools (read, bash, edit, write) and the Operations seam
+  they run over.
 - The remote Chord/client/protocol/server stack, Node session backends, image
   generation, dynamic model stores, or legacy compatibility APIs.
 
-Pathfinder-owned Android code may provide app-specific tools such as web search
-and web fetch.
+The app's own tools — web search and web fetch — are Pathfinder-owned Android
+code outside the port.
 
 ## Working with upstream
 
@@ -106,9 +104,9 @@ suspends, plain locks or `@Volatile` snapshots when it does not.
 
 Time and deadlines: domain code injects `kotlin.time.Clock` (the
 `Date.now()` analog); direct wall-time reads exist only in the helpers whose
-job is to stamp wall time (uuidv7, synthetic tool-result stamps, diagnostics,
-the bash output throttle), and each cites this rule. The shared OkHttp client
-carries the 300 s inter-read idle cap (undici `bodyTimeout` analog) with
+job is to stamp wall time (uuidv7, synthetic tool-result stamps, diagnostics),
+and each cites this rule. The shared OkHttp client carries the 300 s inter-read
+idle cap (undici `bodyTimeout` analog) with
 per-request header-phase deadlines (provider-SDK fetch-timeout analog);
 OAuth HTTP uses whole-exchange call deadlines (the `AbortSignal.timeout`
 analog).
@@ -145,8 +143,7 @@ flows, and the app layer logs them. App code logs through slf4j only; debug
 builds bind it to `android.util.Log` with a tag per class, logging info and
 above; release builds log warn and above. Lifecycle transitions log at info, recoverable
 degradation at warn, surfaced failures at error. Never log credentials,
-message text, model responses, or tool arguments and results; log machine ids,
-not machine addresses.
+message text, model responses, or tool arguments and results.
 
 ## Release
 
