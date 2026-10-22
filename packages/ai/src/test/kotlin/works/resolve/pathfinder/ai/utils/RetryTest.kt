@@ -113,6 +113,120 @@ class RetryTest {
     }
 
     @Test
+    fun `matches HTTP2 pending stream cancellation`() {
+        for (errorMessage in listOf(
+            "The pending stream has been canceled",
+            "The pending stream has been canceled (caused by: socket closed)"
+        )) {
+            // Regression for #10379.
+            assertTrue(
+                Retry().isRetryableAssistantError(
+                    fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = errorMessage)
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `matches service unavailable wording`() {
+        for (errorMessage in listOf(
+            // Regression for #10965 (provider unknown, no status code in the message).
+            "The service is temporarily unavailable. Please retry later.",
+            // Bedrock ServiceUnavailableException as formatted by formatBedrockError.
+            "Service unavailable: The service is temporarily unavailable."
+        )) {
+            assertTrue(
+                Retry().isRetryableAssistantError(
+                    fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = errorMessage)
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `matches node-fetch request failure wording`() {
+        for (errorMessage in listOf(
+            // Regression for #10996: node-fetch errors from the google-vertex OAuth token refresh.
+            "request to https://oauth2.googleapis.com/token failed, reason:",
+            "request to https://oauth2.googleapis.com/token failed, reason: connect ECONNREFUSED 127.0.0.1:9"
+        )) {
+            assertTrue(
+                Retry().isRetryableAssistantError(
+                    fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = errorMessage)
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `matches gateway upstream failure wording`() {
+        for (errorMessage in listOf(
+            // Regression for #10920: gateway upstream failures sent as `response.failed` error codes.
+            "unknown: Unable to forward upstream stream",
+            "upstream_error: Upstream request failed",
+            "upstream_stream_read_error: Upstream response stream was interrupted",
+            "Upstream HTTP/2 stream failed"
+        )) {
+            assertTrue(
+                Retry().isRetryableAssistantError(
+                    fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = errorMessage)
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `keeps the ChatGPT subscription usage limit non-retryable`() {
+        val errorMessage =
+            """OpenAI API error (429): {"code":"subscription_sharing_usage_limit_exceeded","message":"Usage limit reached."}"""
+        assertFalse(
+            Retry().isRetryableAssistantError(
+                fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = errorMessage)
+            )
+        )
+    }
+
+    @Test
+    fun `keeps the ChatGPT Business workspace usage limit non-retryable`() {
+        val errorMessage =
+            """OpenAI API error (429): {"code":"subscription_sharing_workplace_individual_usage_limit_exceeded","message":"Usage limit reached."}"""
+        assertFalse(
+            Retry().isRetryableAssistantError(
+                fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = errorMessage)
+            )
+        )
+    }
+
+    @Test
+    fun `retries temporary ChatGPT subscription errors`() {
+        for (errorMessage in listOf(
+            "subscription_sharing_usage_unavailable: Usage cannot be checked.",
+            "subscription_sharing_user_unavailable: User cannot be loaded."
+        )) {
+            assertTrue(
+                Retry().isRetryableAssistantError(
+                    fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = errorMessage)
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `does not match status codes inside ids or longer numbers`() {
+        for (errorMessage in listOf(
+            // Regression for #11057: status codes inside ids or other numbers are not status codes.
+            """401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"},"request_id":"req_011CU503xyz"}""",
+            "400 image exceeds 5 MB maximum: 5316784 bytes > 5242880 bytes"
+        )) {
+            assertFalse(
+                Retry().isRetryableAssistantError(
+                    fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = errorMessage)
+                )
+            )
+        }
+    }
+
+    @Test
     fun `matches OpenAI Responses streams that end before terminal events`() {
         assertTrue(
             Retry().isRetryableAssistantError(

@@ -123,7 +123,7 @@ class AgentNavigationTest {
         manager.appendMessage(UserMessage.ofText("hello"))
         val user = manager.getLeafId()!!
         clock.advanceMillis(1)
-        manager.appendMessage(assistant("branch A:" + "a".repeat(400_000)))
+        manager.appendMessage(assistant("branch A:" + "a".repeat(380_000)))
         clock.advanceMillis(1)
         manager.appendMessage(assistant("branch B"))
         return manager to user

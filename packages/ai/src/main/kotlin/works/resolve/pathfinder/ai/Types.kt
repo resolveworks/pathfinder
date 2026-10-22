@@ -134,7 +134,13 @@ data class ToolCall(
      */
     val thoughtSignature: String? = null,
     /** OpenAI Responses namespace for dynamically loaded or namespaced tools. */
-    val namespace: String? = null
+    val namespace: String? = null,
+    /**
+     * Set when the model's complete arguments text was not a valid JSON object.
+     * [arguments] is then empty; describes the problem and includes the text the
+     * model sent, so tool argument validation can report it back to the model.
+     */
+    val argumentsError: String? = null
 ) : Content() {
     override val type: ContentType get() = ContentType.TOOL_CALL
 }

@@ -11,7 +11,8 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
  * Mirrors the pinned OpenAI/Anthropic SDK retry policy: `x-should-retry`
  * overrides the status check, 408/409/429/5xx and transport failures are
  * retryable, and backoff is exponential with up to 25% jitter — review when
- * either SDK is upgraded. Honors `retry-after-ms` / `retry-after`; a
+ * either SDK is upgraded. Honors `retry-after-ms` / `retry-after`, falling
+ * back to exponential backoff when either delay is unparseable; a
  * server-requested delay above maxRetryDelayMs fails immediately instead of
  * sleeping. Sleep is injectable so tests never wait.
  */
@@ -23,6 +24,8 @@ class ProviderRetry(
     suspend fun <T> retryProviderRequest(
         maxRetries: Int,
         maxRetryDelayMs: Long,
+        /** HTTP statuses that fail at once although the default policy would retry them. */
+        noRetryStatuses: List<Int> = emptyList(),
         request: suspend () -> T
     ): T {
         var retriesRemaining = maxRetries
@@ -32,6 +35,9 @@ class ProviderRetry(
             } catch (error: Exception) {
                 if (error is kotlinx.coroutines.CancellationException) throw error
                 if (retriesRemaining <= 0 || !isRetryable(error)) throw error
+                if (error is ProviderHttpException && error.status in noRetryStatuses) {
+                    throw error
+                }
 
                 val retryIndex = maxRetries - retriesRemaining
                 retriesRemaining--
@@ -59,14 +65,23 @@ class ProviderRetry(
     fun retryDelayMs(error: Exception, retryIndex: Int, maxRetryDelayMs: Long): Long {
         if (error is ProviderHttpException) {
             error.header("retry-after-ms")?.let { header ->
-                jsParseFloatOrNull(header)?.let { value ->
+                val value = jsParseFloatOrNull(header)
+                if (value != null && value.isFinite()) {
                     return validateServerDelayMs(value.toLong(), maxRetryDelayMs, error)
                 }
             }
             error.header("retry-after")?.let { header ->
-                val delayMs = jsParseFloatOrNull(header)?.let { it * 1000 }
-                    ?: (parseHttpDateMs(header) - clock.now().toEpochMilliseconds())
-                return validateServerDelayMs(delayMs.toLong(), maxRetryDelayMs, error)
+                val seconds = jsParseFloatOrNull(header)
+                val delayMs = if (seconds != null) {
+                    seconds * 1000
+                } else {
+                    parseHttpDateMsOrNull(header)?.let {
+                        (it - clock.now().toEpochMilliseconds()).toDouble()
+                    } ?: Double.NaN
+                }
+                if (delayMs.isFinite()) {
+                    return validateServerDelayMs(delayMs.toLong(), maxRetryDelayMs, error)
+                }
             }
         }
         val exponential = min(0.5 * 2.0.pow(retryIndex), 8.0) * 1000
@@ -78,8 +93,6 @@ class ProviderRetry(
         maxRetryDelayMs: Long,
         error: Exception
     ): Long = validateRetryDelayMs(delayMs, maxRetryDelayMs, messageSuffix = error.message)
-
-    private fun parseHttpDateMs(value: String): Long = parseHttpDateMsOrNull(value) ?: 0L
 }
 
 private inline fun parseDateMsOrNull(value: String, parse: (String) -> java.time.Instant): Long? =
@@ -94,10 +107,10 @@ private inline fun parseDateMsOrNull(value: String, parse: (String) -> java.time
  * IMF-fixdate plus the ISO 8601 forms `Date.parse` accepts (offset
  * date-times, zoneless date-times as local time, date-only forms as UTC).
  * V8's remaining legacy formats (RFC 1036/850 two-digit years, asctime) stay
- * unparsed: like any unparseable value they yield null, taking pi's NaN path
- * (provider-retry sleeps zero; the Copilot flow returns the 429 unretried).
- * The trim is V8's too — `DateParser` skips the JS whitespace set around the
- * value.
+ * unparsed: like any unparseable value they yield null, so provider-retry
+ * falls back to exponential backoff (the Copilot flow returns the 429
+ * unretried). The trim is V8's too — `DateParser` skips the JS whitespace set
+ * around the value.
  */
 internal fun parseHttpDateMsOrNull(value: String): Long? {
     val text = trimJsWhitespace(value)

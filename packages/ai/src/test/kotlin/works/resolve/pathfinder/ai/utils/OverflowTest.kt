@@ -46,6 +46,55 @@ class OverflowTest {
     )
 
     @Test
+    fun `detects provider-independent request-size overflow`() {
+        // The 413 pattern is provider-agnostic, so a Copilot-prefixed string and
+        // a non-Copilot string cover both prefix branches; the bare forms cover
+        // the raw SDK output.
+        for (errorMessage in listOf(
+            """github-copilot API error (413): {"message":"failed to parse request","code":""}""",
+            "custom-provider API error (413): Payload Too Large",
+            """413 {"error":{"message":"failed to parse request","code":""}}""",
+            "413"
+        )) {
+            // The request can exceed the byte limit even with zero usage and a large token window.
+            assertTrue(isContextOverflow(createErrorMessage(errorMessage), 1_000_000))
+            assertTrue(isContextOverflow(createErrorMessage(errorMessage)))
+        }
+    }
+
+    @Test
+    fun `does not mistake unrelated errors for request-size overflow`() {
+        for (errorMessage in listOf(
+            """github-copilot API error (400): {"message":"failed to parse request","code":""}""",
+            "custom-provider API error (429): Too many requests",
+            """github-copilot API error (400): {"message":"failed to parse request: invalid value 413"}""",
+            "custom-provider API error (400): upstream mentioned OpenAI API error (413): invalid input",
+            "custom-provider API error (4130): invalid input",
+            "4130 failed to parse request"
+        )) {
+            assertFalse(isContextOverflow(createErrorMessage(errorMessage)))
+        }
+    }
+
+    @Test
+    fun `limits HTTP-status matching to failed responses`() {
+        val message =
+            createErrorMessage("""OpenAI API error (413): {"message":"failed to parse request"}""")
+        assertFalse(isContextOverflow(message.copy(stopReason = StopReason.ABORTED)))
+        assertFalse(isContextOverflow(message.copy(stopReason = StopReason.STOP)))
+    }
+
+    @Test
+    fun `detects z ai CN endpoint prompt-exceeds-max-length errors`() {
+        // Regression for #10208.
+        val message = createErrorMessage(
+            """400 {"code":"1261","message":"Prompt exceeds max length"}""",
+            provider = "zai"
+        )
+        assertTrue(isContextOverflow(message, 1048576))
+    }
+
+    @Test
     fun `detects explicit Ollama prompt-too-long errors`() {
         val message =
             createErrorMessage(
@@ -55,11 +104,12 @@ class OverflowTest {
     }
 
     @Test
-    fun `detects Cerebras empty-body overflow via the pi-shaped transport message`() {
-        // ProviderHttpException(400, "") message: "<status> status code (no body)".
-        // Provider-scoped: other providers must not match this bodyless status.
-        assertTrue(isContextOverflow(createErrorMessage("400 status code (no body)", "cerebras")))
-        assertTrue(isContextOverflow(createErrorMessage("413 status code (no body)", "cerebras")))
+    fun `only treats bodyless 400 errors as overflow for Cerebras`() {
+        // Regression for #9482. HTTP 413 is a request-size error for every provider,
+        // but a bodyless HTTP 400 is only known to indicate overflow for Cerebras.
+        val errorMessage = "400 status code (no body)"
+        assertTrue(isContextOverflow(createErrorMessage(errorMessage, "cerebras"), 131072))
+        assertFalse(isContextOverflow(createErrorMessage(errorMessage, "opencode-go"), 1000000))
     }
 
     @Test

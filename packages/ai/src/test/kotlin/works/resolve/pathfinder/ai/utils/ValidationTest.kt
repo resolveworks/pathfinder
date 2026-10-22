@@ -369,6 +369,37 @@ class ValidationTest {
     }
 
     @Test
+    fun reportsMalformedArgumentsJsonInsteadOfValidatingEmptyArguments() {
+        // #10897
+        val tool = Tool(
+            "echo",
+            "Echo tool",
+            buildJsonObject {
+                put("type", "object")
+                put(
+                    "properties",
+                    buildJsonObject {
+                        put("value", buildJsonObject { put("type", "string") })
+                    }
+                )
+            }
+        )
+        val toolCall = ToolCall(
+            id = "tool-1",
+            name = "echo",
+            arguments = JsonObject(emptyMap()),
+            argumentsError = "Unexpected token"
+        )
+        val error = assertFailsWith<IllegalArgumentException> {
+            validateToolArguments(tool, toolCall)
+        }
+        assertEquals(
+            "Invalid arguments for tool \"echo\": Unexpected token",
+            error.message
+        )
+    }
+
+    @Test
     fun rejectsUnsupportedSchemaKeywordsLoudly() {
         val error = assertFailsWith<IllegalArgumentException> {
             validateValue("""{"type":"string","minLength":2}""", "\"ab\"")

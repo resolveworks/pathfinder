@@ -17,11 +17,11 @@ import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 
 /**
- * Rough context token estimation: ~4 chars per token and a fixed 4800-char
+ * Rough context token estimation: ~3.5 chars per token and a fixed 4800-char
  * estimate per image; no tokenizer dependency.
  */
 
-private const val CHARS_PER_TOKEN = 4
+private const val CHARS_PER_TOKEN = 3.5
 private const val ESTIMATED_IMAGE_CHARS = 4800
 
 /** Tokens always reserved for safety when clamping max output tokens. */

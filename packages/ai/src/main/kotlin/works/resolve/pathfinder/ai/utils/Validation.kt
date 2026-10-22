@@ -32,6 +32,11 @@ import works.resolve.pathfinder.ai.ToolCall
  * validation fails
  */
 fun validateToolArguments(tool: Tool, toolCall: ToolCall): JsonObject {
+    toolCall.argumentsError?.let {
+        throw IllegalArgumentException(
+            "Invalid arguments for tool \"${toolCall.name}\": $it"
+        )
+    }
     val schema =
         tool.parameters as? JsonObject
             ?: throw IllegalArgumentException(
