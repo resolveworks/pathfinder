@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -33,6 +34,8 @@ import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
@@ -419,6 +422,68 @@ class AgentCompactionTest {
         assertEquals(AgentEvent.CompactionReason.OVERFLOW, end.reason)
         assertTrue(end.willRetry)
         assertEquals(2, streams.seenContexts.size)
+    }
+
+    @Test
+    fun `resumed length stop recovery omits the truncated call and its tool result`() = runTest {
+        val (api, models) = fauxModels()
+        val manager = SessionManager.create(
+            createTempDirectory("recovery-omit-test").toFile(),
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        manager.appendMessage(UserMessage.ofText(longPrompt))
+        manager.appendMessage(assistant("prior turn"))
+        manager.appendMessage(UserMessage.ofText("check status"))
+        val truncated = AssistantMessage(
+            content = listOf(ToolCall("call_truncated", "bash", JsonObject(emptyMap()))),
+            api = model.api,
+            provider = model.provider,
+            model = model.id,
+            stopReason = StopReason.LENGTH,
+            usage = Usage(input = 100, output = 16),
+            timestamp = System.currentTimeMillis()
+        )
+        manager.appendMessage(truncated)
+        manager.appendMessage(
+            ToolResultMessage(
+                toolCallId = "call_truncated",
+                toolName = "bash",
+                content = listOf(TextContent("Not executed: output token limit reached.")),
+                isError = true,
+                timestamp = System.currentTimeMillis()
+            )
+        )
+        val streams = ScriptedStreams().apply {
+            streams.add(flowOf(AssistantMessageEvent.Done(StopReason.STOP, assistant("done"))))
+        }
+        api.responses.add(assistant("SUMMARY"))
+        val session = AgentSession(
+            agent = Agent(model = model, streamFn = streams.streamFn).apply {
+                replaceTranscript(manager.buildSessionContext().messages)
+            },
+            manager = manager,
+            settingsManager = SettingsManager.inMemory(
+                Settings(
+                    retry = RetrySettings(enabled = false),
+                    compaction = CompactionSettings(
+                        enabled = true,
+                        reserveTokens = 16_384,
+                        keepRecentTokens = 10_000
+                    )
+                )
+            ),
+            models = models
+        )
+
+        session.prompt("continue")
+
+        val requestMessages = streams.seenContexts.single()
+        assertFalse(requestMessages.any { it is ToolResultMessage })
+        assertFalse(
+            requestMessages.any {
+                it is AssistantMessage && it.stopReason == StopReason.LENGTH
+            }
+        )
     }
 
     @Test

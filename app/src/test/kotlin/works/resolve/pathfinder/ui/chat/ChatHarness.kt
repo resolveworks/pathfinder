@@ -247,7 +247,7 @@ internal class ChatHarness(
      * SessionManagerTest — so nothing escapes the test scheduler onto a
      * real dispatcher the virtual clock cannot see (the certain-hang
      * combination). `denyWrites` flips the directory read-only so the next
-     * assistant commit fails with SessionError(STORAGE), like a full disk.
+     * conversation write fails with SessionError(STORAGE), like a full disk.
      */
     // Created eagerly: denyWrites's read-only flip is a no-op on a
     // nonexistent dir (the manager would just mkdirs a writable one at

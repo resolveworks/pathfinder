@@ -447,7 +447,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             assertNotNull(state.activeSessionId)
             assertEquals("glm-5.3", state.selectedModel?.modelId)
             // The derivation seeds the session with a buffered model_change;
-            // the file appears only at the first assistant commit.
+            // the file appears only at the first user message.
             waitUntil {
                 h.liveManager(state.activeSessionId!!).getEntries().isNotEmpty()
             }

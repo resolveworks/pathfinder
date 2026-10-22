@@ -36,6 +36,8 @@ import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.clampThinkingLevel
 import works.resolve.pathfinder.ai.getSupportedThinkingLevels
@@ -1139,6 +1141,30 @@ class AgentSession(
     // ---- automatic compaction ----
 
     /**
+     * Remove a failed attempt and the tool results answering its calls from
+     * agent state. Results are searched in the projected context itself, so
+     * the pair stays together whether the attempt comes from the current run
+     * or a resumed session. The append-only tree keeps both entries; the
+     * omission only trims the context sent to the provider.
+     */
+    private fun omitRecoveryAttempt(message: AssistantMessage) {
+        val toolCallIds = message.content
+            .filterIsInstance<ToolCall>()
+            .map { it.id }
+            .toSet()
+        val messages = agent.state.value.messages
+        val index = messages.indexOfFirst { it === message }
+        val targets = mutableListOf<Message>(message)
+        for (candidate in if (index < 0) emptyList() else messages.drop(index + 1)) {
+            if (candidate is AssistantMessage) break
+            if (candidate is ToolResultMessage && candidate.toolCallId in toolCallIds) {
+                targets.add(candidate)
+            }
+        }
+        agent.setMessages(messages.filter { candidate -> targets.none { it === candidate } })
+    }
+
+    /**
      * Dispatch automatic compaction after a run.
      *
      * Cases: (1) overflow with retry — a context-overflow error or
@@ -1209,15 +1235,18 @@ class AgentSession(
                 return false
             }
 
-            // Case 1: remove the failed or truncated message from agent
-            // state, compact, and retry once. The message remains in the
-            // session tree but is excluded from the retry context.
+            // Case 1: remove the failed or truncated message and the tool
+            // results answering its calls from agent state, compact, and
+            // retry once. The pair stays together whether the attempt comes
+            // from this run or a resumed session; an unpaired result would
+            // fail every later request.
             overflowRecoveryAttempted = true
-            val messages = agent.state.value.messages
-            if (messages.isNotEmpty() && messages.last() is AssistantMessage) {
-                agent.replaceTranscript(messages.dropLast(1))
-            }
-            return runAutoCompaction(AgentEvent.CompactionReason.OVERFLOW, willRetry)
+            omitRecoveryAttempt(assistantMessage)
+            return runAutoCompaction(
+                AgentEvent.CompactionReason.OVERFLOW,
+                willRetry,
+                omitMessage = assistantMessage
+            )
         }
 
         // Case 3: threshold compaction without retry. For error messages or
@@ -1264,7 +1293,9 @@ class AgentSession(
      */
     private suspend fun runAutoCompaction(
         reason: AgentEvent.CompactionReason,
-        willRetry: Boolean
+        willRetry: Boolean,
+        /** The omitted attempt to remove again from the post-compaction rebuild. */
+        omitMessage: AssistantMessage? = null
     ): Boolean {
         if (models == null) return false
         val pathEntries = manager.getBranch()
@@ -1304,21 +1335,12 @@ class AgentSession(
         }
 
         if (willRetry) {
-            // The overflow response was persisted on message_end before
+            // The failed attempt was persisted on message_end before
             // checkCompaction removed it from agent state; rebuilding
-            // from the new compaction can restore it as the trailing
-            // message, and continueRun would send from it — remove the
-            // retriable response again before continuing the turn.
-            val messages = agent.state.value.messages
-            val lastMsg = messages.lastOrNull()
-            if (lastMsg is AssistantMessage &&
-                (
-                    lastMsg.stopReason == StopReason.ERROR ||
-                        lastMsg.stopReason == StopReason.LENGTH
-                    )
-            ) {
-                agent.setMessages(messages.dropLast(1))
-            }
+            // from the new compaction can restore it and its tool results,
+            // and continueRun would send from them — omit the pair again
+            // before continuing the turn.
+            omitMessage?.let(::omitRecoveryAttempt)
             return true
         }
 

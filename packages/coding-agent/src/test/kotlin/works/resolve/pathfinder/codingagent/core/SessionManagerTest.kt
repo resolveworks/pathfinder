@@ -52,45 +52,61 @@ class SessionManagerTest {
         dir.listFiles { f: File -> f.name.endsWith(".jsonl") }!!.toList()
 
     @Test
-    fun `new session buffers until the first assistant message`() = runTest {
+    fun `new session keeps setup entries in memory`() = runTest {
         val dir = createTempDirectory()
         val m = manager(dir)
 
         m.appendModelChange("zai", "glm-4.6")
         m.appendThinkingLevelChange("off")
-        m.appendMessage(user("hello"))
 
         assertTrue(jsonlFiles(dir).isEmpty())
-        assertEquals(3, m.getEntries().size)
-        assertEquals("e2", m.getLeafId())
-        assertEquals("e2", m.getBranch().last().id)
+        assertEquals(2, m.getEntries().size)
+        assertEquals("e1", m.getLeafId())
     }
 
     @Test
-    fun `first assistant commit writes the full buffered prefix exclusively`() = runTest {
+    fun `first user message writes the full buffered prefix exclusively`() = runTest {
         val dir = createTempDirectory()
         val m = manager(dir)
 
         m.appendModelChange("zai", "glm-4.6")
         m.appendMessage(user("hello"))
-        clock.advanceMillis(10)
-        m.appendMessage(assistant())
 
         val file = jsonlFiles(dir).single()
         val lines = file.readText().trimEnd().split("\n")
-        assertEquals(4, lines.size)
+        assertEquals(3, lines.size)
         assertIs<JsonlCodec.Line.Header>(JsonlCodec.parseLine(lines[0]))
         assertEquals(
-            listOf("e0", "e1", "e2"),
+            listOf("e0", "e1"),
             lines.drop(1).map {
                 assertIs<JsonlCodec.Line.Entry>(JsonlCodec.parseLine(it)).entry.id
             }
         )
+        val reopened = SessionManager.open(file, clock, ioDispatcher = testDispatcher())
+        assertEquals(1, reopened.buildSessionContext().messages.size)
 
         // Appends after the flush are single appended lines.
         clock.advanceMillis(10)
-        m.appendMessage(user("again"))
-        assertEquals(5, file.readText().trimEnd().split("\n").size)
+        m.appendMessage(assistant())
+        assertEquals(4, file.readText().trimEnd().split("\n").size)
+    }
+
+    @Test
+    fun `later entries append without rewriting earlier ones`() = runTest {
+        val dir = createTempDirectory()
+        val m = manager(dir)
+
+        m.appendMessage(user("hello"))
+        m.appendModelChange("zai", "glm-4.6")
+        m.appendMessage(assistant())
+
+        val file = jsonlFiles(dir).single()
+        assertEquals(
+            listOf("e0", "e1", "e2"),
+            file.readText().trimEnd().split("\n").drop(1).map {
+                assertIs<JsonlCodec.Line.Entry>(JsonlCodec.parseLine(it)).entry.id
+            }
+        )
     }
 
     @Test
@@ -259,7 +275,7 @@ class SessionManagerTest {
     }
 
     @Test
-    fun `open on a missing file stays in memory until the first assistant`() = runTest {
+    fun `open on a missing file stays in memory until the first user message`() = runTest {
         val dir = createTempDirectory()
         val file = File(dir, "explicit.jsonl")
         val m = SessionManager.open(file, clock, ioDispatcher = testDispatcher(), entryIdFactory = {
@@ -270,17 +286,18 @@ class SessionManagerTest {
         assertEquals(0, m.getEntries().size)
 
         m.appendMessage(user("hello"))
+
+        // Written to the explicit path, header + the user entry.
+        assertEquals(2, file.readText().trimEnd().split("\n").size)
         clock.advanceMillis(10)
         m.appendMessage(assistant())
-
-        // Written to the explicit path, header + both entries.
         assertEquals(3, file.readText().trimEnd().split("\n").size)
         val reopened = SessionManager.open(file, clock, ioDispatcher = testDispatcher())
         assertEquals(2, reopened.getEntries().size)
     }
 
     @Test
-    fun `open restores the assistant-flushed state and appends single lines`() = runTest {
+    fun `open restores the flushed state and appends single lines`() = runTest {
         val dir = createTempDirectory()
         val m = manager(dir)
         m.appendMessage(user("hello"))
@@ -291,8 +308,9 @@ class SessionManagerTest {
         clock.advanceMillis(10)
         reopened.appendMessage(user("more"))
 
-        // hasAssistant was restored from the loaded entries, so this append
-        // goes straight to the file instead of rewriting it exclusively.
+        // The conversation presence was restored from the loaded entries, so
+        // this append goes straight to the file instead of rewriting it
+        // exclusively.
         assertEquals(4, file.readText().trimEnd().split("\n").size)
     }
 

@@ -964,12 +964,11 @@ internal object JsonlCodec {
  * classic SessionManager.
  *
  * Persistence contract (pi's `_persist`): a session file is created lazily
- * — entries are buffered in memory until the first assistant message is
- * appended, at which point the full buffered prefix (header + every entry)
+ * — entries are buffered in memory until the first user or assistant message
+ * is appended, at which point the full buffered prefix (header + every entry)
  * is written to a file created exclusively; later appends append one line.
- * This makes empty new sessions non-durable by construction and guarantees
- * every file on disk contains an assistant message, so loading a session
- * never re-triggers the new-session seed path.
+ * Setup entries alone stay in memory, and starting at the user message keeps
+ * the prompt on disk if the first turn never completes.
  *
  * Concurrency divergence from pi: pi relies on JS single-threadedness;
  * here every public suspend operation is serialized through an internal
@@ -1008,8 +1007,8 @@ class SessionManager private constructor(
     private var flushed = initialFlushed
 
     // byId is append-only (branching moves the leaf, never removes entries),
-    // so a monotonic flag cannot drift from the true assistant presence.
-    private var hasAssistantLocked = false
+    // so a monotonic flag cannot drift from the true conversation presence.
+    private var hasConversationLocked = false
 
     init {
         state = Snapshot(emptyList(), null)
@@ -1072,11 +1071,8 @@ class SessionManager private constructor(
 
     /** pi's _persist, see class KDoc for the lazy-creation contract. */
     private fun persistLocked(entry: SessionEntry) {
-        if (!hasAssistantLocked) {
-            if (flushed) appendLineLocked(encodeLine(entry))
-            return
-        }
         if (!flushed) {
+            if (!hasConversationLocked) return
             writeFullFileLocked(exclusive = true)
             flushed = true
         } else {
@@ -1091,8 +1087,10 @@ class SessionManager private constructor(
         mutex.withLock {
             val entry = build(generateId(), leafIdLocked, now())
             byId[entry.id] = entry
-            if (entry is MessageEntry && entry.message is AssistantMessage) {
-                hasAssistantLocked = true
+            if (entry is MessageEntry &&
+                (entry.message is UserMessage || entry.message is AssistantMessage)
+            ) {
+                hasConversationLocked = true
             }
             leafIdLocked = entry.id
             rebuildSnapshot()
@@ -1299,8 +1297,8 @@ class SessionManager private constructor(
         }
 
         /**
-         * New session: memory only. Nothing is written until the first
-         * assistant message commits (see class KDoc).
+         * New session: memory only. Nothing is written until the first user
+         * or assistant message commits (see class KDoc).
          */
         suspend fun create(
             dir: File,
@@ -1365,8 +1363,8 @@ class SessionManager private constructor(
         /**
          * Open a session file, repairing a torn tail. A missing file is a
          * fresh in-memory session at that path (pi's _setSessionFile:
-         * nothing is written until the first assistant commits); an empty
-         * existing file is initialized with a header immediately; a
+         * nothing is written until the first user or assistant commits); an
+         * empty existing file is initialized with a header immediately; a
          * non-empty file that does not parse as a session is rejected.
          */
         suspend fun open(
@@ -1420,8 +1418,10 @@ class SessionManager private constructor(
             for (entry in loaded?.entries ?: emptyList()) {
                 manager.byId[entry.id] = entry
                 manager.leafIdLocked = entry.id
-                if (entry is MessageEntry && entry.message is AssistantMessage) {
-                    manager.hasAssistantLocked = true
+                if (entry is MessageEntry &&
+                    (entry.message is UserMessage || entry.message is AssistantMessage)
+                ) {
+                    manager.hasConversationLocked = true
                 }
             }
             manager.rebuildSnapshot()

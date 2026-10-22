@@ -377,9 +377,8 @@ class AgentNavigationTest {
 
     @Test
     fun `send and instant abort commits a complete resumable session file`() = runTest {
-        // Flagship scenario: an aborted first turn still persists an
-        // assistant message (empty content, stopReason "aborted"), which is
-        // exactly the no-assistant guard's flush trigger.
+        // Flagship scenario: an aborted first turn persists a complete file
+        // (the user message creates it, the empty aborted assistant appends).
         val dir = createTempDirectory("nav-test").toFile()
         val manager = SessionManager.create(dir, clock, ioDispatcher = Dispatchers.Unconfined)
         val streams = ArrayDeque<Flow<AssistantMessageEvent>>()
@@ -396,7 +395,7 @@ class AgentNavigationTest {
         )
 
         // Instant abort: the committed empty-content assistant message with
-        // stopReason "aborted" is the no-assistant guard's flush trigger.
+        // stopReason "aborted" is appended to the file the user message created.
         streams.add(
             flow {
                 emit(
