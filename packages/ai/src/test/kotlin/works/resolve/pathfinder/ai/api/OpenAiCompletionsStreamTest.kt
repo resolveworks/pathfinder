@@ -242,6 +242,43 @@ class OpenAiCompletionsStreamTest {
     }
 
     @Test
+    fun `one delta with reasoning_content and content places thinking before text`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"role":"assistant","reasoning_content":"thinking","content":"answer"},"finish_reason":"stop"}]}""",
+                "[DONE]"
+            )
+        )
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        val thinking = assertIs<ThinkingContent>(done.message.content[0])
+        assertEquals("thinking", thinking.thinking)
+        assertEquals("reasoning_content", thinking.thinkingSignature)
+        assertEquals("answer", assertIs<TextContent>(done.message.content[1]).text)
+    }
+
+    @Test
+    fun `one delta with reasoning_details and content places thinking before text`() = runTest {
+        val detail = """{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}"""
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"reasoning_details":[$detail],"content":"answer"},"finish_reason":"stop"}]}""",
+                "[DONE]"
+            )
+        )
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertIs<ThinkingContent>(done.message.content[0])
+        assertEquals("answer", assertIs<TextContent>(done.message.content[1]).text)
+    }
+
+    @Test
     fun `first non-empty reasoning field wins to avoid duplication`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(
@@ -442,6 +479,31 @@ class OpenAiCompletionsStreamTest {
     }
 
     @Test
+    fun `malformed final tool-call arguments are reported instead of keeping the parsed prefix`() =
+        runTest {
+            val raw = """{"path":"README.md","content":"updated","mode":.5}"""
+            val transport = FakeTransport()
+            transport.enqueueResponse(
+                sse(
+                    """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"write","arguments":${kotlinx.serialization.json.JsonPrimitive(
+                        raw
+                    )}}}]}}]}""",
+                    """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
+                    "[DONE]"
+                )
+            )
+            val events = api(
+                transport
+            ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+            val done = assertIs<AssistantMessageEvent.Done>(events.last())
+            val toolCall = assertIs<ToolCall>(done.message.content.single())
+            assertEquals(buildJsonObject {}, toolCall.arguments)
+            assertTrue(
+                toolCall.argumentsError!!.endsWith("Received arguments:\n$raw")
+            )
+        }
+
+    @Test
     fun `interleaved text and tool calls keep block order`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(
@@ -520,6 +582,65 @@ class OpenAiCompletionsStreamTest {
         // glm-5.2 reference rates: input 1.4, output 4.4, cacheRead 0.26 per M
         assertEquals(95 * 1.4 / 1_000_000, usage.cost.input, 1e-12)
         assertEquals(50 * 4.4 / 1_000_000, usage.cost.output, 1e-12)
+    }
+
+    @Test
+    fun `uses OpenRouter-reported total without double-counting non-BYOK upstream cost`() =
+        runTest {
+            val transport = FakeTransport()
+            transport.enqueueResponse(
+                sse(
+                    """{"id":"chatcmpl-cost","model":"openrouter/auto","choices":[{"index":0,"delta":{"content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"cost":0.004,"is_byok":false,"cost_details":{"upstream_inference_cost":0.003}}}""",
+                    "[DONE]"
+                )
+            )
+            val openRouter = TestCatalogs.GLM_5_2.copy(
+                id = "openrouter/auto",
+                provider = "openrouter-work",
+                baseUrl = "https://openrouter.ai/api/v1",
+                cost = works.resolve.pathfinder.ai.ModelCost()
+            )
+            val done = assertIs<AssistantMessageEvent.Done>(
+                api(transport)
+                    .stream(
+                        openRouter,
+                        context,
+                        OpenAiCompletionsOptions(apiKey = "test-key")
+                    )
+                    .toList()
+                    .last()
+            )
+            assertEquals(0.004, done.message.usage.cost.total, 1e-12)
+            assertTrue(done.message.usage.cost.totalFromProvider)
+        }
+
+    @Test
+    fun `includes upstream inference cost for OpenRouter BYOK requests`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"id":"chatcmpl-byok","model":"openrouter/auto","choices":[{"index":0,"delta":{"content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"cost":0.0002,"is_byok":true,"cost_details":{"upstream_inference_cost":0.003}}}""",
+                "[DONE]"
+            )
+        )
+        val openRouter = TestCatalogs.GLM_5_2.copy(
+            id = "openrouter/auto",
+            provider = "openrouter",
+            baseUrl = "https://openrouter.ai/api/v1",
+            cost = works.resolve.pathfinder.ai.ModelCost()
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport)
+                .stream(
+                    openRouter,
+                    context,
+                    OpenAiCompletionsOptions(apiKey = "test-key")
+                )
+                .toList()
+                .last()
+        )
+        assertEquals(0.0032, done.message.usage.cost.total, 1e-12)
+        assertTrue(done.message.usage.cost.totalFromProvider)
     }
 
     @Test
@@ -1599,10 +1720,10 @@ class OpenAiCompletionsStreamTest {
 
             val done = assertIs<AssistantMessageEvent.Done>(events.last())
             assertEquals(StopReason.TOOL_USE, done.reason)
-            assertEquals("answer 1 answer 2\n", assertIs<TextContent>(done.message.content[0]).text)
-            val thinking = assertIs<ThinkingContent>(done.message.content[1])
+            val thinking = assertIs<ThinkingContent>(done.message.content[0])
             assertEquals("think 1 think 2", thinking.thinking)
             assertEquals("reasoning_content", thinking.thinkingSignature)
+            assertEquals("answer 1 answer 2\n", assertIs<TextContent>(done.message.content[1]).text)
             val read = assertIs<ToolCall>(done.message.content[2])
             val grep = assertIs<ToolCall>(done.message.content[3])
             val list = assertIs<ToolCall>(done.message.content[4])
