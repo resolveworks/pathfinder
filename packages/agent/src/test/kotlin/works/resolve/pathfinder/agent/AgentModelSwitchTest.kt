@@ -10,6 +10,7 @@ import org.junit.Test
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.UserMessage
@@ -42,7 +43,8 @@ class AgentModelSwitchTest {
         provider = model.provider,
         model = model.id,
         stopReason = StopReason.STOP,
-        timestamp = 42L
+        timestamp = 42L,
+        thinkingLevel = ModelThinkingLevel.OFF
     )
 
     private fun okStream(model: Model): Flow<AssistantMessageEvent> = flowOf(

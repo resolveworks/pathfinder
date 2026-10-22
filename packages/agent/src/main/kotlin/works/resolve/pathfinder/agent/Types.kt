@@ -13,6 +13,7 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
+import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.utils.getCurrentSystemPrompt
@@ -127,6 +128,15 @@ data class AgentToolResult(
  * are ignored, and the loop owns serialization and lifetime of update events.
  */
 typealias AgentToolUpdateCallback = (AgentToolResult) -> Unit
+
+/** Final outcome of a tool call after hooks ran. */
+data class AgentToolCallOutcome(
+    val toolCall: ToolCall,
+    val result: AgentToolResult,
+    val isError: Boolean,
+    /** Milliseconds `execute()` took, measured with a monotonic clock; absent when the tool did not run. */
+    val durationMs: Long? = null
+)
 
 interface AgentTool {
     val definition: Tool
@@ -254,7 +264,9 @@ sealed class AgentEvent {
         val toolCallId: String,
         val toolName: String,
         val result: AgentToolResult,
-        val isError: Boolean
+        val isError: Boolean,
+        /** Milliseconds `execute()` took, measured with a monotonic clock; absent when the tool did not run. */
+        val durationMs: Long? = null
     ) : AgentEvent()
 
     /**

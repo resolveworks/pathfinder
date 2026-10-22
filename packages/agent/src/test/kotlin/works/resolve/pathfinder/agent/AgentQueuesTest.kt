@@ -19,6 +19,7 @@ import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.MessageRole
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
@@ -49,7 +50,8 @@ class AgentQueuesTest {
             provider = model.provider,
             model = model.id,
             stopReason = stopReason,
-            timestamp = 42L
+            timestamp = 42L,
+            thinkingLevel = ModelThinkingLevel.OFF
         )
 
     private fun doneStream(message: AssistantMessage): Flow<AssistantMessageEvent> = flowOf(
