@@ -14,6 +14,7 @@ import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
@@ -36,7 +37,8 @@ class AgentToolTest {
         api = model.api,
         provider = model.provider,
         model = model.id,
-        stopReason = StopReason.TOOL_USE
+        stopReason = StopReason.TOOL_USE,
+        thinkingLevel = ModelThinkingLevel.OFF
     )
 
     private fun textMessage(text: String): AssistantMessage = AssistantMessage(
@@ -44,7 +46,8 @@ class AgentToolTest {
         api = model.api,
         provider = model.provider,
         model = model.id,
-        stopReason = StopReason.STOP
+        stopReason = StopReason.STOP,
+        thinkingLevel = ModelThinkingLevel.OFF
     )
 
     /** One scripted provider response per stream call, like AgentLoopTest's scriptedStream. */

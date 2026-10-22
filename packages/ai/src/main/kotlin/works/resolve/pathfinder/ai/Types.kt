@@ -215,6 +215,8 @@ data class AssistantMessage(
     val responseModel: String? = null,
     /** Exact provider-native effort level used for this response. Absent for legacy or unmanaged responses. */
     val providerThinkingLevel: String? = null,
+    /** Pi thinking level the agent loop requested for this response. Absent outside the agent loop. */
+    val thinkingLevel: ModelThinkingLevel? = null,
     /** Redacted provider/runtime diagnostics for failures and recoveries. */
     val diagnostics: List<AssistantMessageDiagnostic> = emptyList(),
     /** Codex end-of-turn flag from the terminal response. */
@@ -245,7 +247,9 @@ data class ToolResultMessage(
      */
     val usage: Usage? = null,
     val isError: Boolean = false,
-    override val timestamp: Long = 0L
+    override val timestamp: Long = 0L,
+    /** Milliseconds the tool's execution took, measured with a monotonic clock. */
+    val durationMs: Long? = null
 ) : Message() {
     override val role: MessageRole get() = MessageRole.TOOL_RESULT
 }

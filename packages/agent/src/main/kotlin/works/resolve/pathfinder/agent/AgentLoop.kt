@@ -1,6 +1,9 @@
 package works.resolve.pathfinder.agent
 
+import kotlin.math.roundToLong
 import kotlin.time.Clock
+import kotlin.time.DurationUnit
+import kotlin.time.TimeSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
@@ -27,6 +30,7 @@ import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.TranscriptContext
+import works.resolve.pathfinder.ai.toModelThinkingLevel
 import works.resolve.pathfinder.ai.toThinkingLevelOrNull
 import works.resolve.pathfinder.ai.utils.ToolStateChanges
 import works.resolve.pathfinder.ai.utils.getCurrentTools
@@ -91,13 +95,13 @@ private class PreparedToolCall(
 private class ImmediateToolCallOutcome(val result: AgentToolResult, val isError: Boolean) :
     ToolCallPreparation
 
-private class FinalizedToolCallOutcome(
-    val toolCall: ToolCall,
-    val result: AgentToolResult,
-    val isError: Boolean
-)
+private typealias FinalizedToolCallOutcome = AgentToolCallOutcome
 
-private class ExecutedToolCallOutcome(val result: AgentToolResult, val isError: Boolean)
+private class ExecutedToolCallOutcome(
+    val result: AgentToolResult,
+    val isError: Boolean,
+    val durationMs: Long
+)
 
 /**
  * Turn loop: streams one assistant turn, executes its tool batch, appends
@@ -358,7 +362,8 @@ private suspend fun emitAbortedFinalTurn(
 
     val aborted = turnConfig.emptyAssistantMessage().copy(
         stopReason = StopReason.ABORTED,
-        errorMessage = ABORT_ERROR_MESSAGE
+        errorMessage = ABORT_ERROR_MESSAGE,
+        thinkingLevel = turnConfig.requestedThinkingLevel()
     )
     emit(AgentEvent.MessageStart(aborted))
     emit(AgentEvent.MessageEnd(aborted))
@@ -518,7 +523,8 @@ private suspend fun streamAssistantResponse(
         // metadata, exactly like pi's pre-allocated assistant output.
         val aborted = (fold.materialize() ?: config.emptyAssistantMessage()).copy(
             stopReason = StopReason.ABORTED,
-            errorMessage = ABORT_ERROR_MESSAGE
+            errorMessage = ABORT_ERROR_MESSAGE,
+            thinkingLevel = config.requestedThinkingLevel()
         )
         withContext(NonCancellable) {
             if (!started) {
@@ -531,7 +537,9 @@ private suspend fun streamAssistantResponse(
     // pi falls back to `response.result()` when the source ends without a
     // terminal event; the fold's materialized state is that result here, and
     // a stream that never started finalizes the pre-allocated empty output.
-    val message = finalMessage ?: fold.materialize() ?: config.emptyAssistantMessage()
+    val message = (finalMessage ?: fold.materialize() ?: config.emptyAssistantMessage()).copy(
+        thinkingLevel = config.requestedThinkingLevel()
+    )
     if (!started) {
         // Setup/auth failures can arrive before any Start event; the message
         // still needs a message_start before message_end.
@@ -927,6 +935,10 @@ private suspend fun executeAndFinalizePreparedToolCall(
         }
     }
 
+    val startedAt = TimeSource.Monotonic.markNow()
+    val elapsedMs = {
+        startedAt.elapsedNow().toDouble(DurationUnit.MILLISECONDS).roundToLong()
+    }
     val executed = try {
         val result = prepared.tool.execute(
             prepared.toolCall.id,
@@ -934,23 +946,27 @@ private suspend fun executeAndFinalizePreparedToolCall(
         ) { partialResult ->
             updates.trySend(partialResult)
         }
+        val durationMs = elapsedMs()
         updates.close()
         collector.join()
-        ExecutedToolCallOutcome(result, isError = false)
+        ExecutedToolCallOutcome(result, isError = false, durationMs = durationMs)
     } catch (cancellation: CancellationException) {
         throw cancellation
     } catch (error: Throwable) {
+        val durationMs = elapsedMs()
         updates.close()
         collector.join()
         ExecutedToolCallOutcome(
             result = createErrorToolResult(error.message ?: error.toString()),
-            isError = true
+            isError = true,
+            durationMs = durationMs
         )
     }
     return FinalizedToolCallOutcome(
         toolCall = prepared.toolCall,
         result = executed.result,
-        isError = executed.isError
+        isError = executed.isError,
+        durationMs = executed.durationMs
     )
 }
 
@@ -968,6 +984,10 @@ private fun AgentLoopConfig.emptyAssistantMessage(): AssistantMessage = Assistan
     timestamp = clock.now().toEpochMilliseconds()
 )
 
+/** The requested level recorded on the final message, whichever stream function answered. */
+private fun AgentLoopConfig.requestedThinkingLevel(): ModelThinkingLevel =
+    options.reasoning?.toModelThinkingLevel() ?: ModelThinkingLevel.OFF
+
 private const val ABORT_ERROR_MESSAGE = "Request was aborted"
 
 /** pi's error result for tool calls that never ran because the run aborted. */
@@ -984,7 +1004,8 @@ private suspend fun emitToolExecutionEnd(
             toolCallId = finalized.toolCall.id,
             toolName = finalized.toolCall.name,
             result = finalized.result,
-            isError = finalized.isError
+            isError = finalized.isError,
+            durationMs = finalized.durationMs
         )
     )
     progress.recordEnded(finalized.toolCall.id)
@@ -1000,7 +1021,8 @@ private fun createToolResultMessage(
     details = finalized.result.details,
     usage = finalized.result.usage,
     isError = finalized.isError,
-    timestamp = clock.now().toEpochMilliseconds()
+    timestamp = clock.now().toEpochMilliseconds(),
+    durationMs = finalized.durationMs
 )
 
 private suspend fun emitToolResultMessage(

@@ -58,7 +58,8 @@ class AgentTest {
         model = model.id,
         stopReason = stopReason,
         errorMessage = errorMessage,
-        timestamp = 42L
+        timestamp = 42L,
+        thinkingLevel = ModelThinkingLevel.OFF
     )
 
     private fun okStream(): Flow<AssistantMessageEvent> = flowOf(

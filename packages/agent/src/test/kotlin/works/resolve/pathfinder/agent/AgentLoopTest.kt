@@ -59,7 +59,8 @@ class AgentLoopTest {
         provider = model.provider,
         model = model.id,
         stopReason = stopReason,
-        errorMessage = errorMessage
+        errorMessage = errorMessage,
+        thinkingLevel = ModelThinkingLevel.OFF
     )
 
     private fun toolCallAssistant(
@@ -70,7 +71,8 @@ class AgentLoopTest {
         api = model.api,
         provider = model.provider,
         model = model.id,
-        stopReason = stopReason
+        stopReason = stopReason,
+        thinkingLevel = ModelThinkingLevel.OFF
     )
 
     private fun scriptedStream(
@@ -161,6 +163,10 @@ class AgentLoopTest {
         val updateEnd = (events[6] as AgentEvent.MessageUpdate).assistantMessageEvent
         assertTrue(updateEnd is AssistantMessageEvent.TextEnd)
         assertEquals(final, (events[7] as AgentEvent.MessageEnd).message)
+        assertEquals(
+            ModelThinkingLevel.OFF,
+            ((events[7] as AgentEvent.MessageEnd).message as AssistantMessage).thinkingLevel
+        )
         assertEquals(final, (events[8] as AgentEvent.TurnEnd).message)
         assertEquals(listOf<Message>(prompt, final), result)
         assertEquals(listOf<Message>(prompt, final), (events[9] as AgentEvent.AgentEnd).messages)
@@ -599,6 +605,7 @@ class AgentLoopTest {
         val end = events.filterIsInstance<AgentEvent.ToolExecutionEnd>().single()
         assertTrue(end.isError)
         assertEquals("bad args", (end.result.content.single() as TextContent).text)
+        assertNull(end.durationMs)
         assertTrue(tool.executedCalls.isEmpty())
     }
 
@@ -764,6 +771,33 @@ class AgentLoopTest {
         val trm = result[2] as ToolResultMessage
         assertTrue(trm.isError)
         assertEquals(2, typeLabels(events).count { it == "TurnStart" })
+    }
+
+    @Test
+    fun `records how long execute took on the tool result`() = runTest {
+        val tool = FakeTool(
+            executeImpl = { _, _, _ ->
+                Thread.sleep(30)
+                AgentToolResult(listOf(TextContent("ok")))
+            }
+        )
+        val events = mutableListOf<AgentEvent>()
+        val streamFn = scriptedStream(
+            toolCallAssistant(ToolCall("c1", "my_tool", JsonObject(emptyMap()))),
+            assistant("done")
+        )
+        val result = runAgentLoop(
+            listOf(UserMessage.ofText("q")),
+            toolContext(tool),
+            AgentLoopConfig(model, streamFn = streamFn)
+        ) { events.add(it) }
+
+        val end = events.filterIsInstance<AgentEvent.ToolExecutionEnd>().single()
+        val trm = result.filterIsInstance<ToolResultMessage>().single()
+        assertEquals(end.durationMs, trm.durationMs)
+        assertTrue("duration set", trm.durationMs != null)
+        assertTrue("duration lower bound", trm.durationMs!! >= 25)
+        assertTrue("duration upper bound", trm.durationMs!! < 1000)
     }
 
     @Test
