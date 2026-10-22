@@ -196,7 +196,7 @@ class CompactionTest {
     }
 
     @Test
-    fun `summary entries estimate summary length over four`() {
+    fun `summary entries estimate summary length over 3_5`() {
         val summary = "x".repeat(401)
         val compaction = works.resolve.pathfinder.codingagent.core.CompactionEntry(
             id = createId(),
@@ -213,16 +213,16 @@ class CompactionTest {
             fromId = "branch",
             summary = summary
         )
-        assertEquals(101, estimateEntryTokens(compaction))
-        assertEquals(101, estimateEntryTokens(branch))
+        assertEquals(115, estimateEntryTokens(compaction))
+        assertEquals(115, estimateEntryTokens(branch))
         // The wrapped user-message projection overestimates both.
-        assertTrue(estimateTokens(createBranchSummaryMessage(summary, "from", 1L)) > 101)
-        assertTrue(estimateTokens(createCompactionSummaryMessage(summary, 0, 1L)) > 101)
+        assertTrue(estimateTokens(createBranchSummaryMessage(summary, "from", 1L)) > 115)
+        assertTrue(estimateTokens(createCompactionSummaryMessage(summary, 0, 1L)) > 115)
     }
 
     @Test
-    fun `cut walk counts summary entries at summary length over four`() {
-        val summary = "x".repeat(400) // 100 tokens at summary/4
+    fun `cut walk counts summary entries at summary length over 3_5`() {
+        val summary = "x".repeat(400) // 115 tokens at summary/3.5
         val wrappedTokens = estimateTokens(createBranchSummaryMessage(summary, "from", 1L))
         val user0 = createMessageEntry(createUserMessage("a"))
         val branch = works.resolve.pathfinder.codingagent.core.BranchSummaryEntry(
@@ -236,7 +236,7 @@ class CompactionTest {
         val entries = listOf<SessionEntry>(user0, branch, user1)
 
         // Budget set to the wrapped projection's estimate: the entry-level
-        // summary/4 count keeps the walk (1 + 100 + 1) under budget, so the
+        // summary/3.5 count keeps the walk (1 + 115 + 1) under budget, so the
         // cut stays at the first cut point instead of landing on the summary
         // entry as the wrapped estimate would.
         val result = findCutPoint(entries, 0, entries.size, wrappedTokens)

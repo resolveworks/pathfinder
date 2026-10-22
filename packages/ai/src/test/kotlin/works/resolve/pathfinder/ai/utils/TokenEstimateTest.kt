@@ -23,10 +23,43 @@ import works.resolve.pathfinder.ai.utils.normalizeContext
 class TokenEstimateTest {
 
     @Test
-    fun `text estimation uses four chars per token with ceiling`() {
+    fun `text estimation uses 3_5 chars per token with ceiling`() {
         assertEquals(1, estimateTextTokens("hi")) // 2 chars
-        assertEquals(1, estimateTextTokens("abcd")) // exactly 4
+        assertEquals(2, estimateTextTokens("abcd")) // 4 chars
         assertEquals(2, estimateTextTokens("abcde")) // 5 chars
+    }
+
+    @Test
+    fun `reserves 3_5 characters per token for new text when limiting output`() {
+        // Regression for #10497: large new inputs need more room than chars/4 allows.
+        val assistant = AssistantMessage(
+            content = listOf(TextContent("kept")),
+            api = "openai-responses",
+            provider = "openai",
+            model = "test-model",
+            usage = Usage(input = 2_000, totalTokens = 2_000),
+            stopReason = StopReason.STOP,
+            timestamp = 100L
+        )
+        val context = normalizeContext(
+            Context(
+                messages = listOf(
+                    assistant,
+                    UserMessage.ofText("x".repeat(3_500), 200L)
+                )
+            )
+        )
+        assertEquals(
+            ContextUsageEstimate(
+                tokens = 3_000,
+                usageTokens = 2_000,
+                trailingTokens = 1_000,
+                lastUsageIndex = 0
+            ),
+            estimateContextTokens(context)
+        )
+        val model = TestCatalogs.GLM_5_2.copy(contextWindow = 10_000, maxTokens = 8_000)
+        assertEquals(2_904, clampMaxTokensToContext(model, context, model.maxTokens))
     }
 
     @Test
@@ -34,7 +67,7 @@ class TokenEstimateTest {
         val user = UserMessage(
             listOf(TextContent("1234"), ImageContent(data = "x", mimeType = "image/png"))
         )
-        assertEquals(1201, estimateMessageTokens(user))
+        assertEquals(1373, estimateMessageTokens(user))
 
         val result = ToolResultMessage("id", "tool", listOf(TextContent("ab")))
         assertEquals(1, estimateMessageTokens(result))
@@ -56,7 +89,7 @@ class TokenEstimateTest {
             provider = "zai",
             model = "glm"
         )
-        assertEquals(7, estimateMessageTokens(assistant))
+        assertEquals(8, estimateMessageTokens(assistant))
     }
 
     @Test
@@ -83,7 +116,7 @@ class TokenEstimateTest {
         )
         val estimate = estimateContextTokens(context)
         assertEquals(100, estimate.usageTokens)
-        assertEquals(2, estimate.trailingTokens) // ceil(6/4)
+        assertEquals(2, estimate.trailingTokens) // ceil(6/3.5)
         assertEquals(102, estimate.tokens)
         // Index 2 in the normalized transcript: the leading system message
         // occupies index 0.
@@ -153,9 +186,9 @@ class TokenEstimateTest {
         )
         assertEquals(
             ContextUsageEstimate(
-                tokens = 1_005,
+                tokens = 1_149,
                 usageTokens = 0,
-                trailingTokens = 1_005,
+                trailingTokens = 1_149,
                 lastUsageIndex = null
             ),
             estimateContextTokens(context)
@@ -186,8 +219,8 @@ class TokenEstimateTest {
         )
         val estimate = estimateContextTokens(context)
         assertEquals(2_000, estimate.usageTokens)
-        assertEquals(1, estimate.trailingTokens) // ceil(4/4)
-        assertEquals(2_001, estimate.tokens)
+        assertEquals(2, estimate.trailingTokens) // ceil(4/3.5)
+        assertEquals(2_002, estimate.tokens)
         assertEquals(3, estimate.lastUsageIndex)
     }
 
@@ -195,15 +228,15 @@ class TokenEstimateTest {
     fun `without usage system prompt and tools are estimated`() {
         val context = normalizeContext(
             Context(
-                systemPrompt = "12345678", // 2 tokens
-                messages = listOf(UserMessage.ofText("abcd")), // 1 token
+                systemPrompt = "12345678", // 3 tokens
+                messages = listOf(UserMessage.ofText("abcd")), // 2 tokens
                 tools = listOf(Tool("t", "d", JsonPrimitive("x")))
             )
         )
         val estimate = estimateContextTokens(context)
         assertNull(estimate.lastUsageIndex)
         assertEquals(
-            1 + 2 + estimateTextTokens("""[{"name":"t","description":"d","parameters":"x"}]"""),
+            2 + 3 + estimateTextTokens("""[{"name":"t","description":"d","parameters":"x"}]"""),
             estimate.tokens
         )
     }

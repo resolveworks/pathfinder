@@ -325,7 +325,7 @@ class CompactionLlmTest {
 
     @Test
     fun `tokensBefore estimates compaction summaries at summary length`() {
-        val summary = "x".repeat(400) // 100 tokens at summary/4
+        val summary = "x".repeat(400) // 115 tokens at summary/3.5
         val kept = createMessageEntry(createUserMessage("old"))
         val compaction = createCompactionEntry(summary, kept.id, firstKeptEntryId = kept.id)
         val tail = createMessageEntry(createUserMessage("new"), compaction.id)
@@ -338,8 +338,8 @@ class CompactionLlmTest {
         )!!
 
         // Context entries are [compaction, kept, tail]: the summary counts
-        // summary.length/4 (100), not its wrapped user-message projection.
-        assertEquals(102, preparation.tokensBefore)
+        // summary.length/3.5 (115), not its wrapped user-message projection.
+        assertEquals(117, preparation.tokensBefore)
     }
 
     @Test

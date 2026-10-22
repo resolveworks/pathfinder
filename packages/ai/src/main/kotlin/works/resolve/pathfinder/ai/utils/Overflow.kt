@@ -5,7 +5,8 @@ import works.resolve.pathfinder.ai.StopReason
 
 /**
  * Regex patterns matching the error messages providers return when the input
- * exceeds the model's context window. Provider-specific examples:
+ * exceeds the model's context window or the provider's request byte-size
+ * limit. Provider-specific examples:
  *
  * - Anthropic: "prompt is too long: 213462 tokens > 200000 maximum"
  * - Anthropic: "413 {\"error\":{\"type\":\"request_too_large\",...}}"
@@ -19,6 +20,7 @@ import works.resolve.pathfinder.ai.StopReason
  */
 private val OVERFLOW_PATTERNS = listOf(
     Regex("prompt (?:is )?too long", RegexOption.IGNORE_CASE), // Anthropic and z.ai token overflow
+    Regex("prompt exceeds max length", RegexOption.IGNORE_CASE), // z.ai CN endpoint token overflow
     // Anthropic request byte-size overflow (HTTP 413)
     Regex("request_too_large", RegexOption.IGNORE_CASE),
     Regex("input is too long for requested model", RegexOption.IGNORE_CASE), // Amazon Bedrock
@@ -60,7 +62,13 @@ private val OVERFLOW_PATTERNS = listOf(
     Regex("range of input length should be", RegexOption.IGNORE_CASE),
     Regex("context[_ ]length[_ ]exceeded", RegexOption.IGNORE_CASE), // Generic fallback
     Regex("too many tokens", RegexOption.IGNORE_CASE), // Generic fallback
-    Regex("token limit exceeded", RegexOption.IGNORE_CASE) // Generic fallback
+    Regex("token limit exceeded", RegexOption.IGNORE_CASE), // Generic fallback
+    // HTTP 413 means request-size overflow regardless of provider or body text.
+    // Match raw SDK errors and formatProviderError's prefix, not a status mentioned in the body.
+    Regex(
+        "^(?:[\\w -]+ API error \\(413\\):|413(?:\\s|:|$))",
+        RegexOption.IGNORE_CASE
+    )
 )
 
 // Cerebras reports the overflow as a bodyless 400/413; scoped to that provider so

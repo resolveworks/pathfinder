@@ -49,7 +49,7 @@ private fun JsonElement.checkStrictLiterals() {
 
 private class PartialJsonException(message: String) : Exception(message)
 
-private val VALID_JSON_ESCAPES = setOf('"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u')
+private val VALID_JSON_ESCAPES = setOf('"', '\\', '/', 'b', 'f', 'n', 'r', 't')
 
 private fun isControlCharacter(char: Char): Boolean = char.code in 0x00..0x1f
 
@@ -137,6 +137,36 @@ fun parseJsonWithRepair(json: String): JsonElement = try {
         jsonParse(repairedJson)
     } else {
         throw error
+    }
+}
+
+/** [parseToolCallArguments]'s parsed arguments plus the parsing failure, if any. */
+data class ParsedToolCallArguments(val arguments: JsonObject, val argumentsError: String? = null)
+
+/**
+ * Parses the model's complete arguments text of a finished tool call.
+ *
+ * Unlike [parseStreamingJson], this never keeps a partially parsed prefix: once the call is
+ * finished, text that is not a valid JSON object means the model sent malformed arguments. In
+ * that case `arguments` is `{}` and `argumentsError` describes the problem, including the text
+ * the model sent, so tool validation can report it back to the model.
+ */
+fun parseToolCallArguments(json: String?): ParsedToolCallArguments {
+    if (json == null || trimJsWhitespace(json).isEmpty()) {
+        return ParsedToolCallArguments(JsonObject(emptyMap()))
+    }
+    return try {
+        val parsed = parseJsonWithRepair(json)
+        if (parsed !is JsonObject) {
+            throw IllegalArgumentException("Tool arguments must be a JSON object")
+        }
+        ParsedToolCallArguments(parsed)
+    } catch (error: Exception) {
+        ParsedToolCallArguments(
+            arguments = JsonObject(emptyMap()),
+            argumentsError =
+                "${error.message ?: error.toString()}\n\nReceived arguments:\n$json"
+        )
     }
 }
 

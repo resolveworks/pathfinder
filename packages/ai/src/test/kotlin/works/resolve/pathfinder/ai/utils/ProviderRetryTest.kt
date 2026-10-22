@@ -147,6 +147,23 @@ class ProviderRetryTest {
     }
 
     @Test
+    fun `does not retry statuses listed in noRetryStatuses`() = runTest {
+        val h = Harness()
+        var calls = 0
+        assertFailsWith<ProviderHttpException> {
+            h.retry.retryProviderRequest(
+                maxRetries = 2,
+                maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
+                noRetryStatuses = listOf(504)
+            ) {
+                calls++
+                throw httpError(504, mapOf("retry-after-ms" to listOf("0")))
+            }
+        }
+        assertEquals(1, calls)
+    }
+
+    @Test
     fun `server-requested delay above cap fails immediately`() = runTest {
         val h = Harness()
         var calls = 0
@@ -216,15 +233,16 @@ class ProviderRetryTest {
                 60_000
             )
         )
-        // parseFloat("Infinity") is Infinity: an infinite requested delay
-        // exceeds any cap immediately.
-        assertFailsWith<RetryDelayExceededError> {
+        // parseFloat("Infinity") is infinite, so the header is unparseable
+        // for a finite delay and the exponential backoff applies.
+        assertEquals(
+            500L,
             h.retry.retryDelayMs(
                 httpError(429, mapOf("retry-after" to listOf("Infinity"))),
                 0,
                 60_000
             )
-        }
+        )
         val error = httpError(
             429,
             mapOf(

@@ -194,9 +194,9 @@ class BranchSummarizationTest {
                 COMPACTION_SUMMARY_PREFIX.trimStart().substringBefore("<")
             )
         )
-        // Entry-level estimates (pi's summary roles): root 1 + branch summary 5
-        // + answer 2 + compaction 3, each ceil(summary.length / 4).
-        assertEquals(11, preparation.totalTokens)
+        // Entry-level estimates (pi's summary roles): root 2 + branch summary 6
+        // + answer 2 + compaction 3, each ceil(summary.length / 3.5).
+        assertEquals(13, preparation.totalTokens)
     }
 
     @Test

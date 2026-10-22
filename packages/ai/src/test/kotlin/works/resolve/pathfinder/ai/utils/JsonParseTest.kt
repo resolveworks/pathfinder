@@ -34,9 +34,8 @@ class JsonParseTest {
         // Valid escapes pass through untouched, including \uXXXX.
         assertEquals("""{"a": "x\ny"}""", repairJson("""{"a": "x\ny"}"""))
         assertEquals("""{"a": "A"}""", repairJson("""{"a": "A"}"""))
-        // 'u' is itself a valid escape, so a truncated \uXXXX passes the
-        // escape through unchanged instead of doubling the backslash.
-        assertEquals("""{"a": "x\u12"}""", repairJson("""{"a": "x\u12"}"""))
+        // A truncated \uXXXX is not a valid escape, so its backslash is doubled.
+        assertEquals("""{"a": "x\\u12"}""", repairJson("""{"a": "x\u12"}"""))
         // A trailing lone backslash is doubled.
         assertEquals("""{"a": "x\\""", repairJson("""{"a": "x\"""))
     }
@@ -66,6 +65,90 @@ class JsonParseTest {
         assertFailsWith<Exception> { parseJsonWithRepair("[1e]") }
         assertFailsWith<Exception> { parseJsonWithRepair("""{"a": 1e}""") }
         assertFailsWith<Exception> { parseJsonWithRepair("[Infinity]") }
+    }
+
+    @Test
+    fun streamingKeepsInvalidUnicodeEscapesAsLiteralTextWithoutDroppingFields() {
+        // #10868
+        assertEquals(
+            """{"text":"\\url{x}"}""",
+            parseObject("""{"text":"\url{x}"}""").toString()
+        )
+        assertEquals(
+            """{"path":"a.tex","content":"\\usepackage{x}","mode":"w"}""",
+            parseObject(
+                """{"path":"a.tex","content":"\usepackage{x}","mode":"w"}"""
+            ).toString()
+        )
+    }
+
+    @Test
+    fun streamingDecodesValidUnicodeEscapes() {
+        assertEquals(
+            """{"text":"café \\url"}""",
+            parseObject("""{"text":"caf\u00e9 \url"}""").toString()
+        )
+        assertEquals(
+            "café \\url",
+            parseObject("""{"text":"caf\u00e9 \url"}""")["text"]!!
+                .jsonPrimitive.content
+        )
+    }
+
+    @Test
+    fun streamingOmitsAUnicodeEscapeCutOffMidStream() {
+        assertEquals("""{"text":"ab"}""", parseObject("""{"text":"ab\u00""").toString())
+    }
+
+    @Test
+    fun parseToolCallArgumentsParsesCompleteJsonAndRepairsInvalidEscapes() {
+        assertEquals(
+            ParsedToolCallArguments(
+                JsonObject(
+                    mapOf(
+                        "kind" to JsonPrimitive("seek"),
+                        "note" to JsonPrimitive("\\url")
+                    )
+                )
+            ),
+            parseToolCallArguments("""{"kind":"seek","note":"\url"}""")
+        )
+    }
+
+    @Test
+    fun parseToolCallArgumentsUsesEmptyArgumentsForEmptyText() {
+        assertEquals(
+            ParsedToolCallArguments(JsonObject(emptyMap())),
+            parseToolCallArguments("")
+        )
+    }
+
+    @Test
+    fun parseToolCallArgumentsDoesNotKeepTheValidPrefixOfMalformedJson() {
+        val raw = """{"action":"apply","actions":[{"kind":"seek","time":.5}]}"""
+        val result = parseToolCallArguments(raw)
+        assertEquals(JsonObject(emptyMap()), result.arguments)
+        assertTrue(result.argumentsError!!.contains("\n\nReceived arguments:\n"))
+        assertTrue(result.argumentsError.endsWith(raw))
+    }
+
+    @Test
+    fun parseToolCallArgumentsDoesNotCompleteCutOffJson() {
+        val raw = """{"kind":"seek","clipId":"clip-fl"""
+        val result = parseToolCallArguments(raw)
+        assertEquals(JsonObject(emptyMap()), result.arguments)
+        assertTrue(result.argumentsError!!.endsWith(raw))
+    }
+
+    @Test
+    fun parseToolCallArgumentsRejectsJsonThatIsNotAnObject() {
+        assertEquals(
+            ParsedToolCallArguments(
+                JsonObject(emptyMap()),
+                "Tool arguments must be a JSON object\n\nReceived arguments:\n[1,2]"
+            ),
+            parseToolCallArguments("[1,2]")
+        )
     }
 
     @Test
