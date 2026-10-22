@@ -539,7 +539,7 @@ class AnthropicMessagesPayloadTest {
     }
 
     @Test
-    fun `cross-provider replay converts thinking to text and normalizes tool ids`() {
+    fun `cross-provider replay drops thinking and normalizes tool ids`() {
         val foreign = AssistantMessage(
             content = listOf(
                 ThinkingContent("foreign thoughts"),
@@ -553,9 +553,8 @@ class AnthropicMessagesPayloadTest {
         val json =
             body(normalizeContext(Context(messages = listOf(foreign, UserMessage.ofText("next")))))
         val content = json["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
-        assertEquals("text", content[0].jsonObject["type"]!!.jsonPrimitive.content)
-        assertEquals("foreign thoughts", content[0].jsonObject["text"]!!.jsonPrimitive.content)
-        val normalizedId = content[1].jsonObject["id"]!!.jsonPrimitive.content
+        assertEquals("tool_use", content[0].jsonObject["type"]!!.jsonPrimitive.content)
+        val normalizedId = content[0].jsonObject["id"]!!.jsonPrimitive.content
         assertTrue(Regex("^[a-zA-Z0-9_-]{1,64}$").matches(normalizedId))
         assertTrue(normalizedId.startsWith("call_ABCdefGH"))
     }

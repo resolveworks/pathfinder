@@ -2,12 +2,11 @@ package works.resolve.pathfinder.ai.api
 
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.transformWhile
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -62,6 +61,7 @@ import works.resolve.pathfinder.ai.utils.long
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.parseStreamingJson
+import works.resolve.pathfinder.ai.utils.parseToolCallArguments
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
 import works.resolve.pathfinder.ai.utils.resolveTranscript
@@ -73,7 +73,7 @@ import works.resolve.pathfinder.ai.utils.truncateErrorText
 import works.resolve.pathfinder.ai.utils.truthyString
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
-typealias MistralReasoningEffort = String // "none" | "high"
+typealias MistralReasoningEffort = String // "none" | "low" | "medium" | "high" | "max"
 
 /** Only "reasoning" exists. */
 enum class MistralPromptMode(val wire: String) { REASONING("reasoning") }
@@ -145,7 +145,18 @@ internal fun buildMistralOptions(
 ): MistralOptions {
     val clamped = options.reasoning?.let { clampThinkingLevel(model, it.toModelThinkingLevel()) }
     val reasoning = if (clamped == ModelThinkingLevel.OFF) null else clamped
-    val useReasoning = model.reasoning && reasoning != null
+    // Models with a thinking level map use reasoning_effort; other reasoning
+    // models use prompt_mode.
+    val effortMap = if (model.reasoning) model.thinkingLevelMap else null
+    val reasoningEffort = if (effortMap != null) {
+        if (reasoning != null) {
+            effortMap.forLevel(reasoning) ?: "high"
+        } else {
+            effortMap.forLevel(ModelThinkingLevel.OFF)
+        }
+    } else {
+        null
+    }
     val maxTokens = clampMaxTokensToContext(model, context, options.maxTokens ?: model.maxTokens)
 
     return MistralOptions(
@@ -163,18 +174,12 @@ internal fun buildMistralOptions(
         cacheRetention = options.cacheRetention,
         onPayload = options.onPayload,
         onResponse = options.onResponse,
-        promptMode = if (useReasoning &&
-            usesPromptModeReasoning(model)
-        ) {
+        promptMode = if (model.reasoning && effortMap == null && reasoning != null) {
             MistralPromptMode.REASONING
         } else {
             null
         },
-        reasoningEffort = if (useReasoning && usesReasoningEffort(model)) {
-            mapReasoningEffort(model, reasoning)
-        } else {
-            null
-        },
+        reasoningEffort = reasoningEffort,
         telemetryContext = options.telemetry
     )
 }
@@ -230,75 +235,58 @@ class MistralConversationsApi(
                 url = url,
                 bearerToken = bearerToken,
                 headers = headers,
-                body = payload.toString().toByteArray(Charsets.UTF_8),
-                timeoutMs = timeoutMs
+                body = payload.toString().toByteArray(Charsets.UTF_8)
             )
 
-            // Alone among pi's adapters, mistral threads its
-            // AbortSignal.timeout into the body reader, so the deadline caps
-            // the whole exchange — request plus streamed body — not just the
-            // header phase the transport enforces. Expiry throws the signal's
-            // TimeoutError reason, which surfaces below as a terminal error
-            // event (Node's DOMException message), never as cancellation.
-            // Failures are re-thrown outside the withTimeout: crossing its
-            // boundary triggers kotlinx's stack-trace recovery, which
-            // re-parents the copy's cause and would bury the platform failure
-            // the error formatter reads.
-            var exchangeFailure: Exception? = null
-            try {
-                withTimeout(timeoutMs) {
-                    try {
-                        val response = try {
-                            transport.post(request)
-                        } catch (error: ProviderHttpException) {
-                            options.onResponse?.invoke(
-                                ProviderResponse(error.status, headersToRecord(error.headers)),
-                                model
-                            )
-                            throw error
-                        }
-                        options.onResponse?.invoke(
-                            ProviderResponse(response.status, headersToRecord(response.headers)),
-                            model
-                        )
-
-                        emit(AssistantMessageEvent.Start(state.snapshot()))
-
-                        // [DONE] is a per-element stop, so truncation is the
-                        // break mechanism: abandoning collection right after
-                        // the terminal chunk cancels the transport call
-                        // promptly (upstream, the SDK ends its own stream at
-                        // [DONE]).
-                        emitAll(
-                            response.events.transformWhile { event ->
-                                processSseEvent(event, model, state).forEach { emit(it) }
-                                !state.done
-                            }
-                        )
-
-                        state.finishOpenBlocks().forEach { emit(it) }
-
-                        if (state.stopReason == StopReason.PENDING) {
-                            throw ProviderStreamException(
-                                "Mistral stream ended without a finish reason"
-                            )
-                        }
-                        if (state.stopReason == StopReason.ERROR) {
-                            throw ProviderStreamException(
-                                state.errorMessage ?: "An unknown error occurred"
-                            )
-                        }
-
-                        emit(AssistantMessageEvent.Done(state.stopReason, state.snapshot()))
-                    } catch (error: Exception) {
-                        if (error is CancellationException) throw error
-                        exchangeFailure = error
-                    }
+            // The timeout covers only the wait for response headers. Long streams
+            // (e.g. extended thinking) must not be cut off by a fixed deadline;
+            // body stalls are left to the HTTP client idle timeout.
+            val response = withTimeoutOrNull(timeoutMs) {
+                try {
+                    transport.post(request)
+                } catch (error: ProviderHttpException) {
+                    options.onResponse?.invoke(
+                        ProviderResponse(error.status, headersToRecord(error.headers)),
+                        model
+                    )
+                    throw error
                 }
-            } catch (error: TimeoutCancellationException) {
-                throw ProviderStreamException(TIMEOUT_EXPIRED_MESSAGE)
+            } ?: throw ProviderStreamException(
+                "Mistral response headers timed out after ${timeoutMs}ms"
+            )
+            options.onResponse?.invoke(
+                ProviderResponse(response.status, headersToRecord(response.headers)),
+                model
+            )
+
+            emit(AssistantMessageEvent.Start(state.snapshot()))
+
+            // [DONE] is a per-element stop, so truncation is the
+            // break mechanism: abandoning collection right after
+            // the terminal chunk cancels the transport call
+            // promptly (upstream, the SDK ends its own stream at
+            // [DONE]).
+            emitAll(
+                response.events.transformWhile { event ->
+                    processSseEvent(event, model, state).forEach { emit(it) }
+                    !state.done
+                }
+            )
+
+            state.finishOpenBlocks().forEach { emit(it) }
+
+            if (state.stopReason == StopReason.PENDING) {
+                throw ProviderStreamException(
+                    "Mistral stream ended without a finish reason"
+                )
             }
-            exchangeFailure?.let { throw it }
+            if (state.stopReason == StopReason.ERROR) {
+                throw ProviderStreamException(
+                    state.errorMessage ?: "An unknown error occurred"
+                )
+            }
+
+            emit(AssistantMessageEvent.Done(state.stopReason, state.snapshot()))
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             val finalMessage = state.snapshot().copy(
@@ -369,7 +357,10 @@ class MistralConversationsApi(
         if (delta != null) {
             when (val content = delta["content"]) {
                 is JsonPrimitive -> if (content != JsonNull) {
-                    events += state.appendText(sanitizeSurrogates(content.content))
+                    val textDelta = sanitizeSurrogates(content.content)
+                    if (textDelta.isNotEmpty()) {
+                        events += state.appendText(textDelta)
+                    }
                 }
 
                 is JsonArray -> for (item in content) {
@@ -389,9 +380,12 @@ class MistralConversationsApi(
                             }
                         }
 
-                        "text" -> events += state.appendText(
-                            sanitizeSurrogates(obj["text"].strOrNull() ?: "")
-                        )
+                        "text" -> {
+                            val textDelta = sanitizeSurrogates(obj["text"].strOrNull() ?: "")
+                            if (textDelta.isNotEmpty()) {
+                                events += state.appendText(textDelta)
+                            }
+                        }
                     }
                 }
 
@@ -440,7 +434,7 @@ class MistralConversationsApi(
         "stop" -> StopReason.STOP to null
         "length", "model_length" -> StopReason.LENGTH to null
         "tool_calls" -> StopReason.TOOL_USE to null
-        "error" -> StopReason.ERROR to "Provider stopped with: error"
+        "error" -> StopReason.ERROR to "Provider stopped with: error (server error)"
         else -> StopReason.ERROR to "Provider stopped with: $reason"
     }
 
@@ -538,9 +532,6 @@ class MistralConversationsApi(
 
         /** pi's AbortSignal.timeout default. */
         const val DEFAULT_TIMEOUT_MS = 60_000L
-
-        /** Node's TimeoutError DOMException message, which pi's abort reason carries. */
-        const val TIMEOUT_EXPIRED_MESSAGE = "The operation was aborted due to timeout"
     }
 }
 
@@ -570,6 +561,7 @@ internal class MistralStreamingState(private val model: Model, private val times
         class Tool(val id: String, val name: String) : Block {
             /** Parsed arguments; kept current with every streamed fragment. */
             var arguments: JsonObject = JsonObject(emptyMap())
+            var argumentsError: String? = null
             val partialArgs = StringBuilder()
             override var built: Content? = null
         }
@@ -692,14 +684,18 @@ internal class MistralStreamingState(private val model: Model, private val times
         for (index in toolBlocksByKey.values) {
             val block = blocks[index]
             if (block is Block.Tool) {
-                block.arguments = parseStreamingJson(block.partialArgs.toString())
+                val parsed = parseToolCallArguments(block.partialArgs.toString())
+                block.arguments = parsed.arguments
+                block.argumentsError = parsed.argumentsError
+                block.built = null
                 events.add(
                     AssistantMessageEvent.ToolCallEnd(
                         index,
                         ToolCall(
                             id = block.id,
                             name = block.name,
-                            arguments = block.arguments
+                            arguments = block.arguments,
+                            argumentsError = block.argumentsError
                         ),
                         snapshot()
                     )
@@ -714,8 +710,15 @@ internal class MistralStreamingState(private val model: Model, private val times
             (
                 block.built ?: when (block) {
                     is Block.Text -> TextContent(block.text.toString())
+
                     is Block.Thinking -> ThinkingContent(block.thinking.toString())
-                    is Block.Tool -> ToolCall(block.id, block.name, block.arguments)
+
+                    is Block.Tool -> ToolCall(
+                        block.id,
+                        block.name,
+                        block.arguments,
+                        argumentsError = block.argumentsError
+                    )
                 }.also { block.built = it }
                 )
         },
@@ -1089,14 +1092,3 @@ object MistralConversationsPayload {
 
     private fun sanitizeText(text: String): String = sanitizeSurrogates(text)
 }
-
-internal fun usesReasoningEffort(model: Model): Boolean =
-    model.id == "mistral-small-2603" || model.id == "mistral-small-latest" ||
-        model.id.startsWith("mistral-medium-") ||
-        model.id == "zai-glm-5-2"
-
-internal fun usesPromptModeReasoning(model: Model): Boolean =
-    model.reasoning && !usesReasoningEffort(model)
-
-internal fun mapReasoningEffort(model: Model, level: ModelThinkingLevel): MistralReasoningEffort =
-    model.thinkingLevelMap?.forLevel(level) ?: "high"

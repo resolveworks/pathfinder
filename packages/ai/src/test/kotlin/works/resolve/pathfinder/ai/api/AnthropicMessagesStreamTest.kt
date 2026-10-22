@@ -1633,14 +1633,11 @@ class AnthropicMessagesStreamTest {
         ).jsonObject
         val messages = body["messages"]!!.jsonArray
         assertEquals(2, messages.size)
-        // Assistant thinking became a text block ahead of its original text.
+        // Foreign thinking is dropped; only the text block remains.
         val assistantBlocks = messages[0].jsonObject["content"]!!
             .let { it as kotlinx.serialization.json.JsonArray }
-        assertEquals(
-            "foreign thoughts",
-            assistantBlocks[0].jsonObject["text"]!!.jsonPrimitive.content
-        )
-        assertEquals("hello", assistantBlocks[1].jsonObject["text"]!!.jsonPrimitive.content)
+        assertEquals(1, assistantBlocks.size)
+        assertEquals("hello", assistantBlocks[0].jsonObject["text"]!!.jsonPrimitive.content)
         assertEquals(
             "sys",
             body["system"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content
