@@ -140,8 +140,8 @@ fun estimateContextTokens(messages: List<Message>): ContextUsageEstimate {
  * pi's `estimateContextTokens(buildSessionContext(pathEntries).messages).tokens`
  * over the compaction-aware context entries: the backward usage scan runs
  * over entries (only message entries project assistant messages), and
- * trailing entries estimate via [estimateEntryTokens] so summary entries
- * count `summary.length/4` and system entries 0.
+ * trailing entries estimate via [estimateEntryTokens] so summary entries count
+ * their summary text and system entries 0.
  */
 private fun estimateContextTokensFromEntries(entries: List<SessionEntry>): Int {
     for (i in entries.indices.reversed()) {
@@ -171,9 +171,9 @@ private fun entryContextMessages(entry: SessionEntry): List<Message> =
 
 /**
  * pi sums `estimateTokens` over an entry's context messages, where the
- * summary entries project dedicated branchSummary/compactionSummary roles
- * estimated as `summary.length/4`; pathfinder projects wrapped user
- * messages, so the summary length is measured at the entry instead.
+ * summary entries project dedicated branchSummary/compactionSummary roles;
+ * pathfinder projects wrapped user messages, so the summary length is
+ * measured at the entry with the shared estimator instead.
  */
 internal fun estimateEntryTokens(entry: SessionEntry): Int = when (entry) {
     is CompactionEntry -> estimateTextTokens(entry.summary)
@@ -458,11 +458,6 @@ Summarize the prefix to provide context for the retained suffix:
 
 Be concise. Focus on what's needed to understand the kept suffix."""
 
-private fun summaryMaxTokens(reserveTokens: Int, model: Model, fraction: Double): Int {
-    val fromReserve = (fraction * reserveTokens).toInt()
-    return if (model.maxTokens > 0) minOf(fromReserve, model.maxTokens) else fromReserve
-}
-
 private fun summarizationContext(promptText: String, clock: Clock): Context = Context(
     systemPrompt = SUMMARIZATION_SYSTEM_PROMPT,
     messages = listOf(
@@ -475,31 +470,30 @@ private fun summarizationContext(promptText: String, clock: Clock): Context = Co
 
 private fun completionOptions(
     model: Model,
-    maxTokens: Int,
     thinkingLevel: ModelThinkingLevel?
 ): SimpleStreamOptions = // The OFF guard above makes the shared OFF→null mapper total here: OFF
     // never reaches toThinkingLevelOrNull, matching pi, which only sets
     // reasoning when the level is present and not "off".
     if (model.reasoning && thinkingLevel != null && thinkingLevel != ModelThinkingLevel.OFF) {
         SimpleStreamOptions(
-            maxTokens = maxTokens,
             reasoning = thinkingLevel.toThinkingLevelOrNull()
         )
     } else {
-        SimpleStreamOptions(maxTokens = maxTokens)
+        SimpleStreamOptions()
     }
 
 /**
  * Divergences from upstream: no `signal` parameter (aborts are coroutine
  * cancellation); `thinkingLevel` is [ModelThinkingLevel] because pathfinder
- * models upstream's "off" as [ModelThinkingLevel.OFF]; the wall [clock] is
+ * models upstream's "off" as [ModelThinkingLevel.OFF]; [reserveTokens] is
+ * unused (summaries use the model's output limit); the wall [clock] is
  * received from the caller (TS→Kotlin timing rule).
  */
 suspend fun generateSummary(
     currentMessages: List<Message>,
     models: Models,
     model: Model,
-    reserveTokens: Int,
+    @Suppress("UNUSED_PARAMETER") reserveTokens: Int?,
     customInstructions: String? = null,
     previousSummary: String? = null,
     thinkingLevel: ModelThinkingLevel? = null,
@@ -521,13 +515,14 @@ suspend fun generateSummary(
  * Upstream builds the prompt over `convertToLlm(messages)`; pathfinder
  * messages are already LLM messages (branch/compaction summaries are
  * pre-projected, see `Messages.kt`), so the conversion step is the identity
- * and is omitted.
+ * and is omitted. [reserveTokens] is unused: summaries use the model's output
+ * limit.
  */
 suspend fun generateSummaryWithUsage(
     currentMessages: List<Message>,
     models: Models,
     model: Model,
-    reserveTokens: Int,
+    @Suppress("UNUSED_PARAMETER") reserveTokens: Int?,
     customInstructions: String? = null,
     previousSummary: String? = null,
     thinkingLevel: ModelThinkingLevel? = null,
@@ -536,7 +531,6 @@ suspend fun generateSummaryWithUsage(
     retryRunner: Retry = DEFAULT_RETRY,
     clock: Clock
 ): CompactionResult<GeneratedSummary> {
-    val maxTokens = summaryMaxTokens(reserveTokens, model, 0.8)
     var basePrompt = if (previousSummary !=
         null
     ) {
@@ -558,7 +552,7 @@ suspend fun generateSummaryWithUsage(
         models,
         model,
         summarizationContext(promptText, clock),
-        completionOptions(model, maxTokens, thinkingLevel),
+        completionOptions(model, thinkingLevel),
         retry,
         callbacks,
         retryRunner
@@ -680,7 +674,7 @@ suspend fun compact(
 ): CompactionResult<CompactResult> {
     val (
         firstKeptEntryId, messagesToSummarize, turnPrefixMessages, isSplitTurn, tokensBefore,
-        previousSummary, settings
+        previousSummary
     ) = preparation
 
     val summary: String
@@ -691,7 +685,7 @@ suspend fun compact(
         var historyUsage: Usage? = null
         if (messagesToSummarize.isNotEmpty()) {
             val historyResult = generateSummaryWithUsage(
-                messagesToSummarize, models, model, settings.reserveTokens,
+                messagesToSummarize, models, model, null,
                 customInstructions, previousSummary, thinkingLevel, retry, callbacks,
                 retryRunner, clock
             )
@@ -701,8 +695,8 @@ suspend fun compact(
             historyUsage = historyResult.value.usage
         }
         val turnPrefixResult = generateTurnPrefixSummary(
-            turnPrefixMessages, models, model, settings.reserveTokens,
-            thinkingLevel, retry, callbacks, retryRunner, clock
+            turnPrefixMessages, models, model,
+            thinkingLevel, retry, callbacks, retryRunner, clock, customInstructions
         )
         if (turnPrefixResult is CompactionResult.Err) return err(turnPrefixResult.error)
         turnPrefixResult as CompactionResult.Ok
@@ -712,7 +706,7 @@ suspend fun compact(
             ?: turnPrefixResult.value.usage
     } else {
         val summaryResult = generateSummaryWithUsage(
-            messagesToSummarize, models, model, settings.reserveTokens,
+            messagesToSummarize, models, model, null,
             customInstructions, previousSummary, thinkingLevel, retry, callbacks, retryRunner, clock
         )
         if (summaryResult is CompactionResult.Err) return err(summaryResult.error)
@@ -735,23 +729,25 @@ private suspend fun generateTurnPrefixSummary(
     messages: List<Message>,
     models: Models,
     model: Model,
-    reserveTokens: Int,
     thinkingLevel: ModelThinkingLevel?,
     retry: RetryPolicy?,
     callbacks: RetryCallbacks?,
     retryRunner: Retry,
-    clock: Clock
+    clock: Clock,
+    customInstructions: String?
 ): CompactionResult<GeneratedSummary> {
-    val maxTokens = summaryMaxTokens(reserveTokens, model, 0.5)
     val conversationText = serializeConversation(messages)
-    val promptText = "<conversation>\n$conversationText\n</conversation>\n\n" +
+    var promptText = "<conversation>\n$conversationText\n</conversation>\n\n" +
         TURN_PREFIX_SUMMARIZATION_PROMPT
+    if (customInstructions != null) {
+        promptText = "$promptText\n\nAdditional focus: $customInstructions"
+    }
 
     val response = completeSimpleWithRetries(
         models,
         model,
         summarizationContext(promptText, clock),
-        completionOptions(model, maxTokens, thinkingLevel),
+        completionOptions(model, thinkingLevel),
         retry,
         callbacks,
         retryRunner

@@ -357,7 +357,6 @@ class BranchSummarizationTest {
         val expectedPrompt =
             "<conversation>\n[User]: explore the widget\n</conversation>\n\n$BRANCH_SUMMARY_PROMPT"
         assertEquals(expectedPrompt, promptText(faux.api.seenContexts[0]))
-        assertEquals(4096, faux.api.seenOptions[0].maxTokens)
         assertEquals(1000, (faux.api.seenContexts[0].messages[1] as UserMessage).timestamp)
     }
 

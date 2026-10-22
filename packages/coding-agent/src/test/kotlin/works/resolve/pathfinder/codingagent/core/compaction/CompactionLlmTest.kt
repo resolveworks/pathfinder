@@ -369,7 +369,7 @@ class CompactionLlmTest {
                 messages,
                 reasoning.models,
                 reasoning.model,
-                2000,
+                null,
                 thinkingLevel = ModelThinkingLevel.MEDIUM,
                 clock = FakeClock()
             )
@@ -381,7 +381,7 @@ class CompactionLlmTest {
                 messages,
                 off.models,
                 off.model,
-                2000,
+                null,
                 thinkingLevel = ModelThinkingLevel.OFF,
                 clock = FakeClock()
             )
@@ -393,7 +393,7 @@ class CompactionLlmTest {
                 messages,
                 nonReasoning.models,
                 nonReasoning.model,
-                2000,
+                null,
                 thinkingLevel = ModelThinkingLevel.MEDIUM,
                 clock = FakeClock()
             )
@@ -412,7 +412,7 @@ class CompactionLlmTest {
                     messages,
                     faux.models,
                     faux.model,
-                    2000,
+                    null,
                     customInstructions = "focus",
                     previousSummary = "old summary",
                     clock = FakeClock()
@@ -448,7 +448,7 @@ class CompactionLlmTest {
             "## Goal\nTest summary",
             when (
                 val result =
-                    generateSummary(messages, faux.models, faux.model, 2000, clock = FakeClock())
+                    generateSummary(messages, faux.models, faux.model, null, clock = FakeClock())
             ) {
                 is CompactionResult.Ok -> result.value
                 is CompactionResult.Err -> error(result.error.message ?: "compaction failed")
@@ -470,7 +470,7 @@ class CompactionLlmTest {
                     messages,
                     errorFaux.models,
                     errorFaux.model,
-                    2000,
+                    null,
                     clock = FakeClock()
                 )
         ) {
@@ -492,7 +492,7 @@ class CompactionLlmTest {
                     messages,
                     abortedFaux.models,
                     abortedFaux.model,
-                    2000,
+                    null,
                     clock = FakeClock()
                 )
         ) {
@@ -654,41 +654,48 @@ class CompactionLlmTest {
         }
 
     @Test
-    fun `clamps compaction summary maxTokens to the model output cap`() = runTest {
+    fun `combines usage from split-turn summaries`() = runTest {
         val messages =
             listOf<works.resolve.pathfinder.ai.Message>(createUserMessage("Summarize this."))
-        val faux = createFauxModel(reasoning = false, maxTokens = 128000)
+        val usage = createMockUsage(10, 10)
+        val faux = createFauxModel(reasoning = false)
         faux.enqueue(
-            fauxAssistantMessage("## Goal\nTest summary"),
-            fauxAssistantMessage("## Original Request\nTest summary")
+            fauxAssistantMessage("## Goal\nTest summary", usage = usage),
+            fauxAssistantMessage("## Original Request\nTest summary", usage = usage)
         )
 
+        val result = compactValue(
+            compact(
+                preparation(messages, messages, isSplitTurn = true, tokensBefore = 600000),
+                faux.models,
+                faux.model,
+                clock = FakeClock()
+            )
+        )
+
+        assertEquals(20, result.usage?.input)
+        assertEquals(20, result.usage?.output)
+        assertEquals(40, result.usage?.totalTokens)
+        assertEquals(Cost(0.0, 0.0, 0.0, 0.0, 0.0), result.usage?.cost)
+    }
+
+    @Test
+    fun `applies custom instructions to the turn prefix summary of a split turn`() = runTest {
+        val messages =
+            listOf<works.resolve.pathfinder.ai.Message>(createUserMessage("Summarize this."))
+        val faux = createFauxModel(reasoning = false)
+        faux.enqueue(fauxAssistantMessage("## Original Request\nTest summary"))
+
         compact(
-            preparation(
-                messages,
-                messages,
-                isSplitTurn = true,
-                tokensBefore = 600000,
-                settings = CompactionSettings(
-                    enabled = true,
-                    reserveTokens = 500000,
-                    keepRecentTokens = 20000
-                )
-            ),
+            preparation(emptyList(), messages, isSplitTurn = true),
             faux.models,
             faux.model,
+            customInstructions = "keep migration decisions",
             clock = FakeClock()
         )
 
-        assertEquals(listOf(128000, 128000), faux.api.seenOptions.map { it.maxTokens })
-        assertEquals(
-            listOf(CacheRetention.NONE, CacheRetention.NONE),
-            faux.api.seenOptions.map {
-                it.cacheRetention
-            }
-        )
-        val sessionIds = faux.api.seenOptions.map { it.sessionId }
-        assertNotEquals(sessionIds[0], sessionIds[1])
+        assertEquals(1, faux.api.seenContexts.size)
+        assertTrue("Additional focus: keep migration decisions" in firstPrompt(faux))
     }
 
     @Test
