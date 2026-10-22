@@ -64,8 +64,11 @@ class OAuthPageTest {
     @Test
     fun `page embeds the logo svg and dark theme styles from upstream`() {
         val html = oauthSuccessHtml("signed in")
-        assertTrue(html.contains("viewBox=\"0 0 800 800\""))
+        assertTrue(html.contains("viewBox=\"0 0 108 108\""))
         assertTrue(html.contains("<div class=\"logo\">"))
+        assertTrue(html.contains("stroke=\"#F09082\""))
+        assertTrue(html.contains("stroke=\"#4D9ABF\""))
+        assertTrue(html.contains("stroke=\"#F1BE58\""))
         assertTrue(html.contains("--page-bg: #09090b;"))
         assertTrue(html.contains("color-scheme: dark;"))
     }

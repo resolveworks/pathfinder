@@ -2,18 +2,16 @@ package works.resolve.pathfinder.ai.auth.oauth
 
 import java.net.SocketTimeoutException
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
-import works.resolve.pathfinder.ai.auth.AuthPrompt
+import works.resolve.pathfinder.ai.auth.LoginOptions
 import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
@@ -36,8 +34,8 @@ import works.resolve.pathfinder.ai.utils.urlQueryParamsOrNull
  * Login races a one-shot loopback callback server against a manual-code
  * prompt. OpenRouter has no pre-registered redirect, so the authorize URL's
  * `callback_url` names the server's ephemeral `http://127.0.0.1:<port><path>`
- * endpoint, and the token exchange runs *inside* the request handler so the
- * browser sees the exchange outcome as its response page.
+ * endpoint, and the token exchange runs inside the shared callback server's
+ * completion so the browser sees the exchange outcome as its response page.
  *
  * If Android kills the app process while the browser is foregrounded, the
  * callback server dies with it and the login must be retried.
@@ -54,55 +52,42 @@ class OpenRouterOAuthAuth(
     private val gate: OAuthForegroundGate? = null
 ) : OAuthAuth {
 
-    /**
-     * The login outcome: a credential, a failure to rethrow, or null (the
-     * login was handed to manual entry). Encoded because `waitForResult()`
-     * can only carry `R?`.
-     */
-    private sealed interface CallbackResult {
-        data class Credential(val credential: OAuthCredential) : CallbackResult
-
-        data class Failure(val error: Throwable) : CallbackResult
-    }
-
     override val name: String = "OpenRouter OAuth"
     override val loginLabel: String = "Sign in with OpenRouter"
 
-    override suspend fun login(interaction: AuthInteraction): OAuthCredential {
+    override suspend fun login(
+        interaction: AuthInteraction,
+        options: LoginOptions?
+    ): OAuthCredential {
         val challenge = pkce.generate()
         val callbackPath = "/oauth/callback/${UUID.randomUUID()}"
-
-        val claimed = AtomicBoolean(false)
-        val settled = AtomicBoolean(false)
-
-        val handle = LoopbackOAuthServer<CallbackResult>(
-            port = 0,
-            gate = gate,
-            handler = { request, settle ->
-                handleCallback(request, { result ->
-                    settled.set(true)
-                    settle(result)
-                }, callbackPath, challenge.verifier, claimed, settled)
-            }
-        ).start()
-            // The shared server reports bind failure as null; like pi's
-            // listen error, the login fails rather than degrading to manual
-            // entry. Practically unreachable on an ephemeral port.
-            ?: throw IllegalStateException("Could not bind the OpenRouter OAuth callback server")
+        // OpenRouter sends no `state`; the random path keeps stray requests from completing the sign-in.
+        val callback = startOAuthCallbackServer(
+            OAuthCallbackServerOptions(
+                providerName = "OpenRouter",
+                host = CALLBACK_HOST,
+                port = 0,
+                path = callbackPath,
+                complete = { code -> exchangeAuthorizationCode(code, challenge.verifier) },
+                gate = gate,
+                timeoutMs = loginTimeoutMs
+            )
+        )
 
         try {
-            val callbackUrl = "http://127.0.0.1:${handle.port}$callbackPath"
             val authorizeUrl = AUTHORIZE_URL + "?" +
                 formUrlEncode(
                     linkedMapOf(
-                        "callback_url" to callbackUrl,
+                        "callback_url" to callback.redirectUri,
                         "code_challenge" to challenge.challenge,
                         "code_challenge_method" to "S256"
                     )
                 )
 
             interaction.notify(
-                AuthEvent.Progress("Listening for OpenRouter OAuth callback on $callbackUrl")
+                AuthEvent.Progress(
+                    "Listening for OpenRouter OAuth callback on ${callback.redirectUri}"
+                )
             )
             interaction.notify(
                 AuthEvent.AuthUrl(
@@ -112,124 +97,24 @@ class OpenRouterOAuthAuth(
                 )
             )
 
-            var manualInput: String? = null
-            var manualError: Throwable? = null
+            val result = waitForCallbackOrManualInput(
+                interaction,
+                callback,
+                message = "Complete sign-in in your browser, " +
+                    "or paste the authorization code / redirect URL here:",
+                placeholder = callback.redirectUri
+            )
+            if (result is CallbackOrManualInput.Callback) return result.value
 
-            /** Hands the login to manual code entry unless a callback already claimed the exchange; that callback settles the login. */
-            fun cancelWaitUnlessClaimed() {
-                if (!claimed.get()) handle.cancelWait()
-            }
-
-            return coroutineScope {
-                val manualJob = launch {
-                    try {
-                        manualInput = interaction.prompt(
-                            AuthPrompt.ManualCode(
-                                message = "Complete sign-in in your browser, " +
-                                    "or paste the authorization code / redirect URL here:",
-                                placeholder = callbackUrl
-                            )
-                        )
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Throwable) {
-                        manualError = error
-                    }
-                    cancelWaitUnlessClaimed()
-                }
-
-                val result = try {
-                    withTimeout(loginTimeoutMs) { handle.waitForResult() }
-                } catch (error: TimeoutCancellationException) {
-                    // Only the timeout race becomes an error; cancellation of
-                    // the login itself propagates as CancellationException.
-                    throw IllegalStateException("OpenRouter OAuth login timed out", error)
-                }
-
-                manualError?.let { throw it }
-                when (result) {
-                    is CallbackResult.Credential -> {
-                        // Clears the pending manual prompt's UI sheet.
-                        manualJob.cancel()
-                        result.credential
-                    }
-
-                    is CallbackResult.Failure -> throw result.error
-
-                    null -> {
-                        manualJob.join()
-                        manualError?.let { throw it }
-                        val code = manualInput?.let(::parseAuthorizationCodeInput)
-                            ?: throw IllegalStateException("Missing authorization code")
-                        interaction.notify(
-                            AuthEvent.Progress("Exchanging authorization code for an API key...")
-                        )
-                        exchangeAuthorizationCode(code, challenge.verifier)
-                    }
-                }
-            }
+            val code = parseAuthorizationCodeInput(
+                (result as CallbackOrManualInput.Manual).input
+            ) ?: throw IllegalStateException("Missing authorization code")
+            interaction.notify(
+                AuthEvent.Progress("Exchanging authorization code for an API key...")
+            )
+            return exchangeAuthorizationCode(code, challenge.verifier)
         } finally {
-            handle.close()
-        }
-    }
-
-    private suspend fun handleCallback(
-        request: LoopbackCallbackRequest,
-        settle: (CallbackResult?) -> Unit,
-        callbackPath: String,
-        verifier: String,
-        claimed: AtomicBoolean,
-        settled: AtomicBoolean
-    ): LoopbackCallbackResponse {
-        if (request.method != "GET" || request.path != callbackPath) {
-            return LoopbackCallbackResponse(404, oauthErrorHtml("OAuth callback route not found."))
-        }
-        if (claimed.get() || settled.get()) {
-            return LoopbackCallbackResponse(
-                409,
-                oauthErrorHtml("This OAuth callback has already been used.")
-            )
-        }
-
-        val oauthError = request.query["error"]
-        if (!oauthError.isNullOrEmpty()) {
-            val description = request.query["error_description"] ?: oauthError
-            settle(
-                CallbackResult.Failure(
-                    IllegalStateException("OpenRouter authorization failed: $description")
-                )
-            )
-            return LoopbackCallbackResponse(
-                400,
-                oauthErrorHtml("OpenRouter authorization was denied.", description)
-            )
-        }
-
-        val code = request.query["code"]
-        if (code.isNullOrEmpty()) {
-            return LoopbackCallbackResponse(
-                400,
-                oauthErrorHtml("OpenRouter returned no authorization code.")
-            )
-        }
-        claimed.set(true)
-
-        return try {
-            val credential = exchangeAuthorizationCode(code, verifier)
-            settle(CallbackResult.Credential(credential))
-            LoopbackCallbackResponse(
-                200,
-                oauthSuccessHtml("Signed in to OpenRouter. You may now close this page.")
-            )
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Throwable) {
-            val message = error.message ?: "Unknown token exchange error"
-            settle(CallbackResult.Failure(error))
-            LoopbackCallbackResponse(
-                502,
-                oauthErrorHtml("OpenRouter key exchange failed.", message)
-            )
+            callback.close()
         }
     }
 
@@ -287,6 +172,9 @@ class OpenRouterOAuthAuth(
         const val NON_EXPIRING_EPOCH_MS: Long = MAX_SAFE_INTEGER
         const val AUTHORIZE_URL: String = "https://openrouter.ai/auth"
         const val TOKEN_URL: String = "https://openrouter.ai/api/v1/auth/keys"
+
+        /** Fixed loopback host; pi's `getCallbackHost()` env override doesn't exist on Android. */
+        const val CALLBACK_HOST: String = "127.0.0.1"
 
         const val LOGIN_TIMEOUT_MS: Long = 5 * 60 * 1000
         const val TOKEN_EXCHANGE_TIMEOUT_MS: Int = 30_000

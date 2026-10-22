@@ -179,6 +179,22 @@ interface ApiKeyAuth {
     suspend fun resolve(ctx: AuthContext, credential: ApiKeyCredential?): AuthResult?
 }
 
+/** App-supplied context for [OAuthAuth.login]. */
+data class LoginOptions(
+    /**
+     * Returns the stable ID of this app installation, e.g. sent to OpenAI as
+     * its agent host ID. Called only by login flows that need it, so apps can
+     * create the ID on first use and must return the same ID on every later
+     * call.
+     */
+    val getDeviceId: (() -> String)? = null,
+    /**
+     * Name this app introduces itself with during login, e.g. OpenAI's agent
+     * name hint and Codex originator. Defaults to Pathfinder's own name.
+     */
+    val agentName: String? = null
+)
+
 /**
  * OAuth auth. The `refresh`/`toAuth` split lets the orchestrator own the
  * locked refresh pattern: [refresh] produces a credential, [toAuth] derives
@@ -194,7 +210,7 @@ interface OAuthAuth {
     /** Selector label for the OAuth login option, e.g. "Sign in with SuperGrok or X Premium". */
     val loginLabel: String? get() = null
 
-    suspend fun login(interaction: AuthInteraction): OAuthCredential
+    suspend fun login(interaction: AuthInteraction, options: LoginOptions? = null): OAuthCredential
 
     /**
      * Exchange the refresh token. Network call; throws on failure

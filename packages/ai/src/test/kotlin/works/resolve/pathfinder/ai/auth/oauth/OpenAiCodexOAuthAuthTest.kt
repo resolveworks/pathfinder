@@ -21,6 +21,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthPrompt
+import works.resolve.pathfinder.ai.auth.LoginOptions
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.utils.formUrlEncode
@@ -444,7 +445,7 @@ class OpenAiCodexOAuthAuthTest {
                 "&state=0123456789abcdef" +
                 "&id_token_add_organizations=true" +
                 "&codex_cli_simplified_flow=true" +
-                "&originator=pathfinder",
+                "&originator=Pathfinder",
             url.url
         )
 
@@ -622,6 +623,31 @@ class OpenAiCodexOAuthAuthTest {
     }
 
     @Test
+    fun `uses the app agent name as the browser login originator`() = runTest {
+        val http = FakeHttpClient()
+        http.enqueue(
+            json(
+                200,
+                """{"access_token":"${accessToken(
+                    "account-agent"
+                )}","refresh_token":"r","expires_in":100}"""
+            )
+        )
+        val interaction = RecordingInteraction(
+            mapOf(
+                "Select" to { "browser" },
+                "ManualCode" to { "pasted-code" }
+            )
+        )
+
+        auth(http).login(interaction, LoginOptions(agentName = "my-app"))
+
+        val url = assertIs<AuthEvent.AuthUrl>(interaction.events.single())
+        val params = works.resolve.pathfinder.ai.utils.formQuery(url.url.substringAfter("?"))
+        assertEquals("my-app", params["originator"])
+    }
+
+    @Test
     fun `browser login completes from the loopback callback server`() = runTest {
         val http = FakeHttpClient()
         http.enqueue(
@@ -642,9 +668,10 @@ class OpenAiCodexOAuthAuthTest {
         }
 
         assertEquals(200, status)
-        assertTrue("OpenAI authentication completed. You can close this window." in body, body)
+        assertTrue("Signed in to OpenAI." in body, body)
+        val credential = login.await()
         assertEquals("server-code", formFields(http.requests.single())["code"])
-        assertEquals("account-server", login.await().extras["accountId"]!!.jsonPrimitive.content)
+        assertEquals("account-server", credential.extras["accountId"]!!.jsonPrimitive.content)
         // The manual prompt was never answered; the server result won outright.
         assertTrue(!interaction.manualAnswer.isCompleted)
     }

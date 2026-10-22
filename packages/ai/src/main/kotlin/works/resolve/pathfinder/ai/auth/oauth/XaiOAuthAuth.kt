@@ -40,7 +40,10 @@ class XaiOAuthAuth(private val http: OAuthHttpClient, private val clock: Clock =
 
     override val loginLabel: String = "Sign in with SuperGrok or X Premium"
 
-    override suspend fun login(interaction: AuthInteraction): OAuthCredential {
+    override suspend fun login(
+        interaction: AuthInteraction,
+        options: works.resolve.pathfinder.ai.auth.LoginOptions?
+    ): OAuthCredential {
         val device = requestDeviceCode()
         interaction.notify(
             AuthEvent.DeviceCode(

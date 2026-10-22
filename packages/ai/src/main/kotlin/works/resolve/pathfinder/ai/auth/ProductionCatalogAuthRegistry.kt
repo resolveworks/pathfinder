@@ -7,6 +7,7 @@ import works.resolve.pathfinder.ai.auth.oauth.KimiCodingOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.OAuthForegroundGate
 import works.resolve.pathfinder.ai.auth.oauth.OAuthHttpClient
 import works.resolve.pathfinder.ai.auth.oauth.OkHttpOAuthHttpClient
+import works.resolve.pathfinder.ai.auth.oauth.OpenAiChatGPTOAuth
 import works.resolve.pathfinder.ai.auth.oauth.OpenAiCodexOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.OpenRouterOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.XaiOAuthAuth
@@ -33,7 +34,8 @@ class ProductionCatalogAuthRegistry(
             "openrouter" to OpenRouterOAuthAuth(client(), gate = gate),
             "kimi-coding" to KimiCodingOAuthAuth(client()),
             "xai" to XaiOAuthAuth(client()),
-            "openai-codex" to OpenAiCodexOAuthAuth(client(), gate = gate)
+            "openai-codex" to OpenAiCodexOAuthAuth(client(), gate = gate),
+            "openai" to OpenAiChatGPTOAuth(client(), gate = gate)
         )
     )
 

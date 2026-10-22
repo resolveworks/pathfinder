@@ -11,6 +11,7 @@ import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthPrompt
+import works.resolve.pathfinder.ai.auth.LoginOptions
 import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
@@ -42,7 +43,7 @@ import works.resolve.pathfinder.ai.utils.urlQueryParamsOrNull
  *   retried.
  * - **originator default.** The authorize request presents as whatever
  *   originator it names, so pi's `"pi"` default would misattribute
- *   Pathfinder's traffic; this port defaults to [ORIGINATOR] (`"pathfinder"`).
+ *   Pathfinder's traffic; this app defaults to [ORIGINATOR] (`"Pathfinder"`) unless a login supplies its name.
  *   Deliberate divergence; the parameter is otherwise kept as in pi.
  * - **HTTP boundary.** Pi `fetch`es with an `AbortSignal`; all HTTP goes
  *   through the injected [OAuthHttpClient] with a bounded request timeout,
@@ -95,7 +96,10 @@ class OpenAiCodexOAuthAuth(
 
     // --- login ---
 
-    override suspend fun login(interaction: AuthInteraction): OAuthCredential {
+    override suspend fun login(
+        interaction: AuthInteraction,
+        options: LoginOptions?
+    ): OAuthCredential {
         val method = interaction.prompt(
             AuthPrompt.Select(
                 message = "Select OpenAI Codex login method:",
@@ -111,7 +115,7 @@ class OpenAiCodexOAuthAuth(
 
         return when (method) {
             DEVICE_CODE_LOGIN_METHOD -> loginOpenAICodexDeviceCode(interaction)
-            BROWSER_LOGIN_METHOD -> loginOpenAICodex(interaction)
+            BROWSER_LOGIN_METHOD -> loginOpenAICodex(interaction, options)
             else -> throw IllegalStateException("Unknown OpenAI Codex login method: $method")
         }
     }
@@ -158,10 +162,16 @@ class OpenAiCodexOAuthAuth(
             "AuthorizationFlow(verifier=<redacted>, state=$state, url=$url)"
     }
 
-    /** Races the loopback callback against a manual [AuthPrompt.ManualCode] (see class KDoc). */
-    private suspend fun loginOpenAICodex(interaction: AuthInteraction): OAuthCredential {
-        val flow = createAuthorizationFlow()
-        val handle = startLocalOAuthServer(flow.state)
+    /**
+     * Port 1455 is shared with the Codex CLI; when it is taken, fall back to
+     * the pasted redirect URL.
+     */
+    private suspend fun loginOpenAICodex(
+        interaction: AuthInteraction,
+        options: LoginOptions?
+    ): OAuthCredential {
+        val flow = createAuthorizationFlow(options?.agentName ?: ORIGINATOR)
+        val callback = startLocalOAuthServer(flow.state)
         try {
             interaction.notify(
                 AuthEvent.AuthUrl(
@@ -169,103 +179,57 @@ class OpenAiCodexOAuthAuth(
                     instructions = "A browser window should open. Complete login to finish."
                 )
             )
-            return coroutineScope {
-                var manualCode: String? = null
-                var manualError: Throwable? = null
-                val manualJob = launch {
-                    try {
-                        manualCode = interaction.prompt(
-                            AuthPrompt.ManualCode(
-                                message = "Complete login in your browser, " +
-                                    "or paste the authorization code / redirect URL here:",
-                                placeholder = REDIRECT_URI
-                            )
-                        )
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Throwable) {
-                        manualError = error
+            val result = waitForCallbackOrManualInput(
+                interaction,
+                callback,
+                message = "Complete login in your browser, " +
+                    "or paste the authorization code / redirect URL here:",
+                placeholder = REDIRECT_URI
+            )
+            val code = when (result) {
+                is CallbackOrManualInput.Callback -> result.value
+
+                is CallbackOrManualInput.Manual -> {
+                    val parsed = parseAuthorizationInput(result.input)
+                    // An empty state counts as absent; any non-empty state
+                    // must match (JS truthiness).
+                    if (!parsed.state.isNullOrEmpty() && parsed.state != flow.state) {
+                        throw IllegalStateException("State mismatch")
                     }
-                    handle?.cancelWait()
-                }
-                try {
-                    // A bind failure makes this null, leaving the manual
-                    // prompt as the only path.
-                    val result = handle?.waitForResult()
-                    manualError?.let { throw it }
-                    var code = result?.code
-                        ?: manualCode?.let { manual ->
-                            val parsed = parseAuthorizationInput(manual)
-                            // An empty state counts as absent; any non-empty
-                            // state must match (JS truthiness).
-                            if (!parsed.state.isNullOrEmpty() && parsed.state != flow.state) {
-                                throw IllegalStateException("State mismatch")
-                            }
-                            // An empty code counts as absent.
-                            parsed.code?.takeIf { it.isNotEmpty() }
-                        }
-                    if (code == null) {
-                        // The prompt may not have answered yet; wait before
-                        // giving up.
-                        manualJob.join()
-                        manualError?.let { throw it }
-                        code = manualCode?.let { manual ->
-                            val parsed = parseAuthorizationInput(manual)
-                            if (!parsed.state.isNullOrEmpty() && parsed.state != flow.state) {
-                                throw IllegalStateException("State mismatch")
-                            }
-                            parsed.code?.takeIf { it.isNotEmpty() }
-                        }
-                    }
-                    code ?: throw IllegalStateException("Missing authorization code")
-                    exchangeAuthorizationCodeForCredentials(code, flow.verifier, REDIRECT_URI)
-                } finally {
-                    // When the server wins, cancelling the manual prompt is
-                    // what clears the UI sheet.
-                    manualJob.cancel()
+                    // An empty code counts as absent.
+                    parsed.code?.takeIf { it.isNotEmpty() }
+                        ?: throw IllegalStateException("Missing authorization code")
                 }
             }
+            return exchangeAuthorizationCodeForCredentials(code, flow.verifier, REDIRECT_URI)
         } finally {
-            handle?.close()
+            callback?.close()
         }
     }
 
     /** Bind failure returns null, degrading to the manual-only flow. */
-    private suspend fun startLocalOAuthServer(
-        state: String
-    ): LoopbackCallbackHandle<CallbackCode>? {
-        val server = LoopbackOAuthServer(
-            port = callbackPort,
-            host = CALLBACK_HOST,
-            gate = gate,
-            handler = { request, settle ->
-                if (request.path != CALLBACK_PATH) {
-                    LoopbackCallbackResponse(404, oauthErrorHtml("Callback route not found."))
-                } else if (request.query["state"] != state) {
-                    LoopbackCallbackResponse(400, oauthErrorHtml("State mismatch."))
-                } else {
-                    val code = request.query["code"]
-                    if (code.isNullOrEmpty()) {
-                        LoopbackCallbackResponse(400, oauthErrorHtml("Missing authorization code."))
-                    } else {
-                        settle(CallbackCode(code))
-                        LoopbackCallbackResponse(
-                            200,
-                            oauthSuccessHtml(
-                                "OpenAI authentication completed. You can close this window."
-                            )
-                        )
-                    }
-                }
-            }
-        )
-        val handle = server.start()
-        lastCallbackPort = handle?.port
-        return handle
-    }
-
-    internal data class CallbackCode(val code: String) {
-        override fun toString(): String = "CallbackCode(code=<redacted>)"
+    private suspend fun startLocalOAuthServer(state: String): OAuthCallbackServer<String>? = try {
+        startOAuthCallbackServer(
+            OAuthCallbackServerOptions(
+                providerName = "OpenAI",
+                host = CALLBACK_HOST,
+                port = callbackPort,
+                path = CALLBACK_PATH,
+                state = state,
+                complete = { code -> code },
+                gate = gate
+            )
+        ).also { server ->
+            lastCallbackPort = server.redirectUri
+                .substringAfterLast(':')
+                .substringBefore('/')
+                .toInt()
+        }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        lastCallbackPort = null
+        null
     }
 
     /**
@@ -684,8 +648,8 @@ class OpenAiCodexOAuthAuth(
 
         const val JWT_CLAIM_PATH: String = "https://api.openai.com/auth"
 
-        /** Deliberate divergence from pi's `"pi"` default (see class KDoc). */
-        const val ORIGINATOR: String = "pathfinder"
+        /** Deliberate divergence from pi's `"pi"` default: Pathfinder's own name. */
+        const val ORIGINATOR: String = "Pathfinder"
 
         const val CALLBACK_PORT: Int = 1455
 

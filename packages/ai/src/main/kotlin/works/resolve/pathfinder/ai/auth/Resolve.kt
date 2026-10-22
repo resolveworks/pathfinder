@@ -1,10 +1,13 @@
 package works.resolve.pathfinder.ai.auth
 
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
 import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 
@@ -122,15 +125,85 @@ private const val DEFAULT_OAUTH_MINIMUM_VALIDITY_MS = 5 * 60 * 1000L
 private const val DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 15_000L
 
 /**
+ * Refresh a stored OAuth credential under the credential-store lock and persist
+ * the result before the lock is released. [needsRefresh] is re-checked under
+ * the lock, so concurrent callers refresh only once.
+ *
+ * Caller cancellation stops only the wait for the lock. Once a refresh starts,
+ * the provider may already have rotated the refresh token, so the refresh and
+ * its persistence ignore caller cancellation and are bounded only by the
+ * refresh timeout; otherwise a cancelled caller could discard the only valid
+ * refresh token. The caller still returns promptly on cancellation.
+ *
+ * Returns the stored OAuth credential after the operation, or null when the
+ * provider no longer has an OAuth credential.
+ */
+internal suspend fun refreshStoredOAuthCredential(
+    credentials: CredentialStore,
+    providerId: String,
+    oauth: OAuthAuth,
+    needsRefresh: (OAuthCredential) -> Boolean
+): OAuthCredential? {
+    val callerContext = currentCoroutineContext()
+    val refreshStarted = AtomicBoolean(false)
+    // Detached from the caller's Job: caller cancellation must not cancel a
+    // refresh that has already started.
+    val scope = CoroutineScope(callerContext + Job())
+    val deferred = scope.async {
+        credentials.modify(providerId) { current ->
+            // logged out meanwhile
+            val currentOAuth = current as? OAuthCredential ?: return@modify null
+            if (!needsRefresh(currentOAuth)) {
+                return@modify null // another request refreshed
+            }
+            refreshStarted.set(true)
+            val refreshed = try {
+                withTimeoutOrNull(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS) {
+                    oauth.refresh(currentOAuth)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                throw ModelsError(
+                    ModelsErrorCode.OAUTH,
+                    "OAuth refresh failed for $providerId",
+                    error
+                )
+            } ?: throw ModelsError(
+                // pi's refresh signal is AbortSignal.any([caller signal,
+                // timeout]): its timeout surfaces as a TimeoutError cause
+                // under the same "OAuth refresh failed" message as any other
+                // refresh failure.
+                ModelsErrorCode.OAUTH,
+                "OAuth refresh failed for $providerId",
+                TimeoutException("Timed out waiting for ${DEFAULT_OAUTH_REFRESH_TIMEOUT_MS} ms")
+            )
+            refreshed
+        }
+    }
+
+    try {
+        val post = deferred.await()
+        return post as? OAuthCredential
+    } catch (error: ModelsError) {
+        throw error
+    } catch (error: CancellationException) {
+        // Cancellation before the refresh starts releases the lock wait;
+        // after it starts the detached job completes and persists.
+        if (!refreshStarted.get()) deferred.cancel()
+        throw error
+    } catch (error: Throwable) {
+        throw ModelsError(
+            ModelsErrorCode.AUTH,
+            "Credential store modify failed for $providerId",
+            error
+        )
+    }
+}
+
+/**
  * OAuth resolution with double-checked locking: tokens with less than five
- * minutes remaining lock, re-check expiry under the lock, and refresh once
- * globally. The refresh call is bounded by [withTimeoutOrNull], whose own
- * timeout is reported as an OAUTH error while external caller cancellation
- * propagates unchanged. A caller cancelled around a completing refresh
- * never persists: pi's modify checks the caller signal after the refresh
- * and before the write, discarding the result — the port mirrors that with
- * a cancellation check before the refreshed credential is handed to the
- * store.
+ * minutes remaining are refreshed through [refreshStoredOAuthCredential].
  */
 private suspend fun resolveStoredOAuth(
     credentials: CredentialStore,
@@ -147,55 +220,13 @@ private suspend fun resolveStoredOAuth(
 
     if (expiresSoon(credential)) {
         // Optimistic check said expired; the authoritative check runs under the lock.
-        val post = try {
-            credentials.modify(providerId) { current ->
-                // logged out meanwhile
-                val currentOAuth = current as? OAuthCredential ?: return@modify null
-                if (!expiresSoon(currentOAuth)) {
-                    return@modify null // another request refreshed
-                }
-                val refreshed = try {
-                    withTimeoutOrNull(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS) {
-                        oauth.refresh(currentOAuth)
-                    }
-                } catch (error: CancellationException) {
-                    throw error // caller cancellation (incl. an outer withTimeout) — never wrapped
-                } catch (error: Throwable) {
-                    throw ModelsError(
-                        ModelsErrorCode.OAUTH,
-                        "OAuth refresh failed for $providerId",
-                        error
-                    )
-                } ?: throw ModelsError(
-                    // pi's refresh signal is AbortSignal.any([caller signal,
-                    // timeout]): its timeout surfaces as a TimeoutError cause
-                    // under the same "OAuth refresh failed" message as any other
-                    // refresh failure.
-                    ModelsErrorCode.OAUTH,
-                    "OAuth refresh failed for $providerId",
-                    TimeoutException(
-                        "Timed out waiting for ${DEFAULT_OAUTH_REFRESH_TIMEOUT_MS} ms"
-                    )
-                )
-                // pi's modify runs `throwIfAborted` after the refresh and
-                // before persisting: the completed refresh's result is
-                // discarded — never written — and the cancellation then
-                // rethrows to the caller.
-                currentCoroutineContext().ensureActive()
-                refreshed
-            }
-        } catch (error: ModelsError) {
-            throw error
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Throwable) {
-            throw ModelsError(
-                ModelsErrorCode.AUTH,
-                "Credential store modify failed for $providerId",
-                error
-            )
-        }
-        if (post !is OAuthCredential) return null // logged out meanwhile
+        val post = refreshStoredOAuthCredential(
+            credentials,
+            providerId,
+            oauth,
+            ::expiresSoon
+        )
+        if (post == null) return null // logged out meanwhile
         credential = post
         // The normal five-minute window triggers a refresh but does not impose a
         // provider contract. Explicit callers do require the requested minimum

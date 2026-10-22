@@ -43,7 +43,10 @@ class ProviderAuthServiceTest {
     ) : OAuthAuth {
         var refreshCalls = 0
 
-        override suspend fun login(interaction: AuthInteraction): OAuthCredential {
+        override suspend fun login(
+            interaction: AuthInteraction,
+            options: LoginOptions?
+        ): OAuthCredential {
             interaction.notify(AuthEvent.Info("fake oauth"))
             return onLogin()
         }

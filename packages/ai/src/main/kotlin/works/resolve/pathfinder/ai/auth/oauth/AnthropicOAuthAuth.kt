@@ -1,16 +1,14 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
-import java.net.SocketTimeoutException
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthPrompt
+import works.resolve.pathfinder.ai.auth.LoginOptions
 import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
@@ -29,10 +27,8 @@ import works.resolve.pathfinder.ai.utils.urlQueryParamsOrNull
  * wins outright and cancels the pending prompt.
  *
  * Divergences from pi:
- * - Bind failure fails the login outright (like pi's Anthropic flow, unlike
- *   the sibling Codex flow, which degrades to manual login). pi surfaces
- *   Node's `EADDRINUSE` errno; this port has no Node error metadata and
- *   throws a plain `IllegalStateException` naming the failed loopback bind.
+ * - Bind failure on the preferred port falls back to a free port, then to
+ *   manual login, matching pi's Anthropic flow.
  * - No `PI_OAUTH_CALLBACK_HOST` env override: the host is `127.0.0.1`.
  *   Android apps share the device network namespace, so the socket is
  *   reachable from the on-device browser (Chrome/Vanadium allow cleartext
@@ -106,37 +102,50 @@ class AnthropicOAuthAuth(
         )
     }
 
-    override suspend fun login(interaction: AuthInteraction): OAuthCredential = coroutineScope {
-        val challenge = pkce.generate()
-        val verifier = challenge.verifier
+    override suspend fun login(
+        interaction: AuthInteraction,
+        options: LoginOptions?
+    ): OAuthCredential {
+        val method = interaction.prompt(
+            AuthPrompt.Select(
+                message = "Select Anthropic login method:",
+                options = listOf(
+                    AuthPrompt.Select.Option(BROWSER_LOGIN_METHOD, "Browser login (default)"),
+                    AuthPrompt.Select.Option(
+                        COPY_CODE_LOGIN_METHOD,
+                        "Copy code login (headless)"
+                    )
+                )
+            )
+        )
 
-        val handle =
-            LoopbackOAuthServer(
-                port = callbackPort,
-                host = CALLBACK_HOST,
-                gate = gate,
-                handlerError = LoopbackCallbackResponse(
-                    500,
-                    "Internal error",
-                    contentType = "text/plain; charset=utf-8"
-                )
-            ) { request, settle ->
-                callbackResponse(request, settle, verifier)
-            }.start()
-                ?: throw IllegalStateException(
-                    "Failed to bind the Anthropic OAuth callback server on " +
-                        "$CALLBACK_HOST:$callbackPort; " +
-                        "another OAuth login may already be using the port"
-                )
+        return when (method) {
+            COPY_CODE_LOGIN_METHOD -> loginAnthropicCopyCode(interaction)
+            BROWSER_LOGIN_METHOD -> loginAnthropic(interaction)
+            else -> throw IllegalStateException("Unknown Anthropic login method: $method")
+        }
+    }
+
+    /**
+     * Without a callback server, login continues with the pasted redirect URL.
+     * Anthropic accepts any loopback port, so the preferred port falls back to
+     * a free one when it cannot be bound.
+     */
+    private suspend fun loginAnthropic(interaction: AuthInteraction): OAuthCredential {
+        val pair = pkce.generate()
+        val verifier = pair.verifier
+        val callback = startCallbackServer(callbackPort, verifier)
+            ?: startCallbackServer(0, verifier)
+        val redirectUri = callback?.redirectUri ?: REDIRECT_URI
 
         try {
             val authParams = linkedMapOf(
                 "code" to "true",
                 "client_id" to CLIENT_ID,
                 "response_type" to "code",
-                "redirect_uri" to REDIRECT_URI,
+                "redirect_uri" to redirectUri,
                 "scope" to SCOPES,
-                "code_challenge" to challenge.challenge,
+                "code_challenge" to pair.challenge,
                 "code_challenge_method" to "S256",
                 "state" to verifier
             )
@@ -148,47 +157,103 @@ class AnthropicOAuthAuth(
                 )
             )
 
-            val manualPrompt = async {
-                try {
-                    interaction.prompt(
-                        AuthPrompt.ManualCode(
-                            message = "Complete login in your browser, " +
-                                "or paste the authorization code / redirect URL here:",
-                            placeholder = REDIRECT_URI
-                        )
-                    )
-                } finally {
-                    handle.cancelWait()
-                }
-            }
-
-            val result = handle.waitForResult()
+            val result = waitForCallbackOrManualInput(
+                interaction,
+                callback,
+                message = "Complete login in your browser, " +
+                    "or paste the authorization code / redirect URL here:",
+                placeholder = redirectUri
+            )
             val code: String
             val state: String
-            if (result != null) {
-                // Cancelling the prompt coroutine is what clears the pending
-                // prompt sheet in the UI.
-                manualPrompt.cancel()
-                code = result.code
-                state = result.state
-            } else {
-                val manualInput = manualPrompt.await()
-                val parsed = parseAuthorizationInput(manualInput)
-                if (!parsed.state.isNullOrEmpty() && parsed.state != verifier) {
-                    throw IllegalStateException("OAuth state mismatch")
+            when (result) {
+                is CallbackOrManualInput.Callback -> {
+                    code = result.value
+                    state = verifier
                 }
-                code =
-                    parsed.code?.takeIf { it.isNotEmpty() }
-                        ?: throw IllegalStateException("Missing authorization code")
-                state = parsed.state ?: verifier
-                if (state.isEmpty()) throw IllegalStateException("Missing OAuth state")
+
+                is CallbackOrManualInput.Manual -> {
+                    val parsed = parseAuthorizationInput(result.input)
+                    if (!parsed.state.isNullOrEmpty() && parsed.state != verifier) {
+                        throw IllegalStateException("OAuth state mismatch")
+                    }
+                    code =
+                        parsed.code?.takeIf { it.isNotEmpty() }
+                            ?: throw IllegalStateException("Missing authorization code")
+                    state = parsed.state ?: verifier
+                }
             }
 
             interaction.notify(AuthEvent.Progress("Exchanging authorization code for tokens..."))
-            exchangeAuthorizationCode(code, state, verifier, REDIRECT_URI)
+            return exchangeAuthorizationCode(code, state, verifier, redirectUri)
         } finally {
-            handle.close()
+            callback?.close()
         }
+    }
+
+    private suspend fun loginAnthropicCopyCode(interaction: AuthInteraction): OAuthCredential {
+        val pair = pkce.generate()
+        val verifier = pair.verifier
+        val authParams = linkedMapOf(
+            "code" to "true",
+            "client_id" to CLIENT_ID,
+            "response_type" to "code",
+            "redirect_uri" to COPY_CODE_REDIRECT_URI,
+            "scope" to SCOPES,
+            "code_challenge" to pair.challenge,
+            "code_challenge_method" to "S256",
+            "state" to verifier
+        )
+        interaction.notify(
+            AuthEvent.AuthUrl(
+                url = AUTHORIZE_URL + "?" + formUrlEncode(authParams),
+                instructions =
+                    "Complete login in your browser, then copy the code Anthropic shows and paste it here."
+            )
+        )
+
+        val input = interaction.prompt(
+            AuthPrompt.ManualCode(
+                message = "Paste the code Anthropic shows after you sign in:",
+                placeholder = "code#state"
+            )
+        )
+        val parsed = parseAuthorizationInput(input)
+        if (!parsed.state.isNullOrEmpty() && parsed.state != verifier) {
+            throw IllegalStateException("OAuth state mismatch")
+        }
+        val code =
+            parsed.code?.takeIf { it.isNotEmpty() }
+                ?: throw IllegalStateException("Missing authorization code")
+        interaction.notify(AuthEvent.Progress("Exchanging authorization code for tokens..."))
+        return exchangeAuthorizationCode(
+            code,
+            parsed.state ?: verifier,
+            verifier,
+            COPY_CODE_REDIRECT_URI
+        )
+    }
+
+    private suspend fun startCallbackServer(
+        port: Int,
+        state: String
+    ): OAuthCallbackServer<String>? = try {
+        startOAuthCallbackServer(
+            OAuthCallbackServerOptions(
+                providerName = "Anthropic",
+                host = CALLBACK_HOST,
+                port = port,
+                path = CALLBACK_PATH,
+                redirectHost = "localhost",
+                state = state,
+                complete = { code -> code },
+                gate = gate
+            )
+        )
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        null
     }
 
     internal data class ParsedAuthorizationInput(val code: String?, val state: String?)
@@ -387,6 +452,13 @@ class AnthropicOAuthAuth(
         const val CLIENT_ID: String = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
         const val AUTHORIZE_URL: String = "https://claude.ai/oauth/authorize"
+
+        const val COPY_CODE_REDIRECT_URI: String =
+            "https://platform.claude.com/oauth/code/callback"
+
+        const val BROWSER_LOGIN_METHOD: String = "browser"
+
+        const val COPY_CODE_LOGIN_METHOD: String = "copy_code"
 
         const val TOKEN_URL: String = "https://platform.claude.com/v1/oauth/token"
 

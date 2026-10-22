@@ -37,7 +37,10 @@ class KimiCodingOAuthAuth(
     override val isSubscription: Boolean = true
     override val loginLabel: String = "Sign in with Kimi Code"
 
-    override suspend fun login(interaction: AuthInteraction): OAuthCredential {
+    override suspend fun login(
+        interaction: AuthInteraction,
+        options: works.resolve.pathfinder.ai.auth.LoginOptions?
+    ): OAuthCredential {
         val device = startDeviceAuthorization()
         interaction.notify(
             AuthEvent.DeviceCode(
