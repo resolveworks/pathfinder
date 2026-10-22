@@ -75,12 +75,6 @@ class BraveWebSearchTool(
 
     override val label: String = "Web Search"
 
-    override val promptSnippet: String = "Search the web for information on a topic"
-
-    override val promptGuidelines: List<String> = listOf(
-        "Use web_search when the user asks you to look up current information, facts, or content from the web."
-    )
-
     override suspend fun execute(
         toolCallId: String,
         arguments: JsonObject,

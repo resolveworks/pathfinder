@@ -74,11 +74,6 @@ import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
-import works.resolve.pathfinder.ssh.MachineKeyStore
-import works.resolve.pathfinder.ssh.MachineStore
-import works.resolve.pathfinder.ssh.SshConnectionHelper
-import works.resolve.pathfinder.ssh.SshConnectionProvider
-import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
@@ -222,22 +217,6 @@ internal class ChatHarness(
         )
     )
     val settings = SettingsRepository(failingDataStore)
-
-    val machineStore = MachineStore(
-        PreferenceDataStoreFactory.create(
-            scope = dataStoreScope,
-            produceFile = {
-                File(tmpFolder.root, "machines_${System.nanoTime()}.preferences_pb")
-            }
-        ),
-        MachineKeyStore(File(tmpFolder.root, "machine-keys"), { it }, { it })
-    )
-
-    val hostKeyConfirmer = TofuHostKeyConfirmer()
-
-    val sshConnectionHelper = SshConnectionHelper(machineStore)
-
-    val selectedMachineId = MutableStateFlow<String?>(null)
 
     /** The shared manager all ViewModels and the factory write through. */
     val settingsManager: SettingsManager =
@@ -387,14 +366,6 @@ internal class ChatHarness(
         agentFactory = factory,
         modelResolver = modelResolver,
         searchProviderService = searchProviders,
-        machineStore = machineStore,
-        hostKeyConfirmer = hostKeyConfirmer,
-        sshConnectionProvider = SshConnectionProvider(
-            machineStore,
-            sshConnectionHelper,
-            hostKeyConfirmer,
-            selectedMachineId
-        ),
         appForegroundGate = AppForegroundGate(),
         defaultDispatcher = testDispatcher
     ).also { viewModels += it }

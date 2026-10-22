@@ -175,9 +175,6 @@ dependencies {
     // The web_fetch tool renders pages in a hidden WebView with its own profile.
     implementation(libs.androidx.webkit)
 
-    // EXIF orientation for the read tool's image path (BitmapImageProcessing).
-    implementation(libs.androidx.exifinterface)
-
     implementation(libs.androidx.datastore.preferences)
 
     // HTTP + JSON for the native provider layer.
@@ -194,13 +191,9 @@ dependencies {
     implementation(libs.markdown.renderer)
     implementation(libs.markdown.renderer.m3)
 
-    // cbssh, the only SSH library; confined to the app's ssh package so the
-    // seam bounds any future replacement.
-    implementation(libs.cbssh.sshlib)
-
-    // sshlib declares slf4j-api as implementation, so the app must declare it
-    // itself. The Android binding in works.resolve.pathfinder.logging routes
-    // slf4j to logcat; release builds log warn and above.
+    // The app logs through slf4j; the Android binding in
+    // works.resolve.pathfinder.logging routes it to logcat. Release builds
+    // log warn and above.
     implementation(libs.slf4j.api)
 
     testImplementation(testFixtures(project(":packages:ai")))

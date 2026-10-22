@@ -38,7 +38,6 @@ internal fun SettingsContent(
     onOpenDefaultThinking: () -> Unit,
     onOpenProviders: () -> Unit,
     onOpenSearchProviders: () -> Unit,
-    onOpenMachines: () -> Unit,
     onToggleShowThinking: (Boolean) -> Unit
 ) {
     Column(
@@ -87,14 +86,6 @@ internal fun SettingsContent(
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },
             modifier = Modifier.clickable(onClick = onOpenSearchProviders)
-        )
-        ListItem(
-            headlineContent = { Text(stringResource(R.string.machines_title)) },
-            supportingContent = { Text(stringResource(R.string.machines_hint)) },
-            trailingContent = {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
-            },
-            modifier = Modifier.clickable(onClick = onOpenMachines)
         )
         ListItem(
             headlineContent = { Text(stringResource(R.string.settings_show_thinking)) },

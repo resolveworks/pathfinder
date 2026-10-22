@@ -6,7 +6,6 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import works.resolve.pathfinder.codingagent.core.SettingsStorage
@@ -21,7 +20,6 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
     private object Keys {
         val ACTIVE_SESSION_ID = stringPreferencesKey("active_session_id")
         val SHOW_THINKING = booleanPreferencesKey("show_thinking")
-        val SELECTED_MACHINE_ID = stringPreferencesKey("selected_machine_id")
 
         /** Raw pi settings JSON; owned by `SettingsManager`, not typed here. */
         val SETTINGS_JSON = stringPreferencesKey("settings_json")
@@ -30,9 +28,7 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
     private val settings: Flow<AppSettings> = dataStore.data.map { prefs ->
         AppSettings(
             activeSessionId = prefs[Keys.ACTIVE_SESSION_ID]?.takeIf { it.isNotBlank() },
-            showThinking = prefs[Keys.SHOW_THINKING] ?: false,
-            selectedMachineId =
-                prefs[Keys.SELECTED_MACHINE_ID]?.takeIf { it.isNotBlank() }
+            showThinking = prefs[Keys.SHOW_THINKING] ?: false
         )
     }
 
@@ -50,21 +46,7 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
         dataStore.edit { it[Keys.SHOW_THINKING] = showThinking }
     }
 
-    suspend fun setSelectedMachineId(machineId: String?) {
-        dataStore.edit { prefs ->
-            if (machineId == null) {
-                prefs.remove(Keys.SELECTED_MACHINE_ID)
-            } else {
-                prefs[Keys.SELECTED_MACHINE_ID] = machineId
-            }
-        }
-    }
-
     suspend fun currentSettings(): AppSettings = settings.first()
-
-    val selectedMachineId: Flow<String?> = settings.map {
-        it.selectedMachineId
-    }.distinctUntilChanged()
 
     /**
      * Preferences DataStore serializes `edit` calls, giving the atomic

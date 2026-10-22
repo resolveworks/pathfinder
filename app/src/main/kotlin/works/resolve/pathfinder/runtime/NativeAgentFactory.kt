@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.runtime
 
-import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.flowOn
@@ -32,16 +31,6 @@ import works.resolve.pathfinder.codingagent.core.CreateAgentSessionResult
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.codingagent.core.createAgentSession
-import works.resolve.pathfinder.codingagent.core.tools.BashToolOptions
-import works.resolve.pathfinder.codingagent.core.tools.EditToolOptions
-import works.resolve.pathfinder.codingagent.core.tools.ImageProcessing
-import works.resolve.pathfinder.codingagent.core.tools.ReadToolOptions
-import works.resolve.pathfinder.codingagent.core.tools.ToolsOptions
-import works.resolve.pathfinder.codingagent.core.tools.WriteToolOptions
-import works.resolve.pathfinder.codingagent.core.tools.createCodingTools
-import works.resolve.pathfinder.ssh.RemoteBashOperations
-import works.resolve.pathfinder.ssh.RemoteFileOperations
-import works.resolve.pathfinder.ssh.SshConnectionProvider
 
 /**
  * Production [AgentFactory]: builds the native agent stack from the persisted
@@ -85,13 +74,7 @@ class NativeAgentFactory(
     private val authContext: AuthContext = NoopAuthContext,
     private val authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
     /** Tools available to every created agent; copied per agent. */
-    private val tools: List<AgentTool> = emptyList(),
-    /** Process-wide SSH connection provider; when null, sessions get no coding tools. */
-    private val sshConnectionProvider: SshConnectionProvider? = null,
-    /** Bash full-output temp dir (the app's cacheDir). */
-    private val bashTempDir: String? = null,
-    /** Image codec for the read tool's image path. */
-    private val imageProcessing: ImageProcessing? = null
+    private val tools: List<AgentTool> = emptyList()
 ) : AgentFactory {
 
     override suspend fun create(sessionManager: SessionManager): CreateAgentSessionResult {
@@ -116,13 +99,6 @@ class NativeAgentFactory(
             }
         )
 
-        val ssh = sshCodingTools()
-        val codingTools = ssh?.tools ?: emptyList()
-        // pi's ssh example annotates the remote cwd as `... (via SSH: user@host)`
-        // in the system prompt; the same string is the session's persisted cwd.
-        val cwd = ssh?.cwd ?: ""
-        sessionManager.updateCwd(cwd)
-
         // pi's ModelRuntime.hasConfiguredAuth: the restore path checks
         // provider-credential presence without resolving (no OAuth refresh);
         // ProviderAuthService.isConfigured is that presence check.
@@ -146,59 +122,15 @@ class NativeAgentFactory(
                         .buffer(STREAM_BUFFER_CAPACITY)
                         .flowOn(Dispatchers.Default)
                 },
-                tools = tools.toList() + codingTools,
-                cwd = cwd,
+                tools = tools.toList(),
                 streamOptions = SimpleStreamOptions(
                     sessionId = sessionManager.getSessionId(),
                     timeoutMs = REQUEST_TIMEOUT_MS,
                     maxRetries = MAX_RETRIES
                 )
             )
-        ssh?.createdSession?.set(result.session)
         return result
     }
-
-    /**
-     * Builds the ported coding tools against the currently selected
-     * machine's configured cwd, or null when no machine is configured (or no
-     * provider is wired). Tools dial lazily per call; nothing connects
-     * here. The session's model is not known until createAgentSession builds
-     * it, so the read tool's model provider reads it through
-     * [AtomicReference] filled once creation returns.
-     */
-    private suspend fun sshCodingTools(): SshTools? {
-        val provider = sshConnectionProvider ?: return null
-        val tempDir = bashTempDir ?: return null
-
-        val machine = provider.currentMachine() ?: return null
-        val files = RemoteFileOperations(provider)
-        val createdSession = AtomicReference<AgentSession>()
-        val tools = createCodingTools(
-            cwd = machine.cwd,
-            options = ToolsOptions(
-                read = ReadToolOptions(
-                    operations = files,
-                    imageProcessing = imageProcessing,
-                    modelProvider = { createdSession.get()?.model }
-                ),
-                bash = BashToolOptions(RemoteBashOperations(provider), tempDir),
-                edit = EditToolOptions(files),
-                write = WriteToolOptions(files)
-            )
-        )
-        return SshTools(
-            tools,
-            "${machine.cwd} (via SSH: ${machine.username}@${machine.address})",
-            createdSession
-        )
-    }
-
-    /** Coding tools plus the cwd string and slot the created session lands in for the read tool's model provider. */
-    private class SshTools(
-        val tools: List<AgentTool>,
-        val cwd: String,
-        val createdSession: AtomicReference<AgentSession>
-    )
 
     /**
      * Resolves a catalog provider/model pair to the effective request model,

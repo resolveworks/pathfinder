@@ -50,7 +50,6 @@ import com.mikepenz.markdown.model.parseMarkdown
 import com.mikepenz.markdown.model.rememberStreamingMarkdownState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.R
@@ -62,19 +61,14 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.truthyString
-import works.resolve.pathfinder.codingagent.core.tools.BashTool
-import works.resolve.pathfinder.codingagent.core.tools.EditTool
-import works.resolve.pathfinder.codingagent.core.tools.ReadTool
-import works.resolve.pathfinder.codingagent.core.tools.WriteTool
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 private const val STREAMING_PLACEHOLDER = "…"
 
-/** Cap on the in-row bash partial preview; the full output opens in the sheet. */
+/** Cap on the in-row partial-output preview; the full output opens in the sheet. */
 private const val PARTIAL_OUTPUT_MAX_LINES = 4
 
 @Composable
@@ -400,9 +394,9 @@ internal enum class ToolResultFormat {
     MARKDOWN
 }
 
-/** The two Pathfinder-owned web tools render their result as Markdown; pi
- * has no web tools. Everything else is [ToolResultFormat.MONO] — the port
- * of pi's generic raw terminal-output fallback. */
+/** The two Pathfinder-owned web tools render their result as Markdown;
+ * everything else is [ToolResultFormat.MONO] — the port of pi's generic raw
+ * terminal-output fallback. */
 internal object ToolResultRenderers {
     private val MARKDOWN_TOOLS = setOf(BraveWebSearchTool.NAME, WebFetchTool.NAME)
 
@@ -411,47 +405,13 @@ internal object ToolResultRenderers {
 }
 
 /**
- * The display diff of an edit result, from its details (pi's edit renderer
- * shows the diff); null for non-edit calls or missing details.
- */
-internal fun editDiff(result: ToolResultMessage): String? {
-    if (result.toolName != EditTool.NAME) return null
-    return (result.details as? JsonObject)?.truthyString("diff")
-}
-
-/**
- * Row title, in pi's renderCall grammar: tool name (or the `$` prompt for
- * bash) followed by the key argument, plain concatenation. pi's read range
- * and bash timeout suffixes are ported as-is. A missing spec or a
- * missing/empty key argument leaves the bare tool name.
+ * Row title, in pi's renderCall grammar: tool name followed by the key
+ * argument, plain concatenation. A missing spec or a missing/empty key
+ * argument leaves the bare tool name.
  */
 @Composable
 internal fun toolCallTitle(call: ToolCall): String {
     return when (call.name) {
-        BashTool.NAME -> {
-            val command = call.arguments.truthyString("command") ?: return call.name
-            val timeout = call.arguments.int("timeout")
-            "$ " + command + (if (timeout != null) " (timeout ${timeout}s)" else "")
-        }
-
-        ReadTool.NAME -> {
-            val path = call.arguments.truthyString("path") ?: return call.name
-            val offset = call.arguments.int("offset")
-            val limit = call.arguments.int("limit")
-            val range = if (offset == null && limit == null) {
-                ""
-            } else {
-                val start = offset ?: 1
-                if (limit != null) ":$start-${start + limit - 1}" else ":$start"
-            }
-            "read " + path + range
-        }
-
-        EditTool.NAME, WriteTool.NAME -> {
-            val path = call.arguments.truthyString("path") ?: return call.name
-            call.name + " " + path
-        }
-
         BraveWebSearchTool.NAME -> {
             val query = call.arguments.truthyString("query") ?: return call.name
             stringResource(R.string.tool_title_searched_for, query)
@@ -475,9 +435,8 @@ internal fun toolCallTitle(call: ToolCall?, fallbackName: String?): String =
     if (call == null) fallbackName ?: "tool" else toolCallTitle(call)
 
 /**
- * Shared tool-call header: the row title (monospace for bash calls) with the
- * trailing "Failed" label on errors. The title stays on one line; the sheet
- * is about the output.
+ * Shared tool-call header: the row title with the trailing "Failed" label
+ * on errors. The title stays on one line; the sheet is about the output.
  */
 @Composable
 private fun ToolHeader(call: ToolCall, isError: Boolean) {
@@ -489,7 +448,6 @@ private fun ToolHeader(call: ToolCall, isError: Boolean) {
         Text(
             text = toolCallTitle(call),
             style = MaterialTheme.typography.labelLarge,
-            fontFamily = if (call.name == BashTool.NAME) FontFamily.Monospace else null,
             color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -510,9 +468,9 @@ private fun ToolHeader(call: ToolCall, isError: Boolean) {
  * distinct from conversation text: the row title (the call's key argument,
  * else the tool name) and a spinner while running
  * (the call committed but its result has not, and the run is still live —
- * pi's component spins between its start and end events). A running bash
- * call previews its throttled partial output under the title (pi's bash
- * renderer streams it). Rows with output open [ToolOutputSheet] instead
+ * pi's component spins between its start and end events). A running call
+ * previews its throttled partial output under the title. Rows with output
+ * open [ToolOutputSheet] instead
  * of expanding in place: the sheet owns its scroll, starts at the top of
  * the content, and leaves the transcript's layout and scroll position
  * untouched behind it. Per-row, never global (pi's Ctrl+O, exposed as a
@@ -600,17 +558,7 @@ private fun ToolOutputSheet(call: ToolCall, result: ToolResultMessage, onDismiss
                     .verticalScroll(rememberScrollState())
                     .padding(top = 8.dp)
             ) {
-                val diff = remember(result) { editDiff(result) }
                 when {
-                    // pi's edit renderer shows the display diff from details,
-                    // not the bare result line.
-                    diff != null -> Text(
-                        text = diff,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = contentColor
-                    )
-
                     format == ToolResultFormat.MARKDOWN -> Markdown(
                         content = output,
                         colors = markdownColor(text = contentColor),

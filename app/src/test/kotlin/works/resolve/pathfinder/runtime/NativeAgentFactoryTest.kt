@@ -218,15 +218,14 @@ class NativeAgentFactoryTest {
         assertTrue(default.state.value.tools.isEmpty())
     }
 
-    /** Fake production tool with a prompt snippet so prompt rebuild is observable. */
+    /** Fake production tool so prompt rebuild is observable. */
     private class FakeFactoryTool(
         override val definition: Tool = Tool(
             "web_search",
             "search",
             buildJsonObject { put("type", "object") }
         ),
-        override val label: String = "web_search",
-        override val promptSnippet: String? = "does web_search"
+        override val label: String = "web_search"
     ) : AgentTool {
         override suspend fun execute(
             toolCallId: String,
