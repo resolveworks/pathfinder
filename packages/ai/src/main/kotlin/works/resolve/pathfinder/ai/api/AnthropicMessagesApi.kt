@@ -47,14 +47,15 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.AssistantMessageDiagnostic
+import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.appendAssistantMessageDiagnostic
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
 import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.getCurrentTools
 import works.resolve.pathfinder.ai.utils.getDeclaredTools
+import works.resolve.pathfinder.ai.utils.getIdentityHeaders
 import works.resolve.pathfinder.ai.utils.getInitialSystemMessage
-import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.hasToolRedefinitions
 import works.resolve.pathfinder.ai.utils.int
@@ -221,6 +222,8 @@ data class AnthropicMessagesOptions(
     val maxRetryDelayMs: Long = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
+    /** How the request identifies the calling app. */
+    val identity: ClientIdentity? = null,
     /**
      * Request hook that may return a replacement for the outgoing payload,
      * applied before serialization. It receives full message content —
@@ -604,6 +607,7 @@ internal fun buildBaseOptions(
     maxRetryDelayMs = options.maxRetryDelayMs,
     env = options.env,
     headers = options.headers,
+    identity = options.identity,
     onPayload = options.onPayload,
     onResponse = options.onResponse,
     telemetryContext = options.telemetry
@@ -708,12 +712,15 @@ private fun buildHeaders(
         }
         val merged = filterNonNull(
             mergeHeaders(
-                mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), base),
-                // Copilot dynamic headers override model headers but not
-                // per-request options headers.
+                getIdentityHeaders(model, options.identity),
                 mergeHeaders(
-                    mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
-                    options.headers
+                    base,
+                    // Copilot dynamic headers override model headers but not
+                    // per-request options headers.
+                    mergeHeaders(
+                        mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
+                        options.headers
+                    )
                 )
             )
         )
@@ -730,7 +737,7 @@ private fun buildHeaders(
         }
         return filterNonNull(
             mergeHeaders(
-                mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), base),
+                base,
                 mergeHeaders(model.headers, options.headers)
             )
         ) to options.apiKey
@@ -762,8 +769,8 @@ private fun buildHeaders(
     )
     val merged = filterNonNull(
         mergeHeaders(
-            mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), base),
-            mergeHeaders(model.headers, options.headers)
+            getIdentityHeaders(model, options.identity),
+            mergeHeaders(base, mergeHeaders(model.headers, options.headers))
         )
     )
     return merged to null

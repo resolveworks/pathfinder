@@ -31,6 +31,8 @@ import works.resolve.pathfinder.ai.mergeHeaders
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.GITHUB_COPILOT_PROVIDER_ID
 import works.resolve.pathfinder.ai.providers.filterGitHubCopilotModels
+import works.resolve.pathfinder.ai.utils.ClientIdentity
+import works.resolve.pathfinder.ai.utils.mergeClientIdentity
 import works.resolve.pathfinder.ai.utils.normalizeContext
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
@@ -131,6 +133,8 @@ class Provider(
  */
 class Models(
     providers: List<Provider>,
+    /** Default identity of every request; a request's identity overrides it field by field. */
+    private val identity: ClientIdentity? = null,
     private val clock: Clock = Clock.System,
     private val timeSource: TimeSource = TimeSource.Monotonic
 ) {
@@ -204,7 +208,8 @@ class Models(
             } else {
                 auth.env + options.env
             },
-            headers = mergeHeaders(auth?.headers ?: emptyMap(), options.headers)
+            headers = mergeHeaders(auth?.headers ?: emptyMap(), options.headers),
+            identity = mergeClientIdentity(identity, options.identity)
         )
         return api.streamSimple(requestModel, transcript, merged)
     }

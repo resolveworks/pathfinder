@@ -16,6 +16,7 @@ import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
+import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.getCurrentSystemPrompt
 
 /**
@@ -43,6 +44,8 @@ data class AgentLoopConfig(
     val model: Model,
     val options: SimpleStreamOptions = SimpleStreamOptions(),
     val streamFn: StreamFn,
+    /** Overrides [DEFAULT_AGENT_IDENTITY] field by field when building the provider request. */
+    val identity: ClientIdentity? = null,
     /**
      * Batch execution mode; a per-tool `executionMode = SEQUENTIAL` override
      * forces the whole batch sequential.

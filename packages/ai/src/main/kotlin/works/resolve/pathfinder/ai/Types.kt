@@ -7,6 +7,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import works.resolve.pathfinder.ai.api.OpenAiCompletionsOptions
 import works.resolve.pathfinder.ai.utils.AssistantMessageDiagnostic
+import works.resolve.pathfinder.ai.utils.ClientIdentity
+import works.resolve.pathfinder.ai.utils.ClientIdentityTarget
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.telemetry.TelemetrySpan
@@ -480,6 +482,8 @@ data class StreamOptions(
     val apiKey: String? = null,
     /** Session identifier usable for affinity/sticky routing. */
     val sessionId: String? = null,
+    /** How the request identifies the calling app: `User-Agent` and provider attribution headers. */
+    val identity: ClientIdentity? = null,
     val temperature: Double? = null,
     val maxTokens: Int? = null,
     val timeoutMs: Long? = null,
@@ -513,6 +517,8 @@ data class StreamOptions(
 data class SimpleStreamOptions(
     val apiKey: String? = null,
     val sessionId: String? = null,
+    /** How the request identifies the calling app: `User-Agent` and provider attribution headers. */
+    val identity: ClientIdentity? = null,
     val temperature: Double? = null,
     val maxTokens: Int? = null,
     val reasoning: ThinkingLevel? = null,
@@ -593,6 +599,7 @@ data class SimpleStreamOptions(
         OpenAiCompletionsOptions(
             apiKey = apiKey,
             sessionId = sessionId,
+            identity = identity,
             temperature = temperature,
             maxTokens = maxTokens,
             reasoningEffort = reasoningEffort,
@@ -659,8 +666,8 @@ data class Model(
     val id: String,
     val name: String,
     val api: String,
-    val provider: String,
-    val baseUrl: String,
+    override val provider: String,
+    override val baseUrl: String,
     val reasoning: Boolean = false,
     val thinkingLevelMap: ThinkingLevelMap? = null,
     val input: List<InputModality> = listOf(InputModality.TEXT),
@@ -680,7 +687,7 @@ data class Model(
     val samplingParams: SamplingParams? = null,
     /** Sampling parameter overrides selected by the effective pi thinking level. */
     val samplingParamsByThinkingLevel: SamplingParamsByThinkingLevel? = null
-)
+) : ClientIdentityTarget
 
 /** Per-million-token reference rates. */
 interface ModelCostRates {

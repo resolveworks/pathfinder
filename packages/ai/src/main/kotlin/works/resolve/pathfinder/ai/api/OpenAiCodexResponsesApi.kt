@@ -48,13 +48,14 @@ import works.resolve.pathfinder.ai.transport.WebSocketCloseException
 import works.resolve.pathfinder.ai.transport.WebSocketConnection
 import works.resolve.pathfinder.ai.transport.WebSocketEvent
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
+import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.RetryDelayExceededError
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.decodeJwtPayload
 import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.formatUserAgent
 import works.resolve.pathfinder.ai.utils.getDeclaredTools
 import works.resolve.pathfinder.ai.utils.getInitialSystemMessage
-import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.jsParseNumberOrNull
 import works.resolve.pathfinder.ai.utils.normalizeContext
@@ -137,6 +138,8 @@ data class OpenAICodexResponsesOptions(
         works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
+    /** How the request identifies the calling app. */
+    val identity: ClientIdentity? = null,
     /**
      * Request hook: replaces the request body object before serialization
      * when it returns non-null. Receives full message content; installers
@@ -371,7 +374,8 @@ class OpenAICodexResponsesApi(
                 options.headers,
                 accountId,
                 apiKey,
-                codexSessionId
+                codexSessionId,
+                options.identity
             )
                 .toMutableMap()
             val websocketHeaders = buildCodexWebSocketHeaders(
@@ -379,7 +383,8 @@ class OpenAICodexResponsesApi(
                 options.headers,
                 accountId,
                 apiKey,
-                websocketRequestId
+                websocketRequestId,
+                options.identity
             )
             val transportOption = options.transport ?: Transport.AUTO
             val websocketDisabledForSession = transportOption != Transport.SSE &&
@@ -822,6 +827,7 @@ internal fun buildOpenAICodexResponsesOptions(
     maxRetryDelayMs = options.maxRetryDelayMs,
     env = options.env,
     headers = options.headers,
+    identity = options.identity,
     onPayload = options.onPayload,
     onResponse = options.onResponse,
     transport = options.transport,
@@ -1452,7 +1458,8 @@ internal fun buildBaseCodexHeaders(
     modelHeaders: Map<String, String>,
     optionsHeaders: Map<String, String?>,
     accountId: String,
-    token: String
+    token: String,
+    identity: ClientIdentity? = null
 ): MutableMap<String, String?> {
     val headers = LinkedHashMap<String, String?>()
     headers.putAll(modelHeaders)
@@ -1474,7 +1481,7 @@ internal fun buildBaseCodexHeaders(
     // deliberate divergence, consistent with the OAuth authorize URL's
     // originator default.
     headers["originator"] = "pathfinder"
-    headers["User-Agent"] = getPiUserAgent()
+    headers["User-Agent"] = formatUserAgent(identity)
     return headers
 }
 
@@ -1483,9 +1490,10 @@ internal fun buildCodexSSEHeaders(
     optionsHeaders: Map<String, String?>,
     accountId: String,
     token: String,
-    sessionId: String?
+    sessionId: String?,
+    identity: ClientIdentity? = null
 ): Map<String, String> {
-    val headers = buildBaseCodexHeaders(modelHeaders, optionsHeaders, accountId, token)
+    val headers = buildBaseCodexHeaders(modelHeaders, optionsHeaders, accountId, token, identity)
     headers["OpenAI-Beta"] = "responses=experimental"
     headers["accept"] = "text/event-stream"
     headers["content-type"] = "application/json"
@@ -1513,9 +1521,10 @@ internal fun buildCodexWebSocketHeaders(
     optionsHeaders: Map<String, String?>,
     accountId: String,
     token: String,
-    requestId: String
+    requestId: String,
+    identity: ClientIdentity? = null
 ): Map<String, String> {
-    val headers = buildBaseCodexHeaders(modelHeaders, optionsHeaders, accountId, token)
+    val headers = buildBaseCodexHeaders(modelHeaders, optionsHeaders, accountId, token, identity)
     // Headers.delete is case-insensitive: accept/content-type drop in any
     // casing, as do both OpenAI-Beta spellings.
     headers.keys.filter { it.lowercase() == "accept" || it.lowercase() == "content-type" }

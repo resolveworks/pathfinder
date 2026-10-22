@@ -176,7 +176,10 @@ class AgentLoopTest {
             capturedContext!!.messages
         )
         assertTrue(getCurrentTools(capturedContext.messages).isEmpty())
-        assertEquals(SimpleStreamOptions(), capturedOptions)
+        assertEquals(
+            SimpleStreamOptions(identity = DEFAULT_AGENT_IDENTITY),
+            capturedOptions
+        )
 
         assertEquals(1, context.messages.size)
     }

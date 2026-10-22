@@ -27,6 +27,7 @@ import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.toThinkingLevelOrNull
+import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.createInitialSystemMessage
 import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
 import works.resolve.pathfinder.ai.utils.getCurrentSystemPrompt
@@ -85,6 +86,8 @@ class Agent(
     /** Drain mode of the follow-up queue (pi's runtime option). */
     followUpMode: QueueMode = QueueMode.ONE_AT_A_TIME,
     private val clock: Clock = Clock.System,
+    /** Request identity forwarded to the loop, over [DEFAULT_AGENT_IDENTITY]. */
+    var identity: ClientIdentity? = null,
     private val streamFn: StreamFn
 ) {
     /** Guards [active] and transcript mutations; critical sections stay brief and non-suspending. */
@@ -317,6 +320,7 @@ class Agent(
                 streamFn = streamFn,
                 toolExecution = toolExecution,
                 clock = clock,
+                identity = identity,
                 prepareNextTurn = prepareNextTurnWithContext,
                 getSteeringMessages = {
                     if (skipSteeringPoll) {

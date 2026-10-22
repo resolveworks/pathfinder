@@ -43,13 +43,14 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.collapseSystemMessages
 import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.getCurrentTools
+import works.resolve.pathfinder.ai.utils.getIdentityHeaders
 import works.resolve.pathfinder.ai.utils.getInitialSystemMessage
-import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
@@ -73,8 +74,8 @@ import works.resolve.pathfinder.telemetry.TelemetryContext
  * Divergences from pi (also see [GoogleShared] and [GoogleStreamEngine]):
  * - `options.fetch` has no Kotlin counterpart; requests go through the
  *   injected [HttpStreamingTransport].
- * - The User-Agent is [getPiUserAgent]; only its platform-string details
- *   differ from pi's.
+ * - The User-Agent comes from [works.resolve.pathfinder.ai.utils.formatUserAgent];
+ *   only its platform-string details differ from pi's.
  */
 class GoogleGenerativeAiApi(
     private val transport: HttpStreamingTransport,
@@ -93,6 +94,8 @@ class GoogleGenerativeAiApi(
             works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
         val env: Map<String, String> = emptyMap(),
         val headers: Map<String, String?> = emptyMap(),
+        /** How the request identifies the calling app. */
+        val identity: ClientIdentity? = null,
         /** "auto" | "none" | "any". */
         val toolChoice: String? = null,
         val thinking: GoogleThinking? = null,
@@ -150,7 +153,7 @@ class GoogleGenerativeAiApi(
         // The SDK's Node auth appends its derived key header only when none
         // is present (case-insensitive); a caller-supplied one wins.
         val mergedHeaders = mergeHeaders(
-            mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), model.headers),
+            mergeHeaders(getIdentityHeaders(model, options.identity), model.headers),
             options.headers
         ).filterValues { it != null }.mapValues { it.value!! }
         val headers =
@@ -565,6 +568,7 @@ internal fun buildGoogleOptions(
     maxRetryDelayMs = options.maxRetryDelayMs,
     env = options.env,
     headers = options.headers,
+    identity = options.identity,
     onPayload = options.onPayload,
     onResponse = options.onResponse,
     toolChoice = when (options.toolChoice) {

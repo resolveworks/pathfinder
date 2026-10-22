@@ -47,7 +47,11 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
-import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.ClientAttributionSetting
+import works.resolve.pathfinder.ai.utils.ClientIdentity
+import works.resolve.pathfinder.ai.utils.PATHFINDER_ATTRIBUTION
+import works.resolve.pathfinder.ai.utils.UserAgentMode
+import works.resolve.pathfinder.ai.utils.formatUserAgent
 import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class OpenAiCompletionsStreamTest {
@@ -1235,7 +1239,7 @@ class OpenAiCompletionsStreamTest {
     @Test
     fun `default user agent is sent and explicit request headers override it`() = runTest {
         val default = headersFor()
-        assertEquals(getPiUserAgent(), default["User-Agent"])
+        assertEquals(formatUserAgent(), default["User-Agent"])
 
         val overridden = headersFor(
             options = OpenAiCompletionsOptions(
@@ -1244,6 +1248,29 @@ class OpenAiCompletionsStreamTest {
             )
         )
         assertEquals("custom-agent/1", overridden["User-Agent"])
+    }
+
+    @Test
+    fun `identity headers apply below model and request headers`() = runTest {
+        val openRouter = TestCatalogs.GPT_4O.copy(
+            provider = "openrouter",
+            baseUrl = "https://openrouter.ai/api/v1",
+            headers = mapOf("X-OpenRouter-Title" to "model-title")
+        )
+        val headers = headersFor(
+            openRouter,
+            OpenAiCompletionsOptions(
+                apiKey = "k",
+                identity = ClientIdentity(
+                    attribution = ClientAttributionSetting.On(PATHFINDER_ATTRIBUTION),
+                    userAgent = UserAgentMode.Short
+                ),
+                headers = mapOf("HTTP-Referer" to null)
+            )
+        )
+        assertEquals("pathfinder", headers["User-Agent"])
+        assertEquals("model-title", headers["X-OpenRouter-Title"])
+        assertNull(headers["HTTP-Referer"])
     }
 
     @Test

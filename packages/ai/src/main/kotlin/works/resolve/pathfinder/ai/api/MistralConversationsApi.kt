@@ -49,11 +49,12 @@ import works.resolve.pathfinder.ai.transport.NetworkException
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
+import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
 import works.resolve.pathfinder.ai.utils.getCurrentTools
-import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.getIdentityHeaders
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
@@ -90,6 +91,8 @@ data class MistralOptions(
     val env: Map<String, String> = emptyMap(),
     /** Explicit request headers; a null value removes the header. */
     val headers: Map<String, String?> = emptyMap(),
+    /** How the request identifies the calling app. */
+    val identity: ClientIdentity? = null,
     val toolChoice: ToolChoice? = null,
     val promptMode: MistralPromptMode? = null,
     val reasoningEffort: MistralReasoningEffort? = null,
@@ -155,6 +158,7 @@ internal fun buildMistralOptions(
         maxRetryDelayMs = options.maxRetryDelayMs,
         env = options.env,
         headers = options.headers,
+        identity = options.identity,
         toolChoice = options.toolChoice?.toToolChoice(),
         cacheRetention = options.cacheRetention,
         onPayload = options.onPayload,
@@ -472,7 +476,7 @@ class MistralConversationsApi(
         options: MistralOptions
     ): Pair<String?, Map<String, String>> {
         val headers = LinkedHashMap<String, String?>()
-        headers["User-Agent"] = getPiUserAgent()
+        headers.putAll(getIdentityHeaders(model, options.identity))
         headers["accept"] = "text/event-stream"
         applyOverrides(headers, model.headers)
         applyOverrides(headers, options.headers)
