@@ -24,11 +24,13 @@ import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.InputModality
+import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelCost
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.StrictJsonSchemaMode
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ThinkingLevel
@@ -1282,5 +1284,271 @@ class AnthropicMessagesPayloadTest {
                 .jsonPrimitive.content
         assertTrue(Regex("^[a-zA-Z0-9_-]{1,64}$").matches(toolUseId))
         assertEquals(toolUseId, toolResultId)
+    }
+
+    @Test
+    fun `prefer tools fall back to non-strict when the schema uses rejected keywords`() {
+        val strictModel = claude.copy(
+            anthropicCompat = claude.anthropicCompat.copy(supportsStrictTools = true)
+        )
+        val prefer = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER)
+
+        fun strictFor(schema: String): Boolean? {
+            val json = body(
+                normalizeContext(
+                    Context(
+                        messages = listOf(UserMessage.ofText("hi")),
+                        tools = listOf(
+                            tool.copy(
+                                parameters = Json.parseToJsonElement(schema),
+                                constrainedSampling = prefer
+                            )
+                        )
+                    )
+                ),
+                model = strictModel
+            )
+            return json["tools"]!!.jsonArray[0].jsonObject["strict"]
+                ?.jsonPrimitive?.content?.toBoolean()
+        }
+
+        assertNull(
+            strictFor(
+                """{"type":"object","properties":{"timeoutMs":{"type":"integer","minimum":1,"maximum":300000}}}"""
+            )
+        )
+        assertNull(
+            strictFor(
+                """{"type":"object","properties":{"options":{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"},"minItems":2}}}}}"""
+            )
+        )
+        assertNull(
+            strictFor(
+                """{"type":"object","properties":{"expression":{"type":"string","format":"regex"}}}"""
+            )
+        )
+        assertEquals(
+            true,
+            strictFor(
+                """{"type":"object","properties":{"code":{"type":"string","minLength":1,"maxLength":1000,"pattern":"^[a-z]+$"},"url":{"type":"string","format":"uri"},"tags":{"type":"array","items":{"type":"string"},"minItems":1}},"required":["code","url","tags"]}"""
+            )
+        )
+    }
+
+    @Test
+    fun `moves images of error tool results after the tool results of the turn`() {
+        val assistant = AssistantMessage(
+            content = listOf(
+                ToolCall("call-1", "codemode", JsonObject(emptyMap())),
+                ToolCall("call-2", "read", JsonObject(emptyMap()))
+            ),
+            api = "anthropic-messages",
+            provider = "anthropic",
+            model = "claude-sonnet-4-5",
+            stopReason = StopReason.TOOL_USE,
+            timestamp = 2
+        )
+        val context = normalizeContext(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("Show the screenshots", timestamp = 1),
+                    assistant,
+                    ToolResultMessage(
+                        "call-1",
+                        "codemode",
+                        listOf(
+                            TextContent("Script failed"),
+                            ImageContent("AAAA", "image/png"),
+                            ImageContent("CCCC", "image/png"),
+                            TextContent("Script error")
+                        ),
+                        isError = true,
+                        timestamp = 3
+                    ),
+                    ToolResultMessage(
+                        "call-2",
+                        "read",
+                        listOf(ImageContent("BBBB", "image/png")),
+                        isError = false,
+                        timestamp = 4
+                    )
+                )
+            )
+        )
+        val messages = body(
+            context,
+            AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE)
+        )["messages"]!!.jsonArray
+        assertEquals(
+            Json.parseToJsonElement(
+                """{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"Script failed\n(image attached after the tool results)\nScript error","is_error":true},{"type":"tool_result","tool_use_id":"call-2","content":[{"type":"text","text":"(see attached image)"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"BBBB"}}],"is_error":false},{"type":"text","text":"Images from the error result of tool call call-1 (codemode):"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"CCCC"}}]}"""
+            ),
+            messages[2]
+        )
+    }
+
+    @Test
+    fun `native tool changes define later tools inline and rename the beta`() {
+        val nativeModel = claude.copy(
+            anthropicCompat = claude.anthropicCompat.copy(
+                supportsMidConvoSystemMessages = true,
+                supportsMidConvoToolChanges = true
+            )
+        )
+        val baseTool = tool.copy(name = "base_tool", description = "base_tool tool")
+        val lateTool = tool.copy(name = "late_tool", description = "late_tool tool")
+        val context = normalizeContext(
+            Context(
+                systemPrompt = "base prompt",
+                tools = listOf(baseTool),
+                messages = listOf(
+                    UserMessage.ofText("before", timestamp = 1),
+                    SystemMessage(
+                        content = listOf(TextContent("updated guidance")),
+                        toolsRemoved = listOf(
+                            works.resolve.pathfinder.ai.ToolReference("base_tool")
+                        ),
+                        toolsAdded = listOf(lateTool),
+                        timestamp = 2
+                    )
+                )
+            )
+        )
+        val json = body(
+            context,
+            AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE),
+            nativeModel
+        )
+        val betas = json["betas"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertTrue("inline-tools-2026-09-15" in betas)
+        assertFalse("mid-conversation-tool-changes-2026-07-01" in betas)
+        assertEquals(
+            listOf("base_tool", "__pi_deferred_placeholder__"),
+            json["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
+        )
+        val update = json["messages"]!!.jsonArray.last().jsonObject
+        val blocks = update["content"]!!.jsonArray
+        assertEquals("text", blocks[0].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("tool_removal", blocks[1].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("tool_addition", blocks[2].jsonObject["type"]!!.jsonPrimitive.content)
+        val definition = blocks[2].jsonObject["tool"]!!.jsonObject["definition"]!!.jsonObject
+        assertEquals("late_tool", definition["name"]!!.jsonPrimitive.content)
+        assertNull(definition["defer_loading"])
+        assertNull(definition["cache_control"])
+    }
+
+    @Test
+    fun `native tool changes redefine a tool by value under the same name`() {
+        val nativeModel = claude.copy(
+            anthropicCompat = claude.anthropicCompat.copy(
+                supportsMidConvoSystemMessages = true,
+                supportsMidConvoToolChanges = true
+            )
+        )
+        val baseTool = tool.copy(name = "base_tool", description = "base_tool tool")
+        val redefined = baseTool.copy(description = "changed")
+        val context = normalizeContext(
+            Context(
+                systemPrompt = "base prompt",
+                tools = listOf(baseTool),
+                messages = listOf(
+                    UserMessage.ofText("before", timestamp = 1),
+                    SystemMessage(
+                        content = emptyList(),
+                        toolsRemoved = listOf(
+                            works.resolve.pathfinder.ai.ToolReference("base_tool")
+                        ),
+                        toolsAdded = listOf(redefined),
+                        timestamp = 2
+                    )
+                )
+            )
+        )
+        val json = body(
+            context,
+            AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE),
+            nativeModel
+        )
+        val topLevel = json["tools"]!!.jsonArray[0].jsonObject
+        assertEquals("base_tool tool", topLevel["description"]!!.jsonPrimitive.content)
+        val blocks = json["messages"]!!.jsonArray.last().jsonObject["content"]!!.jsonArray
+        assertEquals(1, blocks.size)
+        assertEquals("tool_addition", blocks[0].jsonObject["type"]!!.jsonPrimitive.content)
+        val definition = blocks[0].jsonObject["tool"]!!.jsonObject["definition"]!!.jsonObject
+        assertEquals("base_tool", definition["name"]!!.jsonPrimitive.content)
+        assertEquals("changed", definition["description"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `native tool changes send the current tool list without an initial tool`() {
+        val nativeModel = claude.copy(
+            anthropicCompat = claude.anthropicCompat.copy(
+                supportsMidConvoSystemMessages = true,
+                supportsMidConvoToolChanges = true
+            )
+        )
+        val lateTool = tool.copy(name = "late_tool")
+        val context = normalizeContext(
+            Context(
+                systemPrompt = "base prompt",
+                messages = listOf(
+                    UserMessage.ofText("before", timestamp = 1),
+                    SystemMessage(
+                        content = listOf(TextContent("updated guidance")),
+                        toolsAdded = listOf(lateTool),
+                        timestamp = 2
+                    )
+                )
+            )
+        )
+        val json = body(
+            context,
+            AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE),
+            nativeModel
+        )
+        assertNull(json["betas"])
+        assertEquals(
+            listOf("late_tool"),
+            json["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
+        )
+        val blocks = json["messages"]!!.jsonArray.last().jsonObject["content"]!!.jsonArray
+        assertEquals(listOf("text"), blocks.map { it.jsonObject["type"]!!.jsonPrimitive.content })
+    }
+
+    @Test
+    fun `holds a mid-conversation system update past dropped assistant messages`() {
+        val nativeModel = claude.copy(
+            anthropicCompat = claude.anthropicCompat.copy(supportsMidConvoSystemMessages = true)
+        )
+        fun assistant(text: String, provider: String, api: String) = AssistantMessage(
+            content = listOf(TextContent(text)),
+            api = api,
+            provider = provider,
+            model = "gpt-x",
+            stopReason = StopReason.STOP,
+            timestamp = 3
+        )
+        val messages = listOf<Message>(
+            UserMessage.ofText("hi", timestamp = 1),
+            SystemMessage(listOf(TextContent("updated guidance")), timestamp = 2),
+            assistant("", "openai-codex", "openai-codex-responses"),
+            UserMessage.ofText("again", timestamp = 4)
+        )
+        fun roles(extra: List<Message> = emptyList()): List<String> = body(
+            normalizeContext(Context(systemPrompt = "base prompt", messages = messages + extra)),
+            AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE),
+            nativeModel
+        )["messages"]!!.jsonArray.map { it.jsonObject["role"]!!.jsonPrimitive.content }
+
+        assertEquals(listOf("user", "user", "system"), roles())
+        assertEquals(
+            listOf("user", "user", "system", "assistant", "user"),
+            roles(
+                listOf(
+                    assistant("answer", nativeModel.provider, nativeModel.api),
+                    UserMessage.ofText("third", timestamp = 5)
+                )
+            )
+        )
     }
 }

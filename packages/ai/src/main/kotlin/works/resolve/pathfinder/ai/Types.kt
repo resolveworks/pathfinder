@@ -816,7 +816,7 @@ data class AnthropicMessagesCompat(
     val sessionAffinityFormat: SessionAffinityFormat? = null,
     /** Whether the exact model accepts system-role messages inside the conversation. Default: false. */
     val supportsMidConvoSystemMessages: Boolean = false,
-    /** Whether the exact model accepts mid-conversation `tool_addition` and `tool_removal` blocks. Requires [supportsMidConvoSystemMessages]. Default: false. */
+    /** Whether the exact model accepts mid-conversation `tool_addition` blocks with inline tool definitions (`inline-tools-2026-09-15`) and `tool_removal` blocks. Requires [supportsMidConvoSystemMessages]. Default: false. */
     val supportsMidConvoToolChanges: Boolean = false,
     /**
      * Models Anthropic accepts in `fallbacks` for server-side refusal fallback,

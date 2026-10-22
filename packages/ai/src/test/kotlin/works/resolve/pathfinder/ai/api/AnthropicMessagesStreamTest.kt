@@ -28,6 +28,7 @@ import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelCost
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.ProviderAuthException
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.SimpleToolChoice
@@ -35,6 +36,7 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ThinkingLevel
+import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.UserMessage
@@ -1886,5 +1888,290 @@ class AnthropicMessagesStreamTest {
             )
             .toList()
         assertEquals(" b ,,a ", modelOverride.requests.single().headers["anthropic-beta"])
+    }
+
+    private fun strictTool(name: String, mode: String?): Tool = Tool(
+        name = name,
+        description = "Look up a value",
+        parameters = Json.parseToJsonElement(
+            """{"type":"object","properties":{"value":{"type":"string"},"optional":{"type":"number"}},"required":["value"]}"""
+        ),
+        constrainedSampling = mode?.let {
+            works.resolve.pathfinder.ai.ConstrainedSamplingConfig.JsonSchema(
+                if (it == "require") {
+                    works.resolve.pathfinder.ai.StrictJsonSchemaMode.REQUIRE
+                } else {
+                    works.resolve.pathfinder.ai.StrictJsonSchemaMode.PREFER
+                }
+            )
+        }
+    )
+
+    @Test
+    fun `preferred strict tools fall back to original schemas when the grammar limits are hit`() =
+        runTest {
+            val grammarError =
+                "The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas or reduce the number of strict tools."
+            val transport = FakeTransport()
+            transport.enqueueError(
+                400,
+                """{"type":"error","error":{"type":"invalid_request_error","message":"$grammarError"}}"""
+            )
+            transport.enqueueNamedResponse(textStream("ok"))
+            val strictModel = claude.copy(
+                anthropicCompat = claude.anthropicCompat.copy(supportsStrictTools = true)
+            )
+            val tools = listOf(
+                strictTool("preferred", "prefer"),
+                strictTool("required", "require"),
+                strictTool("ordinary", null)
+            )
+            val done = assertIs<AssistantMessageEvent.Done>(
+                api(transport)
+                    .stream(
+                        strictModel,
+                        normalizeContext(
+                            Context(
+                                messages = listOf(UserMessage.ofText("hi")),
+                                tools = tools
+                            )
+                        ),
+                        AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.LONG)
+                    )
+                    .toList()
+                    .last()
+            )
+
+            assertEquals(StopReason.STOP, done.reason)
+            assertEquals(2, transport.requests.size)
+            fun toolsOf(index: Int): JsonArray = Json.parseToJsonElement(
+                transport.requests[index].body.decodeToString()
+            ).jsonObject["tools"]!!.jsonArray
+            val first = toolsOf(0)
+            val second = toolsOf(1)
+            assertEquals(true, first[0].jsonObject["strict"]!!.jsonPrimitive.content.toBoolean())
+            assertNull(second[0].jsonObject["strict"])
+            assertEquals(
+                Json.parseToJsonElement(
+                    """{"type":"object","properties":{"value":{"type":"string"},"optional":{"type":"number"}},"required":["value"]}"""
+                ),
+                second[0].jsonObject["input_schema"]
+            )
+            assertEquals(first[1], second[1])
+            assertEquals(true, second[1].jsonObject["strict"]!!.jsonPrimitive.content.toBoolean())
+            assertEquals(first[2], second[2])
+            assertEquals(
+                "1h",
+                second[2].jsonObject["cache_control"]!!.jsonObject["ttl"]!!.jsonPrimitive.content
+            )
+            val diagnostic = done.message.diagnostics.single()
+            assertEquals("anthropic_strict_tools_fallback", diagnostic.type)
+            assertEquals(
+                "strict_tool_limits_exceeded",
+                diagnostic.details!!["reason"]!!.jsonPrimitive.content
+            )
+
+            // A second stream request starts strict again.
+            transport.enqueueNamedResponse(textStream("ok"))
+            api(transport)
+                .stream(
+                    strictModel,
+                    normalizeContext(
+                        Context(messages = listOf(UserMessage.ofText("hi")), tools = tools)
+                    ),
+                    AnthropicMessagesOptions(apiKey = "k")
+                )
+                .toList()
+            val third = toolsOf(2)
+            assertEquals(true, third[0].jsonObject["strict"]!!.jsonPrimitive.content.toBoolean())
+        }
+
+    @Test
+    fun `strict tool fallback ignores unrelated failures and surfaces a second rejection`() =
+        runTest {
+            val grammarError = "The compiled grammar is too large"
+            val unrelated = FakeTransport()
+            unrelated.enqueueError(
+                400,
+                """{"type":"error","error":{"type":"invalid_request_error","message":"Invalid tool schema"}}"""
+            )
+            val unrelatedResult = api(unrelated)
+                .stream(
+                    claude.copy(
+                        anthropicCompat = claude.anthropicCompat.copy(supportsStrictTools = true)
+                    ),
+                    normalizeContext(
+                        Context(
+                            messages = listOf(UserMessage.ofText("hi")),
+                            tools = listOf(strictTool("lookup", "prefer"))
+                        )
+                    ),
+                    AnthropicMessagesOptions(apiKey = "k")
+                )
+                .toList()
+                .last()
+            assertIs<AssistantMessageEvent.Error>(unrelatedResult)
+            assertEquals(1, unrelated.requests.size)
+
+            val twice = FakeTransport()
+            twice.enqueueError(
+                400,
+                """{"type":"error","error":{"type":"invalid_request_error","message":"$grammarError"}}"""
+            )
+            twice.enqueueError(
+                400,
+                """{"type":"error","error":{"type":"invalid_request_error","message":"Required grammar is still too large"}}"""
+            )
+            val twiceResult = api(twice)
+                .stream(
+                    claude.copy(
+                        anthropicCompat = claude.anthropicCompat.copy(supportsStrictTools = true)
+                    ),
+                    normalizeContext(
+                        Context(
+                            messages = listOf(UserMessage.ofText("hi")),
+                            tools = listOf(
+                                strictTool("lookup", "prefer"),
+                                strictTool("required", "require")
+                            )
+                        )
+                    ),
+                    AnthropicMessagesOptions(apiKey = "k")
+                )
+                .toList()
+                .last()
+            val error = assertIs<AssistantMessageEvent.Error>(twiceResult)
+            assertTrue(
+                error.error.errorMessage!!.contains("Required grammar is still too large"),
+                error.error.errorMessage
+            )
+            assertEquals(2, twice.requests.size)
+        }
+
+    @Test
+    fun `malformed final tool arguments are reported without keeping the valid prefix`() = runTest {
+        val raw = """{"action":"apply","actions":[{"kind":"seek","time":.5}]}"""
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            messageStart(),
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_bad","name":"edit","input":{}}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":${JsonPrimitive(
+                    raw
+                )}}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            messageDelta(stopReason = "tool_use", output = 5),
+            messageStop
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport)
+                .stream(claude, context, AnthropicMessagesOptions(apiKey = "k"))
+                .toList()
+                .last()
+        )
+        val call = assertIs<ToolCall>(done.message.content.single())
+        assertEquals(JsonObject(emptyMap()), call.arguments)
+        assertTrue(call.argumentsError!!.contains("\n\nReceived arguments:\n"))
+        assertTrue(call.argumentsError.endsWith(raw))
+    }
+
+    @Test
+    fun `managed thinking off sends no effort markers or binding`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(textStream("ok"))
+        val offSupported = managedClaude().copy(
+            thinkingLevelMap = ThinkingLevelMap.of(ModelThinkingLevel.OFF to "high")
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport)
+                .stream(
+                    offSupported,
+                    context,
+                    AnthropicMessagesOptions(
+                        apiKey = "k",
+                        cacheRetention = CacheRetention.NONE,
+                        thinkingEnabled = false,
+                        effort = "low"
+                    )
+                )
+                .toList()
+                .last()
+        )
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
+        assertEquals("""{"type":"disabled"}""", body["thinking"].toString())
+        assertNull(body["output_config"])
+        val roles = body["messages"]!!.jsonArray.map {
+            it.jsonObject["role"]!!.jsonPrimitive.content
+        }
+        assertEquals(listOf("user"), roles)
+        assertNull(done.message.providerThinkingLevel)
+    }
+
+    @Test
+    fun `strict tool fallback downgrades inline additions without downgrading require`() = runTest {
+        val grammarError = "The compiled grammar is too large"
+        val nativeModel = claude.copy(
+            anthropicCompat = claude.anthropicCompat.copy(
+                supportsStrictTools = true,
+                supportsMidConvoSystemMessages = true,
+                supportsMidConvoToolChanges = true
+            )
+        )
+        val context = normalizeContext(
+            Context(
+                tools = listOf(strictTool("lookup", "require")),
+                messages = listOf(
+                    UserMessage.ofText("hello", timestamp = 1),
+                    works.resolve.pathfinder.ai.SystemMessage(
+                        content = emptyList(),
+                        toolsAdded = listOf(strictTool("lookup", "prefer")),
+                        timestamp = 2
+                    ),
+                    works.resolve.pathfinder.ai.SystemMessage(
+                        content = emptyList(),
+                        toolsAdded = listOf(strictTool("lookup", "require")),
+                        timestamp = 3
+                    )
+                )
+            )
+        )
+        val transport = FakeTransport()
+        transport.enqueueError(
+            400,
+            """{"type":"error","error":{"type":"invalid_request_error","message":"$grammarError"}}"""
+        )
+        transport.enqueueNamedResponse(textStream("ok"))
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport)
+                .stream(nativeModel, context, AnthropicMessagesOptions(apiKey = "k"))
+                .toList()
+                .last()
+        )
+        assertEquals(StopReason.STOP, done.reason)
+        assertEquals(2, transport.requests.size)
+
+        fun additions(index: Int): List<Boolean?> {
+            val body = Json.parseToJsonElement(
+                transport.requests[index].body.decodeToString()
+            ).jsonObject
+            return body["messages"]!!.jsonArray.flatMap { message ->
+                message.jsonObject["content"]!!.jsonArray.flatMap { block ->
+                    val blockJson = block.jsonObject
+                    if (blockJson["type"]!!.jsonPrimitive.content == "tool_addition") {
+                        listOf(
+                            blockJson["tool"]!!.jsonObject["definition"]!!.jsonObject["strict"]
+                                ?.jsonPrimitive?.content?.toBoolean()
+                        )
+                    } else {
+                        emptyList()
+                    }
+                }
+            }
+        }
+        assertEquals(listOf(true, true), additions(0))
+        assertEquals(listOf(null, true), additions(1))
     }
 }

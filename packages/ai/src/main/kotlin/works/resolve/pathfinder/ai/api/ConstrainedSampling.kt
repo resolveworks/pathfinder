@@ -22,6 +22,9 @@ import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 
 internal class UnsupportedStrictJsonSchemaError(message: String) : Exception(message)
 
+/** Returns true when a provider's strict mode rejects this schema keyword with this value. */
+typealias UnsupportedStrictSchemaKeywordCheck = (key: String, value: JsonElement) -> Boolean
+
 /**
  * pi throws plain `Error` for constrained-sampling failures; this port throws
  * a domain [Exception] instead (never [kotlin.Error] for domain logic).
@@ -116,7 +119,10 @@ private fun freezeNode(node: Any): JsonElement = when (node) {
     else -> JsonPrimitive(node.toString())
 }
 
-private fun makeJsonSchemaNodeStrict(schema: Any?) {
+private fun makeJsonSchemaNodeStrict(
+    schema: Any?,
+    isUnsupportedKeyword: UnsupportedStrictSchemaKeywordCheck? = null
+) {
     if (!isJsonSchemaObject(schema)) {
         throw UnsupportedStrictJsonSchemaError("boolean schemas are unsupported")
     }
@@ -124,6 +130,14 @@ private fun makeJsonSchemaNodeStrict(schema: Any?) {
     for (key in UNSUPPORTED_STRICT_SCHEMA_KEYS) {
         if (schema.containsKey(key)) {
             throw UnsupportedStrictJsonSchemaError("$key schemas are unsupported")
+        }
+    }
+    if (isUnsupportedKeyword != null) {
+        for ((key, value) in schema) {
+            val valueJson = freezeNode(value!!)
+            if (isUnsupportedKeyword(key, valueJson)) {
+                throw UnsupportedStrictJsonSchemaError("$key: $valueJson is unsupported")
+            }
         }
     }
 
@@ -136,7 +150,7 @@ private fun makeJsonSchemaNodeStrict(schema: Any?) {
             if (isStructuredSchema(variant)) {
                 throw UnsupportedStrictJsonSchemaError("object and array unions are unsupported")
             }
-            makeJsonSchemaNodeStrict(variant)
+            makeJsonSchemaNodeStrict(variant, isUnsupportedKeyword)
         }
     }
 
@@ -145,7 +159,7 @@ private fun makeJsonSchemaNodeStrict(schema: Any?) {
         if (items is MutableList<*>) {
             throw UnsupportedStrictJsonSchemaError("tuple schemas are unsupported")
         }
-        makeJsonSchemaNodeStrict(items)
+        makeJsonSchemaNodeStrict(items, isUnsupportedKeyword)
     }
 
     val isObjectSchema = (schema["type"] as? JsonElement).stringOrNull() == "object"
@@ -182,7 +196,7 @@ private fun makeJsonSchemaNodeStrict(schema: Any?) {
         throw UnsupportedStrictJsonSchemaError("required contains an unknown property")
     }
     for ((key, property) in properties.entries) {
-        makeJsonSchemaNodeStrict(property)
+        makeJsonSchemaNodeStrict(property, isUnsupportedKeyword)
         if (key !in required && !schemaAllowsNull(property)) {
             val nullSchema = MutableSchema(1).apply { put("type", JsonPrimitive("null")) }
             properties[key] =
@@ -196,12 +210,15 @@ private fun makeJsonSchemaNodeStrict(schema: Any?) {
 }
 
 /** Convert a tool schema to the strict subset expected by provider constrained sampling. */
-fun makeStrictJsonSchema(schema: JsonElement): JsonObject {
+fun makeStrictJsonSchema(
+    schema: JsonElement,
+    isUnsupportedKeyword: UnsupportedStrictSchemaKeywordCheck? = null
+): JsonObject {
     val cloned: Any = toMutableNode(schema)
     if (!isJsonSchemaObject(cloned)) {
         throw UnsupportedStrictJsonSchemaError("root schema must have type object")
     }
-    makeJsonSchemaNodeStrict(cloned)
+    makeJsonSchemaNodeStrict(cloned, isUnsupportedKeyword)
     if (((cloned as MutableSchema)["type"] as? JsonElement).stringOrNull() != "object") {
         throw UnsupportedStrictJsonSchemaError("root schema must have type object")
     }
@@ -301,13 +318,21 @@ private fun inferGrammarInputProperty(tool: Tool): String {
     return inputProperty
 }
 
-fun resolveJsonSchemaStrictSampling(tool: Tool, supportsStrictMode: Boolean): Boolean? {
+/**
+ * Decide whether a JSON-schema tool is sent in strict mode. `isUnsupportedKeyword` lets a provider
+ * reject extra keywords its strict mode does not accept, so "prefer" tools fall back to non-strict.
+ */
+fun resolveJsonSchemaStrictSampling(
+    tool: Tool,
+    supportsStrictMode: Boolean,
+    isUnsupportedKeyword: UnsupportedStrictSchemaKeywordCheck? = null
+): Boolean? {
     val config = tool.constrainedSampling
     if (config !is ConstrainedSamplingConfig.JsonSchema) return null
 
     if (supportsStrictMode) {
         try {
-            makeStrictJsonSchema(tool.parameters)
+            makeStrictJsonSchema(tool.parameters, isUnsupportedKeyword)
             return true
         } catch (error: UnsupportedStrictJsonSchemaError) {
             if (config.strict != StrictJsonSchemaMode.REQUIRE) return null
