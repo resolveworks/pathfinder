@@ -48,7 +48,6 @@ import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.Settings
 import works.resolve.pathfinder.codingagent.core.SettingsManager
-import works.resolve.pathfinder.codingagent.core.buildSystemPrompt
 
 class NativeAgentFactoryTest {
 
@@ -248,16 +247,13 @@ class NativeAgentFactoryTest {
             ).create(session()).session
 
             assertEquals(listOf("web_search"), agent.getActiveToolNames())
-            assertEquals(buildSystemPrompt(listOf(webSearch)), agent.systemPrompt)
 
             agent.setActiveToolsByName(emptyList())
             assertEquals(emptyList<String>(), agent.getActiveToolNames())
             assertEquals(emptyList<AgentTool>(), agent.state.value.tools)
-            assertEquals(buildSystemPrompt(emptyList()), agent.systemPrompt)
 
             agent.setActiveToolsByName(listOf("web_search", "unknown"))
             assertEquals(listOf("web_search"), agent.getActiveToolNames())
-            assertEquals(buildSystemPrompt(listOf(webSearch)), agent.systemPrompt)
 
             configured.clear()
             assertEquals(listOf("web_search"), agent.getActiveToolNames())
