@@ -550,6 +550,13 @@ class ResolveModelScopeTest {
 
     private val available = listOf(zai, zai.copy(id = "glm-5.2"), openRouterModel)
 
+    private fun diagnostic(
+        code: ModelScopeDiagnosticCode,
+        message: String,
+        pattern: String
+    ): ModelScopeDiagnostic =
+        ModelScopeDiagnostic(code = code, message = message, pattern = pattern)
+
     @Test
     fun `an exact canonical reference resolves`() {
         val result = resolveModelScope(listOf("zai/glm-5.3"), available)
@@ -575,7 +582,16 @@ class ResolveModelScopeTest {
     fun `a question mark does not match a slash`() {
         val result = resolveModelScope(listOf("openai?gpt-x"), available)
         assertTrue(result.scopedModels.isEmpty())
-        assertEquals(listOf("No models match pattern \"openai?gpt-x\""), result.diagnostics)
+        assertEquals(
+            listOf(
+                diagnostic(
+                    ModelScopeDiagnosticCode.NO_MATCH,
+                    "No models match pattern \"openai?gpt-x\"",
+                    "openai?gpt-x"
+                )
+            ),
+            result.diagnostics
+        )
     }
 
     @Test
@@ -588,7 +604,16 @@ class ResolveModelScopeTest {
     fun `a provider segment glob does not span nested id segments`() {
         val result = resolveModelScope(listOf("openrouter/*"), available)
         assertTrue(result.scopedModels.isEmpty())
-        assertEquals(listOf("No models match pattern \"openrouter/*\""), result.diagnostics)
+        assertEquals(
+            listOf(
+                diagnostic(
+                    ModelScopeDiagnosticCode.NO_MATCH,
+                    "No models match pattern \"openrouter/*\"",
+                    "openrouter/*"
+                )
+            ),
+            result.diagnostics
+        )
     }
 
     @Test
@@ -610,13 +635,108 @@ class ResolveModelScopeTest {
     fun `a model id containing a colon survives an invalid level suffix`() {
         val result = resolveModelScope(listOf("openrouter/openai/gpt-x:not-a-level"), available)
         assertEquals(listOf("openai/gpt-x"), result.scopedModels.map { it.model.id })
-        assertEquals(1, result.diagnostics.size)
+        assertEquals(
+            listOf(
+                diagnostic(
+                    ModelScopeDiagnosticCode.INVALID_THINKING_LEVEL,
+                    "Invalid thinking level \"not-a-level\" in pattern " +
+                        "\"openrouter/openai/gpt-x:not-a-level\". Using default instead.",
+                    "openrouter/openai/gpt-x:not-a-level"
+                )
+            ),
+            result.diagnostics
+        )
     }
 
     @Test
     fun `a non-matching pattern diagnoses and adds nothing`() {
         val result = resolveModelScope(listOf("nope"), available)
         assertTrue(result.scopedModels.isEmpty())
-        assertEquals(listOf("No models match pattern \"nope\""), result.diagnostics)
+        assertEquals(
+            listOf(
+                diagnostic(
+                    ModelScopeDiagnosticCode.NO_MATCH,
+                    "No models match pattern \"nope\"",
+                    "nope"
+                )
+            ),
+            result.diagnostics
+        )
+    }
+
+    @Test
+    fun `an invalid thinking level and a missing pattern produce structured diagnostics`() {
+        val result = resolveModelScope(listOf("zai/glm-5.3:invalid", "missing"), available)
+
+        assertEquals(listOf("glm-5.3"), result.scopedModels.map { it.model.id })
+        assertNull(result.scopedModels.single().thinkingLevel)
+        assertEquals(
+            listOf(
+                diagnostic(
+                    ModelScopeDiagnosticCode.INVALID_THINKING_LEVEL,
+                    "Invalid thinking level \"invalid\" in pattern " +
+                        "\"zai/glm-5.3:invalid\". Using default instead.",
+                    "zai/glm-5.3:invalid"
+                ),
+                diagnostic(
+                    ModelScopeDiagnosticCode.NO_MATCH,
+                    "No models match pattern \"missing\"",
+                    "missing"
+                )
+            ),
+            result.diagnostics
+        )
+    }
+
+    @Test
+    fun `every provider is added for a pattern matching one id on several providers`() {
+        val azure = zai.copy(id = "gpt-4o", provider = "azure")
+        val openai = zai.copy(id = "gpt-4o", provider = "openai")
+        val catalog = available + azure + openai
+
+        for ((pattern, level) in listOf(
+            "gpt-4o:high" to ModelThinkingLevel.HIGH,
+            "GPT-4o" to null
+        )) {
+            val result = resolveModelScope(listOf(pattern), catalog)
+
+            assertEquals(2, result.scopedModels.size)
+            assertEquals(
+                setOf("azure/gpt-4o", "openai/gpt-4o"),
+                result.scopedModels.map { "${it.model.provider}/${it.model.id}" }.toSet()
+            )
+            assertEquals(listOf(level, level), result.scopedModels.map { it.thinkingLevel })
+            assertEquals(
+                listOf(
+                    diagnostic(
+                        ModelScopeDiagnosticCode.AMBIGUOUS,
+                        "Pattern \"$pattern\" matches several providers: azure, openai. " +
+                            "Use provider/id to choose one.",
+                        pattern
+                    )
+                ),
+                result.diagnostics
+            )
+        }
+    }
+
+    @Test
+    fun `bracketed model ids resolve as exact references before glob matching`() {
+        val bracketed = zai.copy(id = "bracketed-model[1m]", provider = "custom")
+        val catalog = available + bracketed
+
+        val exact = resolveModelScope(listOf("custom/bracketed-model[1m]"), catalog)
+        assertEquals(listOf("bracketed-model[1m]"), exact.scopedModels.map { it.model.id })
+        assertTrue(exact.diagnostics.isEmpty())
+
+        val withLevel = resolveModelScope(listOf("custom/bracketed-model[1m]:high"), catalog)
+        assertEquals(listOf("bracketed-model[1m]"), withLevel.scopedModels.map { it.model.id })
+        assertEquals(
+            listOf(ModelThinkingLevel.HIGH),
+            withLevel.scopedModels.map {
+                it.thinkingLevel
+            }
+        )
+        assertTrue(withLevel.diagnostics.isEmpty())
     }
 }
