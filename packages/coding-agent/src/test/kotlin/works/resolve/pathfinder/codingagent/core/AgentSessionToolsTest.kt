@@ -23,6 +23,7 @@ import works.resolve.pathfinder.ai.Provider
 import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.TranscriptContext
@@ -178,6 +179,38 @@ class AgentSessionToolsTest {
             buildSystemPrompt(listOf(webSearch, webFetch)),
             s.systemPrompt
         )
+    }
+
+    @Test
+    fun `resume restores the loadout the transcript records`() = runTest {
+        val webSearch = tool("web_search")
+        val webFetch = tool("web_fetch")
+        val manager = SessionManager.create(
+            createTempDirectory("tools-resume-test").toFile(),
+            ioDispatcher = Dispatchers.Unconfined
+        )
+        manager.appendMessage(
+            SystemMessage(
+                content = emptyList(),
+                toolsAdded = listOf(
+                    Tool("web_fetch", "tool web_fetch", JsonObject(emptyMap()))
+                ),
+                timestamp = 1L
+            )
+        )
+
+        val s = AgentSession(
+            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> okStream() }).apply {
+                replaceTranscript(manager.buildSessionContext().messages)
+            },
+            manager = manager,
+            settingsManager = SettingsManager.inMemory(),
+            models = Models(listOf(provider())),
+            tools = listOf(webSearch, webFetch)
+        )
+
+        assertEquals(listOf("web_fetch"), s.getActiveToolNames())
+        assertEquals(buildSystemPrompt(listOf(webFetch)), s.systemPrompt)
     }
 
     @Test

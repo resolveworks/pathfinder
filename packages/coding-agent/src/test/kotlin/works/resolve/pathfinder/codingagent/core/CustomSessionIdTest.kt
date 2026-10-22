@@ -102,7 +102,7 @@ class CustomSessionIdTest {
             entryIdFactory = { "e${entryCounter++}" }
         )
 
-        // The header becomes observable when the first assistant flushes it.
+        // The header becomes observable when the first user message flushes it.
         m.appendMessage(works.resolve.pathfinder.ai.UserMessage.ofText("hello", 1L))
         clock.advanceMillis(10)
         m.appendMessage(assistant())

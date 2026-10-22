@@ -64,8 +64,8 @@ import works.resolve.pathfinder.tools.websearch.SearchProviderService
  * model/thinking change, compaction, navigation) reaches the session file
  * inline at event time through the session manager, and a session file is
  * created lazily — a new chat is absent from the drawer until its first
- * assistant message commits (pi's selector behavior; an aborted first run
- * still commits an empty assistant message, so send+abort is durable).
+ * user or assistant message commits (pi's selector behavior; starting at the
+ * user message keeps the prompt durable if the first turn never completes).
  * Storage failures fail the run and surface as a save error while the
  * in-memory tree keeps its entries.
  *
@@ -527,7 +527,7 @@ class ChatViewModel(
             if (rejectWhileBusy()) return@launch
             try {
                 // Memory-only: nothing touches disk, and the new session is
-                // absent from the drawer until its first assistant commit.
+                // absent from the drawer until its first user message commits.
                 val manager = SessionManager.create(
                     sessionsDir,
                     idFactory = sessionIdFactory,
@@ -667,7 +667,7 @@ class ChatViewModel(
      * modified session file, else a new one. The most-recent fallback ranks
      * by file mtime — pi's continueRecent shape — not the message-derived
      * `modified` the drawer rows sort by. The stored id can point at a
-     * never-flushed session (process death before any assistant committed)
+     * never-flushed session (process death before any message committed)
      * — no file matches and the flow falls through exactly as for any other
      * missing session.
      */
@@ -948,6 +948,13 @@ class ChatViewModel(
                     streamingFold = StreamingMessageFold(transcriptMarkdown::parse)
                         .apply { onBoundary(message) }
                     publishStreamingFold()
+                    // The first user message creates the file; the assistant
+                    // start that follows is the first point the drawer can
+                    // read it while the run is still streaming.
+                    val sessionId = activeSession?.getSessionId()
+                    if (_uiState.value.sessionSummaries.none { it.id == sessionId }) {
+                        scheduleSummaryPatch(force = true)
+                    }
                 }
             }
 
@@ -1215,13 +1222,15 @@ class ChatViewModel(
     /**
      * Patches the active session's drawer row with one single-file read.
      * MessageEnds mid-run return (the run-idle transition in [onAgentState]
-     * patches); one landing when already idle patches immediately —
-     * whichever fires after the final file append reads the complete file.
-     * Overlapping reads at run boundaries race harmlessly: they read the
-     * same file, and the next trigger re-lands the row.
+     * patches), except a [force]d patch for a session the drawer does not list
+     * yet — its first user message has already created the file. One landing
+     * when already idle patches immediately — whichever fires after the final
+     * file append reads the complete file. Overlapping reads at run
+     * boundaries race harmlessly: they read the same file, and the next
+     * trigger re-lands the row.
      */
-    private fun scheduleSummaryPatch() {
-        if (_uiState.value.isStreaming) return
+    private fun scheduleSummaryPatch(force: Boolean = false) {
+        if (_uiState.value.isStreaming && !force) return
         viewModelScope.launch { patchActiveSessionSummary() }
     }
 

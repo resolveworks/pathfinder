@@ -158,7 +158,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             assertTrue(configured.navigationEpoch >= 1L)
             val firstId = configured.activeSessionId!!
 
-            // A session exists on disk only after its first assistant commit;
+            // A session exists on disk only after its first user message;
             // switching back requires a flushed file.
             vm.exchange(h, "Hello", "world")
 
@@ -599,7 +599,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         assertTrue(fresh.messages.isEmpty())
         assertNull(vm.streamingState.value.streaming)
         // Only the flushed session is listed: the new one is absent until its
-        // first assistant message commits.
+        // first user message commits.
         assertEquals(1, fresh.sessionSummaries.size)
         assertEquals(firstId, fresh.sessionSummaries.single().id)
         assertTrue(fresh.sessionSummaries.none { it.id == fresh.activeSessionId })
@@ -1043,7 +1043,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         }
 
     @Test
-    fun newSession_isAbsentFromSummaries_untilTheFirstAssistantCommits() =
+    fun newSession_isAbsentFromSummaries_untilTheFirstUserMessageCommits() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
             val vm = h.newViewModel()
@@ -1062,19 +1062,24 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             assertEquals(3, listed.messageCount)
             assertEquals("Hello", listed.firstMessage)
 
-            // A new chat has no drawer row until its first assistant commit.
+            // A new chat has no drawer row until its first user message.
             vm.newSession()
             val fresh = vm.awaitState { it.activeSessionId != firstId }
             assertEquals(1, fresh.sessionSummaries.size)
             assertTrue(fresh.sessionSummaries.none { it.id == fresh.activeSessionId })
 
-            // The first assistant commit (here via abort, which commits an
-            // aborted assistant message) creates the file and the row.
+            // The first user message creates the file and the row, before the
+            // assistant response completes.
             val gate = CompletableDeferred<Unit>()
             h.scriptedStreams.add(h.gatedStream("never", gate))
             vm.onDraftChange("Second")
             vm.send()
             vm.awaitState { it.isStreaming }
+            vm.awaitState {
+                it.sessionSummaries.any { s ->
+                    s.id == fresh.activeSessionId && s.messageCount == 2
+                }
+            }
             vm.stop()
             vm.awaitState {
                 it.sessionSummaries.any { s ->
@@ -1095,8 +1100,8 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.status == ChatStatus.Ready }
             val sessionId = vm.uiState.value.activeSessionId!!
 
-            // The directory becomes read-only: the first assistant commit's
-            // file creation fails inside prompt() and the run fails.
+            // The directory becomes read-only: the first user message's file
+            // creation fails inside prompt() and the run fails.
             h.denyWrites = true
             h.scriptedStreams.add(
                 h.gatedStream(
