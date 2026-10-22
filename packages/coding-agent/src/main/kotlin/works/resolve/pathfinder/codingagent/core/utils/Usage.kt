@@ -32,5 +32,7 @@ private operator fun Cost.plus(other: Cost): Cost = Cost(
     output = output + other.output,
     cacheRead = cacheRead + other.cacheRead,
     cacheWrite = cacheWrite + other.cacheWrite,
-    total = total + other.total
+    total = total + other.total,
+    // A sum is provider-reported only when every part is.
+    totalFromProvider = totalFromProvider && other.totalFromProvider
 )
