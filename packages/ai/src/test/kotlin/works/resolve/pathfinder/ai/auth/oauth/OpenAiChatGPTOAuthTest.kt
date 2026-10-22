@@ -222,6 +222,53 @@ class OpenAiChatGPTOAuthTest {
     }
 
     @Test
+    fun `rejects a blank ID token`() = runBlocking {
+        val http = FakeHttpClient {
+            OAuthHttpResponse(
+                200,
+                emptyMap(),
+                (
+                    "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":3600," +
+                        "\"id_token\":\"   \",\"scope\":\"$requiredScope\"}"
+                    ).toByteArray()
+            )
+        }
+        lateinit var authUrl: String
+        val auth = flow(http)
+        val interaction = object : AuthInteraction {
+            override suspend fun prompt(prompt: AuthPrompt): String =
+                callbackInput(formQuery(authUrl.substringAfter("?"))["state"]!!)
+
+            override suspend fun notify(event: AuthEvent) {
+                if (event is AuthEvent.AuthUrl) authUrl = event.url
+            }
+        }
+
+        val error = assertFailsWith<IllegalStateException> {
+            auth.login(interaction, LoginOptions(getDeviceId = { deviceId }))
+        }
+        assertTrue(
+            error.message!!.contains("did not contain an ID token"),
+            error.message
+        )
+    }
+
+    @Test
+    fun `caller abort during login fails with Login cancelled`() = runBlocking {
+        val http = FakeHttpClient { tokenResponse() }
+        val auth = flow(http)
+        val interaction = Interaction {
+            throw kotlinx.coroutines.CancellationException("cancelled")
+        }
+
+        val error = assertFailsWith<IllegalStateException> {
+            auth.login(interaction, LoginOptions(getDeviceId = { deviceId }))
+        }
+        assertEquals("Login cancelled", error.message)
+        assertTrue(http.requests.isEmpty())
+    }
+
+    @Test
     fun `requires refresh responses to rotate the refresh token`() = runBlocking {
         val http = FakeHttpClient {
             OAuthHttpResponse(

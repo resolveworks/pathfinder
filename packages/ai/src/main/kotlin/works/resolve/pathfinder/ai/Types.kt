@@ -619,21 +619,6 @@ data class SimpleStreamOptions(
 }
 
 /**
- * Request-level keys override [Model.samplingParams] defaults per key; the
- * result is null when both are absent.
- *
- * Upstream has no such export — each adapter merges the maps inline in its
- * `buildParams`; the shared helper here is an accepted pathfinder
- * centralization.
- */
-fun mergeSamplingParams(model: Model, options: SimpleStreamOptions): Map<String, JsonElement>? =
-    if (model.samplingParams.isNullOrEmpty() && options.samplingParams == null) {
-        null
-    } else {
-        (model.samplingParams ?: emptyMap()) + (options.samplingParams ?: emptyMap())
-    }
-
-/**
  * Merges provider headers: [override] wins case-insensitively per header
  * name, and a null override value removes the header entirely.
  *

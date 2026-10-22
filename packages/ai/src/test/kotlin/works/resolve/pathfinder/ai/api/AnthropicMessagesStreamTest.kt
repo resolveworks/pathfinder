@@ -6,6 +6,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.take
@@ -243,6 +244,39 @@ class AnthropicMessagesStreamTest {
         assertEquals(2, done.message.usage.cacheRead)
         assertEquals(3, done.message.usage.cacheWrite)
         assertEquals(134, done.message.usage.totalTokens)
+    }
+
+    @Test
+    fun `uses the total reported by OpenRouter's Anthropic Messages endpoint`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            messageStart(input = 100, output = 0),
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            "message_delta" to
+                """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":100,"output_tokens":7,"cost":0.004,"is_byok":false,"cost_details":{"upstream_inference_cost":0.003}}}""",
+            messageStop
+        )
+        val openrouterModel = claude.copy(
+            provider = "openrouter-work",
+            baseUrl = "https://openrouter.ai/api/v1"
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport)
+                .stream(openrouterModel, context, AnthropicMessagesOptions(apiKey = "k"))
+                .toList()
+                .last()
+        )
+        val cost = done.message.usage.cost
+        assertEquals(0.004, cost.total, 1e-12)
+        assertTrue(cost.totalFromProvider)
+        assertNotEquals(
+            cost.input + cost.output + cost.cacheRead + cost.cacheWrite,
+            cost.total
+        )
     }
 
     @Test
@@ -2009,6 +2043,30 @@ class AnthropicMessagesStreamTest {
                 .last()
             assertIs<AssistantMessageEvent.Error>(unrelatedResult)
             assertEquals(1, unrelated.requests.size)
+
+            val wrongStatus = FakeTransport()
+            wrongStatus.enqueueError(
+                500,
+                """{"type":"error","error":{"type":"invalid_request_error","message":"$grammarError"}}"""
+            )
+            val wrongStatusResult = api(wrongStatus)
+                .stream(
+                    claude.copy(
+                        anthropicCompat = claude.anthropicCompat.copy(supportsStrictTools = true)
+                    ),
+                    normalizeContext(
+                        Context(
+                            messages = listOf(UserMessage.ofText("hi")),
+                            tools = listOf(strictTool("lookup", "prefer"))
+                        )
+                    ),
+                    AnthropicMessagesOptions(apiKey = "k")
+                )
+                .toList()
+                .last()
+            val wrongStatusError = assertIs<AssistantMessageEvent.Error>(wrongStatusResult)
+            assertTrue(wrongStatusError.error.errorMessage!!.contains(grammarError))
+            assertEquals(1, wrongStatus.requests.size)
 
             val twice = FakeTransport()
             twice.enqueueError(

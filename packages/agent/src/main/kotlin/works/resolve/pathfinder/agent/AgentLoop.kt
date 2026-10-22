@@ -968,7 +968,7 @@ private suspend fun executeAndFinalizePreparedToolCall(
         val durationMs = elapsedMs()
         updates.close()
         collector.join()
-        ExecutedToolCallOutcome(result, isError = false, durationMs = durationMs)
+        ExecutedToolCallOutcome(result, isError = result.isError, durationMs = durationMs)
     } catch (cancellation: CancellationException) {
         throw cancellation
     } catch (error: Throwable) {

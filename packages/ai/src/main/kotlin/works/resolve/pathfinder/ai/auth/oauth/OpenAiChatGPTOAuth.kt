@@ -129,6 +129,11 @@ class OpenAiChatGPTOAuth(
                     AuthEvent.Progress("Exchanging authorization code for tokens...")
                 )
                 exchangeAuthorizationCode(result.code, pair.verifier, result.clientId)
+            } catch (error: CancellationException) {
+                // pi maps an interaction abort during login to the same
+                // "Login cancelled" failure as the other OAuth flows; a
+                // bare cancellation would be swallowed as user-cancel.
+                throw IllegalStateException("Login cancelled", error)
             } finally {
                 manual.cancel()
                 callbackResult.cancel()
@@ -276,7 +281,7 @@ class OpenAiChatGPTOAuth(
         )
         // Pathfinder does not use the ID token to identify the user or read profile data.
         // Keep the presence check as part of the token-response contract.
-        if (token.string("id_token").isNullOrEmpty()) {
+        if (token.string("id_token")?.trim().isNullOrEmpty()) {
             throw IllegalStateException("OpenAI OAuth token response did not contain an ID token")
         }
         return credentialFromTokenResponse(token, clientId)

@@ -777,6 +777,37 @@ class AgentLoopTest {
     }
 
     @Test
+    fun `a returned isError result is a failed call and keeps its details`() = runTest {
+        val details = buildJsonObject { put("partial", true) }
+        val tool = FakeTool(
+            executeImpl = { _, _, _ ->
+                AgentToolResult(
+                    content = listOf(TextContent("bad")),
+                    details = details,
+                    isError = true
+                )
+            }
+        )
+        val events = mutableListOf<AgentEvent>()
+        val streamFn = scriptedStream(
+            toolCallAssistant(ToolCall("c1", "my_tool", JsonObject(emptyMap()))),
+            assistant("done")
+        )
+        val result = runAgentLoop(
+            listOf(UserMessage.ofText("q")),
+            toolContext(tool),
+            AgentLoopConfig(model, streamFn = streamFn)
+        ) { events.add(it) }
+
+        val end = events.filterIsInstance<AgentEvent.ToolExecutionEnd>().single()
+        assertTrue(end.isError)
+        assertEquals(details, end.result.details)
+        val trm = result.filterIsInstance<ToolResultMessage>().single()
+        assertTrue(trm.isError)
+        assertEquals(details, trm.details)
+    }
+
+    @Test
     fun `records how long execute took on the tool result`() = runTest {
         val tool = FakeTool(
             executeImpl = { _, _, _ ->

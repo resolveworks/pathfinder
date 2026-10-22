@@ -55,6 +55,7 @@ import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.DiagnosticErrorInfo
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.appendAssistantMessageDiagnostic
+import works.resolve.pathfinder.ai.utils.applyOpenRouterReportedCost
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
 import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.getCurrentTools
@@ -62,6 +63,7 @@ import works.resolve.pathfinder.ai.utils.getIdentityHeaders
 import works.resolve.pathfinder.ai.utils.getInitialSystemMessage
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.int
+import works.resolve.pathfinder.ai.utils.isOpenRouterModel
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
@@ -1431,7 +1433,7 @@ private fun toolRemovalBlock(toolName: String, isOAuthToken: Boolean): JsonObjec
         )
     }
 
-private data class AnthropicApiError(val type: String?, val message: String)
+private data class AnthropicApiError(val status: Int, val type: String?, val message: String)
 
 private fun anthropicApiError(error: ProviderHttpException): AnthropicApiError? {
     val parsed = try {
@@ -1441,7 +1443,7 @@ private fun anthropicApiError(error: ProviderHttpException): AnthropicApiError? 
     }
     val detail = (parsed as? JsonObject)?.obj("error") ?: return null
     val message = detail.str("message") ?: return null
-    return AnthropicApiError(detail.str("type"), message)
+    return AnthropicApiError(error.status, detail.str("type"), message)
 }
 
 private val ANTHROPIC_STRICT_TOOL_LIMIT_MESSAGES = listOf(
@@ -1450,9 +1452,9 @@ private val ANTHROPIC_STRICT_TOOL_LIMIT_MESSAGES = listOf(
     "Schemas contains too many parameters with union types ("
 )
 
-private fun isStrictToolLimitError(error: AnthropicApiError): Boolean =
+private fun isStrictToolLimitError(error: AnthropicApiError): Boolean = error.status == 400 &&
     error.type == "invalid_request_error" &&
-        ANTHROPIC_STRICT_TOOL_LIMIT_MESSAGES.any { error.message.contains(it) }
+    ANTHROPIC_STRICT_TOOL_LIMIT_MESSAGES.any { error.message.contains(it) }
 
 internal fun convertTools(
     tools: List<Tool>,
@@ -1771,6 +1773,9 @@ internal class AnthropicStreamState(
                     ?.int("thinking_tokens") ?: usage.reasoning
             )
             usage = withTotal(usage)
+            if (isOpenRouterModel(model)) {
+                usage = applyOpenRouterReportedCost(usage, eventUsage)
+            }
         }
         return emptyList()
     }

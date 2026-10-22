@@ -228,7 +228,10 @@ class AgentSessionFidelityTest {
         collector.cancelAndJoin()
 
         assertFalse(agent.isStreaming.value)
-        assertEquals(1, events.filterIsInstance<AgentEvent.AgentSettled>().size)
+        assertEquals(
+            listOf(AgentEvent.AgentSettled(aborted = false)),
+            events.filterIsInstance<AgentEvent.AgentSettled>()
+        )
         // The settle event trails the cycle's final agent_end.
         val lastAgentEnd = events.indexOfLast { it is AgentEvent.AgentEnd }
         val settled = events.indexOfFirst { it is AgentEvent.AgentSettled }
@@ -281,7 +284,10 @@ class AgentSessionFidelityTest {
                 events.filterIsInstance<AgentEvent.AutoRetryEnd>()
         )
         assertTrue(events.none { it is AgentEvent.CompactionStart })
-        assertEquals(1, events.filterIsInstance<AgentEvent.AgentSettled>().size)
+        assertEquals(
+            listOf(AgentEvent.AgentSettled(aborted = true)),
+            events.filterIsInstance<AgentEvent.AgentSettled>()
+        )
         assertFalse(agent.isStreaming.value)
     }
 
