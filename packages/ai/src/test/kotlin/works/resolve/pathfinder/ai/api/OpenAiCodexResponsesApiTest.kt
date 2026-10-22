@@ -835,7 +835,21 @@ class OpenAiCodexResponsesApiTest {
 
         fun JsonObject.isType(name: String) = this["type"]?.jsonPrimitive?.content == name
 
-        assertEquals(listOf("base_tool"), toolNamesOf("gpt-5.6-sol"))
+        // gpt-5.6-sol declares every tool in additional_tools items, starting at the head.
+        assertNull(
+            buildCodexRequestBody(
+                catalog.getModel("openai-codex", "gpt-5.6-sol")!!,
+                context,
+                null,
+                null
+            )["tools"]
+        )
+        assertEquals(
+            listOf(listOf("base_tool"), listOf("late_tool")),
+            additional.filter { it.isType("additional_tools") }.map { item ->
+                item["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
+            }
+        )
         assertTrue(additional.any { it.isType("additional_tools") })
         assertTrue(additional.none { it.isType("tool_search_output") })
         assertEquals(listOf("base_tool"), toolNamesOf("gpt-5.5"))

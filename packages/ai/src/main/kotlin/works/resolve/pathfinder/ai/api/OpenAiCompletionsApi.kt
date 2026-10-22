@@ -60,6 +60,7 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.TranscriptToolSupport
 import works.resolve.pathfinder.ai.utils.applyOpenRouterReportedCost
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.formatProviderError
@@ -999,7 +1000,11 @@ object OpenAiCompletionsPayload {
 
         val transcriptTools = resolveTranscriptTools(
             context.messages,
-            compat.supportsMidConvoSystemMessages && compat.supportsMidConvoToolAdditions
+            if (compat.supportsMidConvoSystemMessages && compat.supportsMidConvoToolAdditions) {
+                TranscriptToolSupport.ADDITIONS
+            } else {
+                TranscriptToolSupport.NONE
+            }
         )
         val tools: MutableList<JsonObject>? = if (transcriptTools.requestTools.isNotEmpty()) {
             transcriptTools.requestTools.map { convertTool(it, compat) }.toMutableList().also {
@@ -1372,7 +1377,11 @@ object OpenAiCompletionsPayload {
         val params = mutableListOf<JsonObject>()
         val transcriptTools = resolveTranscriptTools(
             normalizedContext.messages,
-            compat.supportsMidConvoSystemMessages && compat.supportsMidConvoToolAdditions
+            if (compat.supportsMidConvoSystemMessages && compat.supportsMidConvoToolAdditions) {
+                TranscriptToolSupport.ADDITIONS
+            } else {
+                TranscriptToolSupport.NONE
+            }
         )
         val instructionRole = if (model.reasoning &&
             compat.supportsDeveloperRole
@@ -1387,13 +1396,15 @@ object OpenAiCompletionsPayload {
                 normalizeToolCallId(id, model.provider)
             }
         var i = 0
+        var systemIndex = 0
         while (i < messages.size) {
             val msg = messages[i]
             when (msg.role) {
                 MessageRole.SYSTEM -> {
                     val system = msg as SystemMessage
+                    // transformMessages keeps system messages in order, so their position matches the transcript.
                     val addedTools =
-                        if (i > 0 && transcriptTools.anchorsAdditions) {
+                        if (systemIndex++ >= transcriptTools.foldedSystemMessages) {
                             system.toolsAdded.orEmpty()
                         } else {
                             emptyList()

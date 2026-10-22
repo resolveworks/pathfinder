@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ai.utils
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
@@ -8,6 +9,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.Tool
 
 class TranscriptTest {
@@ -72,6 +74,61 @@ class TranscriptTest {
         assertTrue(
             a.parameters as JsonObject ==
                 Json.parseToJsonElement("""{"properties": {}, "type": "object"}""").jsonObject
+        )
+    }
+
+    @Test
+    fun resolveTranscriptToolsFoldsUpToTheLastNonAdditiveChange() {
+        fun named(name: String, description: String = "$name tool") = Tool(
+            name = name,
+            description = description,
+            parameters = parse("""{"type":"object"}""")
+        )
+        val base = named("base_tool")
+        val drop = named("drop_tool")
+        val late = named("late_tool")
+        val messages = listOf(
+            SystemMessage(content = emptyList(), toolsAdded = listOf(base, drop), timestamp = 0),
+            SystemMessage(
+                content = emptyList(),
+                toolsRemoved = listOf(works.resolve.pathfinder.ai.ToolReference("drop_tool")),
+                timestamp = 1
+            ),
+            SystemMessage(content = emptyList(), toolsAdded = listOf(drop), timestamp = 2),
+            SystemMessage(
+                content = emptyList(),
+                toolsAdded = listOf(named("late_tool", "x")),
+                timestamp = 3
+            ),
+            SystemMessage(
+                content = emptyList(),
+                toolsAdded = listOf(named("late_tool", "y")),
+                timestamp = 4
+            )
+        )
+
+        assertEquals(
+            TranscriptTools(requestTools = listOf(base), foldedSystemMessages = 2),
+            resolveTranscriptTools(messages.take(2), TranscriptToolSupport.ADDITIONS)
+        )
+        assertEquals(
+            TranscriptTools(requestTools = listOf(base, drop), foldedSystemMessages = 3),
+            resolveTranscriptTools(messages.take(4), TranscriptToolSupport.ADDITIONS)
+        )
+        assertEquals(
+            TranscriptTools(
+                requestTools = listOf(base, drop, late.copy(description = "y")),
+                foldedSystemMessages = 5
+            ),
+            resolveTranscriptTools(messages, TranscriptToolSupport.ADDITIONS)
+        )
+        assertEquals(
+            TranscriptTools(emptyList(), 0),
+            resolveTranscriptTools(messages, TranscriptToolSupport.CHANGES)
+        )
+        assertEquals(
+            TranscriptTools(listOf(base, drop, late.copy(description = "y")), 5),
+            resolveTranscriptTools(messages, TranscriptToolSupport.NONE)
         )
     }
 }
