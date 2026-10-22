@@ -115,7 +115,7 @@ data class MistralOptions(
      * Explicit parent telemetry context for this request. Dormant in this
      * port — carried for shape fidelity.
      */
-    val telemetryContext: TelemetryContext? = null
+    val telemetry: TelemetryContext? = null
 ) {
     override fun toString(): String = optionsToString(
         "MistralOptions",
@@ -134,7 +134,7 @@ data class MistralOptions(
         "headers" to headers.keys,
         "onPayload" to (onPayload != null),
         "onResponse" to (onResponse != null),
-        "telemetryContext" to (telemetryContext != null)
+        "telemetry" to (telemetry != null)
     )
 }
 
@@ -180,7 +180,7 @@ internal fun buildMistralOptions(
             null
         },
         reasoningEffort = reasoningEffort,
-        telemetryContext = options.telemetry
+        telemetry = options.telemetry
     )
 }
 

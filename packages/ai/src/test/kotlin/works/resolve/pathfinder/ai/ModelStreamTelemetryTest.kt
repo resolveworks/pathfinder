@@ -216,6 +216,24 @@ class ModelStreamTelemetryTest {
     }
 
     @Test
+    fun `aborted status stays ok without error attributes or events`() = runTest {
+        val recorder = InMemoryTelemetryContext()
+        val result = message(StopReason.ABORTED).copy(errorMessage = "error-secret")
+        val observed = recorder.startSpan(SpanOptions("caller")) { parent ->
+            models(apiFor(result)).completeSimple(
+                model,
+                Context(messages = emptyList()),
+                SimpleStreamOptions(telemetry = parent)
+            )
+        }
+        assertEquals(result, observed)
+        val span = recorder.getSpans()[1]
+        assertEquals(SpanStatus.Ok, span.status)
+        assertEquals(attr("aborted"), span.attributes["stop"])
+        assertTrue("error-secret" !in span.toString())
+    }
+
+    @Test
     fun `setup failures are observed as provider errors`() = runTest {
         val recorder = InMemoryTelemetryContext()
         val unknown = model.copy(provider = "missing")

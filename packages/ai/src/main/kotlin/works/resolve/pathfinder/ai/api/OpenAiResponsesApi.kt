@@ -243,7 +243,7 @@ data class OpenAiResponsesOptions(
      * Explicit parent telemetry context for this request. Dormant in this
      * port — carried for shape fidelity.
      */
-    val telemetryContext: TelemetryContext? = null
+    val telemetry: TelemetryContext? = null
 ) {
     override fun toString(): String = optionsToString(
         "OpenAiResponsesOptions",
@@ -264,7 +264,7 @@ data class OpenAiResponsesOptions(
         "onPayload" to (onPayload != null),
         "onResponse" to (onResponse != null),
         "samplingParams" to samplingParams?.keys,
-        "telemetryContext" to (telemetryContext != null)
+        "telemetry" to (telemetry != null)
     )
 }
 
@@ -294,7 +294,7 @@ internal fun buildOpenAiResponsesOptions(
     onPayload = options.onPayload,
     onResponse = options.onResponse,
     samplingParams = options.samplingParams,
-    telemetryContext = options.telemetry
+    telemetry = options.telemetry
 )
 
 class OpenAiResponsesApi(

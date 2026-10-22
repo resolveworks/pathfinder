@@ -379,6 +379,22 @@ class DefaultModelSelectionTest {
     }
 
     @Test
+    fun `zai minimax cerebras and ant-ling defaults track current models`() {
+        assertEquals("glm-5.3", defaults["zai"])
+        assertEquals("glm-5.3", defaults["zai-coding-cn"])
+        assertEquals("MiniMax-M2.7", defaults["minimax"])
+        assertEquals("MiniMax-M2.7", defaults["minimax-cn"])
+        assertEquals("gpt-oss-120b", defaults["cerebras"])
+        assertEquals("Ring-2.6-1T", defaults["ant-ling"])
+    }
+
+    @Test
+    fun `gateway and qwen token plan individual defaults track current models`() {
+        assertEquals("zai/glm-5.1", defaults["vercel-ai-gateway"])
+        assertEquals("qwen3.8-max", defaults["qwen-token-plan-individual"])
+    }
+
+    @Test
     fun `every provider default exists in its generated catalog`() {
         val catalog = ProviderCatalog.parse(
             File("../ai/src/main/assets/models-catalog.json").readText()

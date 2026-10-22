@@ -160,7 +160,7 @@ data class OpenAICodexResponsesOptions(
      * request. Dormant in this port — carried for shape fidelity. Presence
      * boolean only in toString().
      */
-    val telemetryContext: TelemetryContext? = null
+    val telemetry: TelemetryContext? = null
 ) {
     override fun toString(): String = optionsToString(
         "OpenAICodexResponsesOptions",
@@ -183,7 +183,7 @@ data class OpenAICodexResponsesOptions(
         "onResponse" to (onResponse != null),
         "transport" to transport,
         "websocketConnectTimeoutMs" to websocketConnectTimeoutMs,
-        "telemetryContext" to (telemetryContext != null)
+        "telemetry" to (telemetry != null)
     )
 }
 
@@ -802,7 +802,7 @@ class OpenAICodexResponsesApi(
 /**
  * The streamSimple options conversion (clamped reasoning level and tool
  * choice), extracted as a named function so the conversion — including the
- * telemetryContext identity — is directly testable.
+ * telemetry identity — is directly testable.
  */
 internal fun buildOpenAICodexResponsesOptions(
     model: Model,
@@ -832,7 +832,7 @@ internal fun buildOpenAICodexResponsesOptions(
     onResponse = options.onResponse,
     transport = options.transport,
     websocketConnectTimeoutMs = options.websocketConnectTimeoutMs,
-    telemetryContext = options.telemetry
+    telemetry = options.telemetry
 )
 
 /**

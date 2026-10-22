@@ -90,7 +90,7 @@ data class AzureOpenAiResponsesOptions(
      * Explicit parent telemetry context for this request. Dormant in this
      * port — carried for shape fidelity.
      */
-    val telemetryContext: TelemetryContext? = null
+    val telemetry: TelemetryContext? = null
 ) : AzureEndpointOptions {
     override fun toString(): String = optionsToString(
         "AzureOpenAiResponsesOptions",
@@ -113,7 +113,7 @@ data class AzureOpenAiResponsesOptions(
         "onPayload" to (onPayload != null),
         "onResponse" to (onResponse != null),
         "samplingParams" to samplingParams?.keys,
-        "telemetryContext" to (telemetryContext != null)
+        "telemetry" to (telemetry != null)
     )
 }
 
@@ -142,7 +142,7 @@ internal fun buildAzureOpenAiResponsesOptions(
     onPayload = options.onPayload,
     onResponse = options.onResponse,
     samplingParams = options.samplingParams,
-    telemetryContext = options.telemetry
+    telemetry = options.telemetry
 )
 
 /**

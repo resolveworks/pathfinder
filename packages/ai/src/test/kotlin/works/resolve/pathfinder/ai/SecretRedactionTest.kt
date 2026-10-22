@@ -81,7 +81,7 @@ class SecretRedactionTest {
             "OpenAiCompletionsOptions(apiKey=<redacted>, sessionId=null, temperature=null, " +
                 "maxTokens=null, reasoningEffort=null, toolChoice=null, cacheRetention=null, " +
                 "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, env=[PI_ENV_A], " +
-                "headers=[Authorization], onPayload=false, onResponse=true, samplingParams=[top_k], telemetryContext=false)",
+                "headers=[Authorization], onPayload=false, onResponse=true, samplingParams=[top_k], telemetry=false)",
             OpenAiCompletionsOptions(
                 apiKey = secret,
                 env = mapOf("PI_ENV_A" to secret),
@@ -96,7 +96,7 @@ class SecretRedactionTest {
                 "maxTokens=null, reasoningEffort=null, reasoningSummary=null, serviceTier=null, " +
                 "toolChoice=null, cacheRetention=null, timeoutMs=null, maxRetries=0, " +
                 "maxRetryDelayMs=60000, env=[PI_ENV_A], headers=[Authorization], " +
-                "onPayload=false, onResponse=false, samplingParams=null, telemetryContext=false)",
+                "onPayload=false, onResponse=false, samplingParams=null, telemetry=false)",
             OpenAiResponsesOptions(
                 apiKey = secret,
                 env = mapOf("PI_ENV_A" to secret),
@@ -110,7 +110,7 @@ class SecretRedactionTest {
                 "azureApiVersion=v1, azureResourceName=null, azureBaseUrl=null, " +
                 "azureDeploymentName=null, timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, " +
                 "env=[PI_ENV_A], headers=[Authorization], onPayload=false, onResponse=false, " +
-                "samplingParams=null, telemetryContext=false)",
+                "samplingParams=null, telemetry=false)",
             AzureOpenAiResponsesOptions(
                 azureApiVersion = "v1",
                 env = mapOf("PI_ENV_A" to secret),

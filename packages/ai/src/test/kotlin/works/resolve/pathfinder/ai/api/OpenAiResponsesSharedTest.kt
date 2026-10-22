@@ -971,6 +971,37 @@ class OpenAiResponsesSharedTest {
     }
 
     @Test
+    fun `parallel tool calls without output_index are dropped instead of mixed up`() {
+        // pi #9974: llama.cpp omits output_index and sends both done events last;
+        // treating them positionally would pair call a's output with call b.
+        // Divergence: pi rejects the stream. This port keys every block by
+        // output_index, so index-less events never become slots and no call is
+        // delivered or executed — the mixed-up pairing cannot occur.
+        val s = state()
+        val emitted = mutableListOf<AssistantMessageEvent>()
+        for (jsonText in listOf(
+            """{"type":"response.output_item.added",
+                "item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"bash","arguments":""}}""",
+            """{"type":"response.function_call_arguments.delta","item_id":"fc_a","delta":"{\"command\":\"echo a\"}"}""",
+            """{"type":"response.output_item.added",
+                "item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"bash","arguments":""}}""",
+            """{"type":"response.function_call_arguments.delta","item_id":"fc_b","delta":"{\"command\":\"echo b\"}"}""",
+            """{"type":"response.output_item.done",
+                "item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"bash","arguments":"{\"command\":\"echo a\"}"}}""",
+            """{"type":"response.output_item.done",
+                "item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"bash","arguments":"{\"command\":\"echo b\"}"}}""",
+            """{"type":"response.completed","response":{"id":"resp_no_output_index","status":"completed"}}"""
+        )) {
+            emitted += s.onEvent(event(jsonText))
+        }
+        s.assertTerminalEvent()
+        assertEquals(StopReason.STOP, s.stopReason)
+        assertTrue(s.partialSnapshot().content.isEmpty())
+        assertTrue(emitted.none { it is AssistantMessageEvent.ToolCallStart })
+        assertTrue(emitted.none { it is AssistantMessageEvent.ToolCallEnd })
+    }
+
+    @Test
     fun `completed streams with an unfinished tool call are rejected`() {
         val s = state()
         s.onEvent(
@@ -1372,6 +1403,45 @@ class OpenAiResponsesSharedTest {
         assertEquals("custom_tool_call_output", output["type"]!!.jsonPrimitive.content)
         assertEquals("call_1", output["call_id"]!!.jsonPrimitive.content)
         assertEquals("done", output["output"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `drops foreign item ids when replaying grammar calls as custom items`() {
+        // pi constrained-sampling.test.ts (radius#115): a gateway forwards another
+        // model's history as a foreign provider, so its ctc_ item id must not replay.
+        val assistant = AssistantMessage(
+            content = listOf(
+                ToolCall(
+                    id = "call_1|ctc_1",
+                    name = "sample_tool",
+                    arguments = buildJsonObject {
+                        put("payload", "abc")
+                    }
+                )
+            ),
+            api = "pi-messages",
+            provider = "radius",
+            model = "gpt-other",
+            stopReason = StopReason.TOOL_USE
+        )
+        val result = ToolResultMessage(
+            toolCallId = "call_1|ctc_1",
+            toolName = "sample_tool",
+            content = listOf(TextContent("done"))
+        )
+        val messages = OpenAiResponsesShared.convertResponsesMessages(
+            model(id = "gpt-test"),
+            normalizeContext(Context(messages = listOf(assistant, result))),
+            setOf("openai"),
+            OpenAiResponsesShared.ConvertResponsesMessagesOptions(
+                grammarToolInputProperties = mapOf("sample_tool" to "payload")
+            )
+        )
+        val call = messages.single { it["type"]!!.jsonPrimitive.content == "custom_tool_call" }
+        assertEquals("custom_tool_call", call["type"]!!.jsonPrimitive.content)
+        assertEquals("call_1", call["call_id"]!!.jsonPrimitive.content)
+        assertEquals("abc", call["input"]!!.jsonPrimitive.content)
+        assertNull(call["id"])
     }
 
     @Test

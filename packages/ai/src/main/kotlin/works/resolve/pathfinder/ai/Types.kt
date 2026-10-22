@@ -614,7 +614,7 @@ data class SimpleStreamOptions(
             onPayload = onPayload,
             onResponse = onResponse,
             samplingParams = samplingParams,
-            telemetryContext = telemetry
+            telemetry = telemetry
         )
 }
 
