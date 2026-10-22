@@ -20,7 +20,7 @@ internal val DEFAULT_MODEL_PER_PROVIDER: List<Pair<String, String>> = listOf(
     "ant-ling" to "Ring-2.6-1T",
     "anthropic" to "claude-opus-4-8",
     "openai" to "gpt-5.5",
-    "azure-openai-responses" to "gpt-5.4",
+    "azure" to "gpt-5.4",
     "openai-codex" to "gpt-5.5",
     "nvidia" to "nvidia/nemotron-3-super-120b-a12b",
     "deepseek" to "deepseek-v4-pro",

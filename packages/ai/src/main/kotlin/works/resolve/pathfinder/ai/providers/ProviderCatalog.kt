@@ -25,6 +25,7 @@ import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SessionAffinityFormat
 import works.resolve.pathfinder.ai.ThinkingFormat
 import works.resolve.pathfinder.ai.ThinkingLevelMap
+import works.resolve.pathfinder.ai.api.AzureOpenAiCompletionsChatApi
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
@@ -154,10 +155,14 @@ class CatalogProvider(
         models = models,
         apis = apis.mapNotNull { apiId ->
             ChatApiRegistry.create(apiId, transport, retry, webSocketTransport)?.let { api ->
-                val wrapped = if (id == "opencode" || id == "opencode-go") {
-                    OpenCodeSessionHeaderChatApi(api)
-                } else {
-                    api
+                val wrapped = when {
+                    id == "opencode" || id == "opencode-go" ->
+                        OpenCodeSessionHeaderChatApi(api)
+
+                    id == "azure" && apiId == ChatApiRegistry.OPENAI_COMPLETIONS ->
+                        AzureOpenAiCompletionsChatApi(api)
+
+                    else -> api
                 }
                 apiId to wrapped
             }

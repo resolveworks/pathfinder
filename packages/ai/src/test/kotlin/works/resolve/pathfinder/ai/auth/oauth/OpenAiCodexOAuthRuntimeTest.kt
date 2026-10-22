@@ -62,7 +62,7 @@ class OpenAiCodexOAuthRuntimeTest {
                 File("src/main/assets/models-catalog.json").readText()
             )
             val provider = assertNotNull(catalog.getProvider("openai-codex"))
-            val model = assertNotNull(provider.models.first { it.id == "gpt-5.3-codex-spark" })
+            val model = assertNotNull(provider.models.first { it.id == "gpt-5.6-sol" })
 
             val accountId = "runtime-account"
             val accessJwt = fakeAccessJwt(accountId)

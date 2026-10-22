@@ -29,6 +29,7 @@ import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.StrictJsonSchemaMode
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.Tool
@@ -1994,7 +1995,7 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `xiaomi mimo replay sends empty reasoning_content with deepseek thinking params`() {
-        val mimo = realAsset().getProvider("xiaomi")!!.model("mimo-v2.5-pro")!!
+        val mimo = realAsset().getProvider("xiaomi")!!.model("mimo-v2.6-pro")!!
         val b = body(
             normalizeContext(
                 Context(
@@ -2012,7 +2013,7 @@ class OpenAiCompletionsPayloadTest {
                             ),
                             api = "openai-completions",
                             provider = "xiaomi",
-                            model = "mimo-v2.5-pro",
+                            model = "mimo-v2.6-pro",
                             stopReason = StopReason.TOOL_USE
                         ),
                         ToolResultMessage("call_1", "read", listOf(TextContent("contents")))
@@ -2027,7 +2028,57 @@ class OpenAiCompletionsPayloadTest {
         }.jsonObject
         assertEquals("", assistant["reasoning_content"]!!.jsonPrimitive.content)
         assertEquals("enabled", b["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
-        assertEquals("high", b["reasoning_effort"]!!.jsonPrimitive.content)
+        assertNull(b["reasoning_effort"], "Mimo sends no reasoning effort")
+    }
+
+    private fun kimiAdditionContext(): Context {
+        val base =
+            Tool("base_tool", "The base_tool tool", buildJsonObject { put("type", "object") })
+        val late =
+            Tool("late_tool", "The late_tool tool", buildJsonObject { put("type", "object") })
+        return Context(
+            messages = listOf(
+                SystemMessage(
+                    content = listOf(TextContent("base prompt")),
+                    toolsAdded = listOf(base)
+                ),
+                UserMessage.ofText("before"),
+                SystemMessage(
+                    content = listOf(TextContent("updated guidance")),
+                    toolsAdded = listOf(late)
+                )
+            )
+        )
+    }
+
+    private fun toolNames(b: JsonObject): List<String> = b["tools"]!!.jsonArray.map {
+        it.jsonObject["function"]!!.jsonObject["name"]!!.jsonPrimitive.content
+    }
+
+    @Test
+    fun `kimi coding k3 style models keep added tools in later system messages`() {
+        for (modelId in listOf("k3", "k3-256k", "kimi-for-coding")) {
+            val model = realAsset().getModel("kimi-coding", modelId)!!
+            val b = body(normalizeContext(kimiAdditionContext()), model = model)
+            assertEquals(listOf("base_tool"), toolNames(b), modelId)
+            val messageTools = b["messages"]!!.jsonArray
+                .map { it.jsonObject }
+                .first { it.containsKey("tools") }
+            assertEquals(
+                listOf("late_tool"),
+                messageTools["tools"]!!.jsonArray.map {
+                    it.jsonObject["function"]!!.jsonObject["name"]!!.jsonPrimitive.content
+                }
+            )
+        }
+    }
+
+    @Test
+    fun `kimi coding highspeed keeps added tools top level`() {
+        val model = realAsset().getModel("kimi-coding", "kimi-for-coding-highspeed")!!
+        val b = body(normalizeContext(kimiAdditionContext()), model = model)
+        assertEquals(listOf("base_tool", "late_tool"), toolNames(b))
+        assertTrue(b["messages"]!!.jsonArray.none { it.jsonObject.containsKey("tools") })
     }
 
     /** Ports openai-completions-vllm-priority: top-level `priority` request field. */

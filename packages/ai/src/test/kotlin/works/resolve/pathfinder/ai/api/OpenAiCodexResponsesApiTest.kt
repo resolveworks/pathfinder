@@ -781,7 +781,7 @@ class OpenAiCodexResponsesApiTest {
     }
 
     @Test
-    fun `selects additional tools, tool search, or top-level tools for Codex models`() {
+    fun `selects additional tools or tool search for Codex models`() {
         val catalog = realAsset()
         val tools = listOf(
             Tool("base_tool", "The base_tool tool", buildJsonObject { put("type", "object") }),
@@ -816,29 +816,33 @@ class OpenAiCodexResponsesApiTest {
             )
         )
 
-        fun inputOf(modelId: String): List<JsonObject> {
-            val model = catalog.getModel("openai-codex", modelId)!!
-            return buildCodexRequestBody(model, context, null, null)["input"]!!.jsonArray.map {
+        fun inputOf(model: Model): List<JsonObject> =
+            buildCodexRequestBody(model, context, null, null)["input"]!!.jsonArray.map {
                 it.jsonObject
             }
-        }
 
-        fun toolNamesOf(modelId: String): List<String> {
-            val model = catalog.getModel("openai-codex", modelId)!!
-            return buildCodexRequestBody(model, context, null, null)["tools"]!!.jsonArray
+        fun toolNamesOf(model: Model): List<String> =
+            buildCodexRequestBody(model, context, null, null)["tools"]!!.jsonArray
                 .map { it.jsonObject["name"]!!.jsonPrimitive.content }
-        }
 
-        val additional = inputOf("gpt-5.6-sol")
-        val toolSearch = inputOf("gpt-5.5")
-        val topLevel = inputOf("gpt-5.3-codex-spark")
+        val additionalModel = catalog.getModel("openai-codex", "gpt-5.6-sol")!!
+        val additional = inputOf(additionalModel)
+        val toolSearchModel = catalog.getModel("openai-codex", "gpt-6.1-sol")!!
+            .copy(
+                responsesCompat = catalog.getModel("openai-codex", "gpt-6.1-sol")!!
+                    .responsesCompat!!.copy(
+                    supportsAdditionalTools = false,
+                    supportsToolSearch = true
+                )
+            )
+        val toolSearch = inputOf(toolSearchModel)
 
         fun JsonObject.isType(name: String) = this["type"]?.jsonPrimitive?.content == name
 
         // gpt-5.6-sol declares every tool in additional_tools items, starting at the head.
         assertNull(
             buildCodexRequestBody(
-                catalog.getModel("openai-codex", "gpt-5.6-sol")!!,
+                additionalModel,
                 context,
                 null,
                 null
@@ -852,12 +856,9 @@ class OpenAiCodexResponsesApiTest {
         )
         assertTrue(additional.any { it.isType("additional_tools") })
         assertTrue(additional.none { it.isType("tool_search_output") })
-        assertEquals(listOf("base_tool"), toolNamesOf("gpt-5.5"))
+        assertEquals(listOf("base_tool"), toolNamesOf(toolSearchModel))
         assertTrue(toolSearch.none { it.isType("additional_tools") })
         assertTrue(toolSearch.any { it.isType("tool_search_output") })
-        assertEquals(listOf("base_tool", "late_tool"), toolNamesOf("gpt-5.3-codex-spark"))
-        assertTrue(topLevel.none { it.isType("additional_tools") })
-        assertTrue(topLevel.none { it.isType("tool_search_output") })
     }
 
     @Test
@@ -971,6 +972,12 @@ class OpenAiCodexResponsesApiTest {
         // The asset omits supportsStrictMode for codex models; pi's codex
         // default is true, so tools carry the assigned strict (null) value.
         val model = realAsset().getProvider("openai-codex")!!.models.first()
+            .copy(
+                responsesCompat = OpenAiResponsesCompat(
+                    supportsAdditionalTools = false,
+                    supportsToolSearch = false
+                )
+            )
         assertNull(model.responsesCompat?.supportsStrictMode)
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*doneEvents().toTypedArray()))

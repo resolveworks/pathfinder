@@ -247,7 +247,10 @@ class ProviderCatalogTest {
         }
         assertEquals(
             CacheControlFormat.ANTHROPIC,
-            catalog.getModel("openrouter", "anthropic/claude-sonnet-4")!!.compat.cacheControlFormat
+            catalog.getModel(
+                "openrouter",
+                "anthropic/claude-sonnet-4.5"
+            )!!.compat.cacheControlFormat
         )
         assertNull(catalog.getModel("openrouter", "aion-labs/aion-2.0")!!.compat.cacheControlFormat)
     }
@@ -700,8 +703,7 @@ class ProviderCatalogTest {
             ),
             catalog.getModel("anthropic", "claude-opus-4-7")!!.anthropicCompat
         )
-        // glm-5p3 moved to openai-completions at HEAD; deepseek-v4-flash-0731
-        // carries the same non-default anthropic-messages flags.
+        // deepseek-v4p1-flash carries the same non-default anthropic-messages flags.
         assertEquals(
             works.resolve.pathfinder.ai.AnthropicMessagesCompat(
                 supportsEagerToolInputStreaming = false,
@@ -713,7 +715,7 @@ class ProviderCatalogTest {
             ),
             catalog.getModel(
                 "fireworks",
-                "accounts/fireworks/models/deepseek-v4-flash-0731"
+                "accounts/fireworks/models/deepseek-v4p1-flash"
             )!!.anthropicCompat
         )
     }
@@ -751,7 +753,7 @@ class ProviderCatalogTest {
             catalog.getProvider("openai-codex")!!.models.first().responsesCompat?.supportsStrictMode
         )
         assertNull(
-            catalog.getProvider("azure-openai-responses")!!.models.first()
+            catalog.getProvider("azure")!!.models.first()
                 .responsesCompat?.supportsStrictMode
         )
         assertNull(
@@ -808,9 +810,9 @@ class ProviderCatalogTest {
             "cf-aig-authorization",
             catalog.getProvider("cloudflare-ai-gateway")!!.bearerHeaderName
         )
-        val kimi = catalog.getModel("baseten", "moonshotai/Kimi-K2.5")!!
-        assertTrue(kimi.reasoning)
-        assertIs<ChatTemplateKwargValue.Ref>(kimi.compat.chatTemplateArgs["enable_thinking"])
+        val glm = catalog.getModel("baseten", "zai-org/GLM-5.2")!!
+        assertTrue(glm.reasoning)
+        assertIs<ChatTemplateKwargValue.Ref>(glm.compat.chatTemplateArgs["enable_thinking"])
         val copilot = catalog.getModel("github-copilot", "claude-haiku-4.5")!!
         assertTrue("User-Agent" in copilot.headers)
     }
