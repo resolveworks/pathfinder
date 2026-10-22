@@ -8,6 +8,7 @@ import kotlin.test.assertIs
 import works.resolve.pathfinder.ai.auth.oauth.AnthropicOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.GitHubCopilotOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.KimiCodingOAuthAuth
+import works.resolve.pathfinder.ai.auth.oauth.OpenAiChatGPTOAuth
 import works.resolve.pathfinder.ai.auth.oauth.OpenAiCodexOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.OpenRouterOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.XaiOAuthAuth
@@ -30,6 +31,9 @@ class ProductionCatalogAuthRegistryTest {
         assertIs<XaiOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(provider("xai")))
         assertIs<OpenAiCodexOAuthAuth>(
             ProductionCatalogAuthRegistry().oauthAuth(provider("openai-codex"))
+        )
+        assertIs<OpenAiChatGPTOAuth>(
+            ProductionCatalogAuthRegistry().oauthAuth(provider("openai"))
         )
 
         val copilot = assertIs<GitHubCopilotOAuthAuth>(

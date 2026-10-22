@@ -62,7 +62,10 @@ class GitHubCopilotOAuthAuth(
 
     override val isSubscription: Boolean = true
 
-    override suspend fun login(interaction: AuthInteraction): OAuthCredential {
+    override suspend fun login(
+        interaction: AuthInteraction,
+        options: works.resolve.pathfinder.ai.auth.LoginOptions?
+    ): OAuthCredential {
         val input = interaction.prompt(
             AuthPrompt.Text(
                 message = "GitHub Enterprise URL/domain (blank for github.com)",

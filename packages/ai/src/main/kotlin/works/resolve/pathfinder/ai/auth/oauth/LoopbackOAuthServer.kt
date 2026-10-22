@@ -12,8 +12,14 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import works.resolve.pathfinder.ai.auth.AuthInteraction
+import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.utils.formQuery
 
 internal data class LoopbackCallbackRequest(
@@ -257,6 +263,248 @@ internal class LoopbackOAuthServer<R>(
         const val MAX_LINE_LENGTH = 16 * 1024
         const val BAD_REQUEST_HTML =
             "<!doctype html><html lang=\"en\"><body><h1>400 Bad Request</h1></body></html>"
+    }
+}
+
+internal class OAuthCallbackServerOptions<T>(
+    /** Provider name used on the browser page, for example `OpenAI`. */
+    val providerName: String,
+    /** Address to listen on. */
+    val host: String,
+    /** Port to listen on; `0` picks a free port. */
+    val port: Int,
+    val path: String,
+    /** Host in `redirectUri` when it differs from [host], for example `localhost`. */
+    val redirectHost: String? = null,
+    /** Expected `state` parameter. Null when the provider does not send one. */
+    val state: String? = null,
+    /**
+     * Finishes the sign-in with the received code before the browser page is sent, so the page can
+     * show exchange failures. Pass `{ code -> code }` to exchange the code later.
+     */
+    val complete: suspend (code: String) -> T,
+    val timeoutMs: Long? = null,
+    /** Android foreground gate for the loopback wait; null = pi parity. */
+    val gate: OAuthForegroundGate? = null
+)
+
+internal interface OAuthCallbackServer<T> {
+    val redirectUri: String
+
+    /**
+     * Returns the result of [OAuthCallbackServerOptions.complete], or null after [cancel]. Throws when
+     * the provider redirects with an error, completion fails, the login is cancelled, or the timeout
+     * elapses.
+     */
+    suspend fun wait(): T?
+
+    /** Stop waiting for the browser unless a callback is already being completed. */
+    fun cancel()
+
+    fun close()
+}
+
+private sealed interface CallbackCompletion<out T> {
+    data class Value<T>(val value: T) : CallbackCompletion<T>
+
+    data object Cancelled : CallbackCompletion<Nothing>
+
+    data class Failed(val error: Throwable) : CallbackCompletion<Nothing>
+}
+
+/**
+ * Loopback OAuth redirect handler shared by the browser sign-in flows.
+ *
+ * Provider-neutral and secret-free: nothing from a request is echoed into a response except through
+ * the flow's completion decision, and the server logs nothing. Response pages always carry
+ * `Cache-Control: no-store` (upstream sets it in every shared-server response; the older per-flow
+ * servers did not).
+ *
+ * Android apps share the device network namespace, so a socket bound on `127.0.0.1` is reachable
+ * from the on-device browser, which allows cleartext `http://localhost`. Android may kill the app
+ * process while the browser is foregrounded; the login is simply retried.
+ */
+internal suspend fun <T> startOAuthCallbackServer(
+    options: OAuthCallbackServerOptions<T>
+): OAuthCallbackServer<T> {
+    currentCoroutineContext().ensureActive()
+    val providerName = options.providerName
+    val host = options.host
+    val port = options.port
+    val path = options.path
+    val redirectHost = options.redirectHost
+    val state = options.state
+    val timeoutMs = options.timeoutMs
+    val gate = options.gate
+
+    var claimed = false
+    val settled = AtomicBoolean(false)
+    val result = CompletableDeferred<CallbackCompletion<T>>()
+
+    fun finish(completion: CallbackCompletion<T>) {
+        if (settled.compareAndSet(false, true)) result.complete(completion)
+    }
+
+    val handle = LoopbackOAuthServer<T>(
+        port = port,
+        host = host,
+        gate = gate,
+        handler = { request, _ ->
+            when {
+                request.method != "GET" || request.path != path ->
+                    LoopbackCallbackResponse(404, oauthErrorHtml("Callback route not found."))
+
+                state != null && request.query["state"] != state ->
+                    LoopbackCallbackResponse(400, oauthErrorHtml("State mismatch."))
+
+                claimed || settled.get() ->
+                    LoopbackCallbackResponse(
+                        409,
+                        oauthErrorHtml("This sign-in has already been handled.")
+                    )
+
+                else -> {
+                    val error = request.query["error"]
+                    val code = request.query["code"]
+                    when {
+                        !error.isNullOrEmpty() -> {
+                            val description = request.query["error_description"] ?: error
+                            finish(
+                                CallbackCompletion.Failed(
+                                    IllegalStateException(
+                                        "$providerName authorization failed: $description"
+                                    )
+                                )
+                            )
+                            LoopbackCallbackResponse(
+                                400,
+                                oauthErrorHtml(
+                                    "$providerName authorization failed.",
+                                    description
+                                )
+                            )
+                        }
+
+                        code.isNullOrEmpty() ->
+                            LoopbackCallbackResponse(
+                                400,
+                                oauthErrorHtml("Missing authorization code.")
+                            )
+
+                        else -> {
+                            claimed = true
+                            try {
+                                val value = options.complete(code)
+                                finish(CallbackCompletion.Value(value))
+                                LoopbackCallbackResponse(
+                                    200,
+                                    oauthSuccessHtml(
+                                        "Signed in to $providerName. You may now close this page."
+                                    )
+                                )
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: Throwable) {
+                                finish(CallbackCompletion.Failed(error))
+                                LoopbackCallbackResponse(
+                                    502,
+                                    oauthErrorHtml("$providerName sign-in failed.", error.message)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ).start()
+        ?: throw IllegalStateException(
+            "Could not bind the OAuth callback server on $host:$port"
+        )
+
+    val redirectHostValue = redirectHost ?: host
+    val redirectUri = "http://" +
+        (if (redirectHostValue.contains(":")) "[$redirectHostValue]" else redirectHostValue) +
+        ":${handle.port}$path"
+
+    return object : OAuthCallbackServer<T> {
+        override val redirectUri: String = redirectUri
+
+        override suspend fun wait(): T? {
+            val completion = if (timeoutMs == null) {
+                result.await()
+            } else {
+                withTimeoutOrNull(timeoutMs) { result.await() }
+                    ?: run {
+                        val timeout = IllegalStateException("$providerName sign-in timed out")
+                        finish(CallbackCompletion.Failed(timeout))
+                        throw timeout
+                    }
+            }
+            return when (completion) {
+                is CallbackCompletion.Value -> completion.value
+                CallbackCompletion.Cancelled -> null
+                is CallbackCompletion.Failed -> throw completion.error
+            }
+        }
+
+        override fun cancel() {
+            if (!claimed) finish(CallbackCompletion.Cancelled)
+        }
+
+        override fun close() {
+            finish(
+                CallbackCompletion.Failed(
+                    IllegalStateException("OAuth callback server closed")
+                )
+            )
+            handle.close()
+        }
+    }
+}
+
+internal sealed interface CallbackOrManualInput<out T> {
+    data class Callback<T>(val value: T) : CallbackOrManualInput<T>
+
+    data class Manual(val input: String) : CallbackOrManualInput<Nothing>
+}
+
+/**
+ * Wait for the browser callback, or for the user to paste the code or redirect URL when the browser
+ * cannot reach the loopback server (for example over SSH). Without a callback server only the manual
+ * prompt is used.
+ */
+internal suspend fun <T> waitForCallbackOrManualInput(
+    interaction: AuthInteraction,
+    callback: OAuthCallbackServer<T>?,
+    message: String,
+    placeholder: String
+): CallbackOrManualInput<T> = coroutineScope {
+    var manualInput: String? = null
+    var manualError: Throwable? = null
+    val manual = launch {
+        try {
+            manualInput = interaction.prompt(AuthPrompt.ManualCode(message, placeholder))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            manualError = error
+        } finally {
+            if (manualError != null || manualInput != null) callback?.cancel()
+        }
+    }
+
+    try {
+        val value = callback?.wait()
+        manualError?.let { throw it }
+        if (value != null) {
+            manual.cancel()
+            return@coroutineScope CallbackOrManualInput.Callback(value)
+        }
+        manual.join()
+        manualError?.let { throw it }
+        CallbackOrManualInput.Manual(manualInput ?: "")
+    } finally {
+        manual.cancel()
     }
 }
 

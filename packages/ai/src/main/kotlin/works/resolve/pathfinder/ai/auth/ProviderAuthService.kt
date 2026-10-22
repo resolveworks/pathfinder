@@ -120,12 +120,13 @@ class ProviderAuthService(
     suspend fun login(
         providerId: String,
         type: AuthType,
-        interaction: AuthInteraction
+        interaction: AuthInteraction,
+        options: LoginOptions? = null
     ): AuthStatus {
         val provider = requireProvider(providerId)
         val credential = when (type) {
             AuthType.API_KEY -> runApiKeyLogin(provider, interaction)
-            AuthType.OAUTH -> runOAuthLogin(provider, interaction)
+            AuthType.OAUTH -> runOAuthLogin(provider, interaction, options)
         }
         try {
             credentials.modify(providerId) { credential }
@@ -171,14 +172,15 @@ class ProviderAuthService(
 
     private suspend fun runOAuthLogin(
         provider: CatalogProvider,
-        interaction: AuthInteraction
+        interaction: AuthInteraction,
+        options: LoginOptions?
     ): Credential {
         val oauth = registry.oauthAuth(provider)
             ?: throw ModelsError(
                 ModelsErrorCode.AUTH,
                 "${provider.name} does not support ${AuthType.OAUTH} login"
             )
-        return oauth.login(interaction)
+        return oauth.login(interaction, options)
     }
 
     private fun apiKeyLabel(provider: CatalogProvider): String =

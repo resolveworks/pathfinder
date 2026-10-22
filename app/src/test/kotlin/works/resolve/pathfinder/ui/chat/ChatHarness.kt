@@ -56,6 +56,7 @@ import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.auth.CredentialInfo
 import works.resolve.pathfinder.ai.auth.CredentialStore
+import works.resolve.pathfinder.ai.auth.LoginOptions
 import works.resolve.pathfinder.ai.auth.MapCatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.NoopAuthContext
@@ -130,7 +131,10 @@ internal class FakeOAuthAuth(
     var loginFn: suspend (AuthInteraction) -> OAuthCredential = {
         OAuthCredential(access = "access-1", refresh = "refresh-1", expires = Long.MAX_VALUE)
     }
-    override suspend fun login(interaction: AuthInteraction): OAuthCredential = loginFn(interaction)
+    override suspend fun login(
+        interaction: AuthInteraction,
+        options: LoginOptions?
+    ): OAuthCredential = loginFn(interaction)
     override suspend fun refresh(credential: OAuthCredential): OAuthCredential = credential
     override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
         ModelAuth(apiKey = credential.access)

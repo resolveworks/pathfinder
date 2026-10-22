@@ -217,7 +217,7 @@ class OpenRouterOAuthAuthTest {
                 val (status, body) = httpGet("$callbackUrl?code=or-v1-bad")
 
                 assertEquals(502, status)
-                assertTrue("OpenRouter key exchange failed." in body, body)
+                assertTrue("OpenRouter sign-in failed." in body, body)
                 assertTrue(
                     "OpenRouter OAuth key exchange failed (HTTP 403): code expired" in body,
                     body
@@ -250,7 +250,7 @@ class OpenRouterOAuthAuthTest {
             )
 
             assertEquals(400, status)
-            assertTrue("OpenRouter authorization was denied." in body, body)
+            assertTrue("OpenRouter authorization failed." in body, body)
             assertTrue("user said no" in body, body)
             val error = try {
                 login.await()
@@ -337,7 +337,7 @@ class OpenRouterOAuthAuthTest {
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.login(interaction) }
         }
-        assertEquals("OpenRouter OAuth login timed out", error.message)
+        assertEquals("OpenRouter sign-in timed out", error.message)
         assertTrue(http.requests.isEmpty())
     }
 

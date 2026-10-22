@@ -27,18 +27,24 @@ import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.oauth.Pkce
 import works.resolve.pathfinder.ai.auth.oauth.PkceGenerator
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.utils.formQuery
 import works.resolve.pathfinder.ai.utils.formUrlEncode
 
 class AnthropicOAuthAuthTest {
 
-    private class RecordingInteraction(val manualCodeResponse: String = "the-code") :
-        AuthInteraction {
+    private class RecordingInteraction(
+        val manualCodeResponse: String = "the-code",
+        val loginMethod: String = "browser"
+    ) : AuthInteraction {
         val events = mutableListOf<AuthEvent>()
         val prompts = mutableListOf<AuthPrompt>()
 
         override suspend fun prompt(prompt: AuthPrompt): String {
             prompts += prompt
-            return manualCodeResponse
+            return when (prompt) {
+                is AuthPrompt.Select -> loginMethod
+                else -> manualCodeResponse
+            }
         }
 
         override suspend fun notify(event: AuthEvent) {
@@ -54,7 +60,10 @@ class AnthropicOAuthAuthTest {
 
         override suspend fun prompt(prompt: AuthPrompt): String {
             prompts += prompt
-            return answer.await()
+            return when (prompt) {
+                is AuthPrompt.Select -> "browser"
+                else -> answer.await()
+            }
         }
 
         override suspend fun notify(event: AuthEvent) {
@@ -108,18 +117,18 @@ class AnthropicOAuthAuthTest {
             auth.login(interaction)
 
             val urlEvent = interaction.events.filterIsInstance<AuthEvent.AuthUrl>().single()
-            assertEquals(
-                "https://claude.ai/oauth/authorize?code=true" +
-                    "&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e" +
-                    "&response_type=code" +
-                    "&redirect_uri=http%3A%2F%2Flocalhost%3A53692%2Fcallback" +
-                    "&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+" +
-                    "user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload" +
-                    "&code_challenge=${pair.challenge}" +
-                    "&code_challenge_method=S256" +
-                    "&state=${pair.verifier}",
-                urlEvent.url
+            val params = formQuery(urlEvent.url.substringAfter("?"))
+            assertEquals("true", params["code"])
+            assertEquals(AnthropicOAuthAuth.CLIENT_ID, params["client_id"])
+            assertEquals("code", params["response_type"])
+            assertTrue(
+                Regex("^http://localhost:\\d+/callback$").matches(params["redirect_uri"]!!),
+                params["redirect_uri"]!!
             )
+            assertEquals(AnthropicOAuthAuth.SCOPES, params["scope"])
+            assertEquals(pair.challenge, params["code_challenge"])
+            assertEquals("S256", params["code_challenge_method"])
+            assertEquals(pair.verifier, params["state"])
             assertEquals(
                 "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.",
                 urlEvent.instructions
@@ -134,12 +143,18 @@ class AnthropicOAuthAuthTest {
 
         auth.login(interaction)
 
-        val prompt = assertIs<AuthPrompt.ManualCode>(interaction.prompts.single())
+        val prompt = assertIs<AuthPrompt.ManualCode>(
+            interaction.prompts.filterIsInstance<AuthPrompt.ManualCode>().single()
+        )
         assertEquals(
             "Complete login in your browser, or paste the authorization code / redirect URL here:",
             prompt.message
         )
-        assertEquals(AnthropicOAuthAuth.REDIRECT_URI, prompt.placeholder)
+        val redirectUri = formQuery(
+            interaction.events.filterIsInstance<AuthEvent.AuthUrl>()
+                .single().url.substringAfter("?")
+        )["redirect_uri"]
+        assertEquals(redirectUri, prompt.placeholder)
     }
 
     @Test
@@ -249,7 +264,11 @@ class AnthropicOAuthAuthTest {
         assertEquals(AnthropicOAuthAuth.CLIENT_ID, sent["client_id"]!!.jsonPrimitive.content)
         assertEquals("the-code", sent["code"]!!.jsonPrimitive.content)
         assertEquals(pair.verifier, sent["state"]!!.jsonPrimitive.content)
-        assertEquals(AnthropicOAuthAuth.REDIRECT_URI, sent["redirect_uri"]!!.jsonPrimitive.content)
+        val redirectUri = formQuery(
+            interaction.events.filterIsInstance<AuthEvent.AuthUrl>()
+                .single().url.substringAfter("?")
+        )["redirect_uri"]
+        assertEquals(redirectUri, sent["redirect_uri"]!!.jsonPrimitive.content)
         assertEquals(pair.verifier, sent["code_verifier"]!!.jsonPrimitive.content)
 
         assertEquals("access", credential.access)
@@ -386,12 +405,19 @@ class AnthropicOAuthAuthTest {
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.login(RecordingInteraction("the-code")) }
         }
-        assertEquals(
-            "Token exchange request failed. url=${AnthropicOAuthAuth.TOKEN_URL}; " +
-                "redirect_uri=${AnthropicOAuthAuth.REDIRECT_URI}; " +
+        assertTrue(
+            error.message!!.startsWith(
+                "Token exchange request failed. url=${AnthropicOAuthAuth.TOKEN_URL}; " +
+                    "redirect_uri=http://localhost:"
+            ),
+            error.message
+        )
+        assertTrue(
+            error.message!!.endsWith(
                 "response_type=authorization_code; details=IllegalStateException: " +
-                "HTTP request failed. status=400; " +
-                "url=${AnthropicOAuthAuth.TOKEN_URL}; body=error=invalid_grant: code expired",
+                    "HTTP request failed. status=400; " +
+                    "url=${AnthropicOAuthAuth.TOKEN_URL}; body=error=invalid_grant: code expired"
+            ),
             error.message
         )
     }
@@ -431,8 +457,13 @@ class AnthropicOAuthAuthTest {
         assertTrue(
             error.message!!.startsWith(
                 "Token exchange request failed. url=${AnthropicOAuthAuth.TOKEN_URL}; " +
-                    "redirect_uri=${AnthropicOAuthAuth.REDIRECT_URI}; " +
-                    "response_type=authorization_code; details=SocketTimeoutException"
+                    "redirect_uri=http://localhost:"
+            ),
+            error.message
+        )
+        assertTrue(
+            error.message!!.contains(
+                "response_type=authorization_code; details=SocketTimeoutException"
             ),
             error.message
         )
@@ -607,7 +638,7 @@ class AnthropicOAuthAuthTest {
         )
         assertEquals(200, status)
         assertTrue(
-            body.contains("Anthropic authentication completed. You can close this window."),
+            body.contains("Signed in to Anthropic."),
             body
         )
 
@@ -665,20 +696,25 @@ class AnthropicOAuthAuthTest {
 
     @Test
     fun `error query param gets a 400 page echoing the error`() = runBlocking {
-        val (status, body) = driveCallback(freePort(), "/callback?error=access_denied")
+        val (status, body) = driveCallback(
+            freePort(),
+            "/callback?error=access_denied&state=${pkce().verifier}"
+        )
         assertEquals(400, status)
-        assertTrue(body.contains("Anthropic authentication did not complete."), body)
-        assertTrue(body.contains("Error: access_denied"), body)
+        assertTrue(body.contains("Anthropic authorization failed."), body)
+        assertTrue(body.contains("access_denied"), body)
     }
 
     @Test
     fun `missing code or state gets a 400 page`() = runBlocking {
         val pair = pkce()
-        for (query in listOf("/callback?code=server-code", "/callback?state=${pair.verifier}")) {
-            val (status, body) = driveCallback(freePort(), query)
-            assertEquals(400, status, query)
-            assertTrue(body.contains("Missing code or state parameter."), query)
-        }
+        val missingCode = driveCallback(freePort(), "/callback?state=${pair.verifier}")
+        assertEquals(400, missingCode.first)
+        assertTrue(missingCode.second.contains("Missing authorization code."), missingCode.second)
+
+        val missingState = driveCallback(freePort(), "/callback?code=server-code")
+        assertEquals(400, missingState.first)
+        assertTrue(missingState.second.contains("State mismatch."), missingState.second)
     }
 
     @Test
@@ -689,18 +725,69 @@ class AnthropicOAuthAuthTest {
     }
 
     @Test
-    fun `bind failure fails the login like pi's rejecting error handler`() {
+    fun `falls back to a free callback port when the preferred port is taken`() {
         ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { blocker ->
-            val port = blocker.localPort
-            val (auth, http) = flow(port = port)
-            val error = assertFailsWith<IllegalStateException> {
-                runBlocking { auth.login(RecordingInteraction("the-code")) }
-            }
-            assertTrue(error.message!!.contains("callback server"), error.message)
-            assertTrue(error.message!!.contains("127.0.0.1:$port"), error.message)
-            assertTrue(http.requests.isEmpty())
+            val (auth, http) = flow(port = blocker.localPort)
+            val interaction = RecordingInteraction("the-code")
+
+            val credential = runBlocking { auth.login(interaction) }
+
+            assertEquals("access", credential.access)
+            val redirectUri = formQuery(
+                interaction.events.filterIsInstance<AuthEvent.AuthUrl>()
+                    .single().url.substringAfter("?")
+            )["redirect_uri"]!!
+            assertTrue(Regex("^http://localhost:\\d+/callback$").matches(redirectUri), redirectUri)
+            assertTrue(!redirectUri.contains(":${blocker.localPort}/"), redirectUri)
+            val sent = Json.parseToJsonElement(
+                http.requests.single().body.decodeToString()
+            ).jsonObject
+            assertEquals(redirectUri, sent["redirect_uri"]!!.jsonPrimitive.content)
         }
     }
+
+    @Test
+    fun `copy code login uses the copy-code redirect and exchanges the pasted code`() =
+        runBlocking {
+            val (auth, http) = flow()
+            val pair = pkce()
+            val interaction = RecordingInteraction(
+                manualCodeResponse = "copied-code#${pair.verifier}",
+                loginMethod = "copy_code"
+            )
+
+            val credential = auth.login(interaction)
+
+            assertEquals("access", credential.access)
+            val select = assertIs<AuthPrompt.Select>(
+                interaction.prompts.filterIsInstance<AuthPrompt.Select>().single()
+            )
+            assertEquals("Select Anthropic login method:", select.message)
+            assertEquals(
+                listOf(
+                    AuthPrompt.Select.Option("browser", "Browser login (default)"),
+                    AuthPrompt.Select.Option("copy_code", "Copy code login (headless)")
+                ),
+                select.options
+            )
+            val urlEvent = interaction.events.filterIsInstance<AuthEvent.AuthUrl>().single()
+            val params = formQuery(urlEvent.url.substringAfter("?"))
+            assertEquals(AnthropicOAuthAuth.COPY_CODE_REDIRECT_URI, params["redirect_uri"])
+            val prompt = assertIs<AuthPrompt.ManualCode>(
+                interaction.prompts.filterIsInstance<AuthPrompt.ManualCode>().single()
+            )
+            assertEquals("Paste the code Anthropic shows after you sign in:", prompt.message)
+            assertEquals("code#state", prompt.placeholder)
+            val sent = Json.parseToJsonElement(
+                http.requests.single().body.decodeToString()
+            ).jsonObject
+            assertEquals("copied-code", sent["code"]!!.jsonPrimitive.content)
+            assertEquals(pair.verifier, sent["state"]!!.jsonPrimitive.content)
+            assertEquals(
+                AnthropicOAuthAuth.COPY_CODE_REDIRECT_URI,
+                sent["redirect_uri"]!!.jsonPrimitive.content
+            )
+        }
 }
 
 private fun anthropicTokenBody(

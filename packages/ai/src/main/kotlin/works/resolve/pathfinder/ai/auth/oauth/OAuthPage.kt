@@ -2,12 +2,22 @@ package works.resolve.pathfinder.ai.auth.oauth
 
 /**
  * OAuth success/error pages for the loopback callback servers
- * ([LoopbackOAuthServer]) to serve into the on-device browser. Rendering
- * must stay byte-for-byte identical to pi's `oauth-page.ts`: same markup,
- * CSS, and escaping.
+ * ([LoopbackOAuthServer]) to serve into the on-device browser. Layout, CSS,
+ * and escaping follow pi's `oauth-page.ts`; the logo is Pathfinder's own
+ * serpentine mark in the shared accent palette.
  */
 private const val LOGO_SVG =
-    "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 800 800\" aria-hidden=\"true\"><path fill=\"#fff\" fill-rule=\"evenodd\" d=\"M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z\"/><path fill=\"#fff\" d=\"M517.36 400 H634.72 V634.72 H517.36 Z\"/></svg>"
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 108 108\" aria-hidden=\"true\">" +
+        "<path fill=\"none\" stroke=\"#F09082\" stroke-linecap=\"round\" stroke-width=\"4.2\" " +
+        "d=\"M53.1,68.4L61.36,68.4M69.16,68.36A7.2,7.2 0 0 0 75.24,63.45" +
+        "M73.59,56.21A7.2,7.2 0 0 0 68.4,54L65.93,54M58.13,54L49.87,54" +
+        "M42.07,54L39.6,54A7.2,7.2 0 0 1 34.41,51.79" +
+        "M32.76,44.55A7.2,7.2 0 0 1 38.84,39.64M46.64,39.6L54.9,39.6\"/>" +
+        "<path fill=\"none\" stroke=\"#4D9ABF\" stroke-width=\"6\" " +
+        "d=\"M39.6,63.6A4.8,4.8 0 1 1 39.6,73.2A4.8,4.8 0 1 1 39.6,63.6Z\"/>" +
+        "<path fill=\"none\" stroke=\"#F1BE58\" stroke-linecap=\"round\" stroke-width=\"6\" " +
+        "d=\"M63.6,34.8L73.2,44.4M73.2,34.8L63.6,44.4\"/>" +
+        "</svg>"
 
 internal fun escapeHtml(value: String): String = value
     .replace("&", "&amp;")

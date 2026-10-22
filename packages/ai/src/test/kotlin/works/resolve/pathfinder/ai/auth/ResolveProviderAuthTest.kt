@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.yield
 
 class ResolveProviderAuthTest {
     private val nowMs = 1_770_000_000_000L
@@ -46,7 +47,10 @@ class ResolveProviderAuthTest {
         override val name = "Stub OAuth"
         var refreshCalls = 0
         val refreshedFrom = mutableListOf<OAuthCredential>()
-        override suspend fun login(interaction: AuthInteraction): OAuthCredential = refreshed
+        override suspend fun login(
+            interaction: AuthInteraction,
+            options: LoginOptions?
+        ): OAuthCredential = refreshed
         override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
             refreshCalls++
             refreshedFrom += credential
@@ -351,7 +355,7 @@ class ResolveProviderAuthTest {
     }
 
     @Test
-    fun `refresh completing as its caller is cancelled is discarded, not persisted`() = runTest {
+    fun `refresh completing as its caller is cancelled is persisted`() = runTest {
         val store = InMemoryCredentialStore()
         val expiring = OAuthCredential(access = "a", refresh = "r", expires = nowMs)
         store.modify("openai") { expiring }
@@ -364,10 +368,8 @@ class ResolveProviderAuthTest {
         lateinit var loginJob: Job
         val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = refreshed) {
             override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
-                // The refresh finishes all its work with the caller's
-                // cancellation landing mid-flight — exactly where pi's modify
-                // task would complete the refresh and discard it via
-                // throwIfAborted before persisting.
+                // The provider has rotated the old refresh token by the time
+                // the caller is cancelled, so the result must still persist.
                 loginJob.cancel()
                 refreshCompleted = true
                 return refreshed
@@ -388,31 +390,29 @@ class ResolveProviderAuthTest {
             }
         }
         val error = assertNotNull(outcome.await())
-        // The discard rethrows the caller's cancellation after the decision.
         assertTrue(
             error is CancellationException,
             "expected CancellationException but was ${error::class.qualifiedName}"
         )
-        // The refresh ran to completion — side effects happened — but its
-        // result is never handed to the store.
         assertTrue(refreshCompleted)
-        assertEquals(expiring, store.read("openai"))
+        withTimeout(1_000) {
+            while (store.read("openai") != refreshed) yield()
+        }
     }
 
     @Test
-    fun `caller cancellation during refresh propagates as cancellation, not ModelsError`() =
+    fun `caller cancellation during refresh propagates as cancellation and still persists`() =
         runTest {
             val store = InMemoryCredentialStore()
             store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = nowMs) }
-            val oauth = object : OAuthAuth by StubOAuthAuth(
-                refreshed = OAuthCredential(
-                    "a2",
-                    "r2",
-                    nowMs + 60 * 60 * 1000L
-                )
-            ) {
+            val refreshed = OAuthCredential("a2", "r2", nowMs + 60 * 60 * 1000L)
+            val refreshStarted = CompletableDeferred<Unit>()
+            val finishRefresh = CompletableDeferred<Unit>()
+            val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = refreshed) {
                 override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
-                    awaitCancellation()
+                    refreshStarted.complete(Unit)
+                    finishRefresh.await()
+                    return refreshed
                 }
             }
             val job = launch {
@@ -427,9 +427,14 @@ class ResolveProviderAuthTest {
                     error("cancellation must not be wrapped: ${e.message}")
                 }
             }
+            refreshStarted.await()
             job.cancel()
             job.join()
             assertTrue(job.isCancelled)
+            finishRefresh.complete(Unit)
+            withTimeout(1_000) {
+                while (store.read("openai") != refreshed) yield()
+            }
         }
 
     @Test
