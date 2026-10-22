@@ -36,6 +36,11 @@ import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.ClientAttribution
+import works.resolve.pathfinder.ai.utils.ClientAttributionSetting
+import works.resolve.pathfinder.ai.utils.ClientIdentity
+import works.resolve.pathfinder.ai.utils.PATHFINDER_ATTRIBUTION
+import works.resolve.pathfinder.ai.utils.UserAgentMode
 
 class AgentTest {
 
@@ -1101,4 +1106,39 @@ class AgentTest {
             received.map { it::class.simpleName }
         )
     }
+
+    @Test
+    fun `attributes requests to pathfinder by default and merges a configured identity over it`() =
+        runTest {
+            val received = mutableListOf<ClientIdentity?>()
+            val agent = agent(
+                streamFn = StreamFn { _, _, options ->
+                    received.add(options.identity)
+                    okStream()
+                }
+            )
+
+            agent.prompt(listOf(UserMessage.ofText("hello")))
+            val acme = ClientAttribution(name = "acme", url = "https://acme.example")
+            agent.identity = ClientIdentity(
+                userAgent = UserAgentMode.Short,
+                attribution = ClientAttributionSetting.On(acme)
+            )
+            agent.prompt(listOf(UserMessage.ofText("hello again")))
+            agent.identity = ClientIdentity(userAgent = UserAgentMode.Short)
+            agent.prompt(listOf(UserMessage.ofText("and again")))
+
+            val pathfinder = ClientAttributionSetting.On(PATHFINDER_ATTRIBUTION)
+            assertEquals(
+                listOf(
+                    ClientIdentity(attribution = pathfinder),
+                    ClientIdentity(
+                        attribution = ClientAttributionSetting.On(acme),
+                        userAgent = UserAgentMode.Short
+                    ),
+                    ClientIdentity(attribution = pathfinder, userAgent = UserAgentMode.Short)
+                ),
+                received
+            )
+        }
 }

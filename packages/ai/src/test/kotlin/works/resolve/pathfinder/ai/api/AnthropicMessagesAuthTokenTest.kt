@@ -19,7 +19,7 @@ import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
-import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.formatUserAgent
 import works.resolve.pathfinder.ai.utils.normalizeContext
 
 /**
@@ -103,8 +103,8 @@ class AnthropicMessagesAuthTokenTest {
         ).stream(claude, context, AnthropicMessagesOptions(apiKey = "anthropic-key")).toList()
 
         // Divergence: the product token is `pathfinder (...)`, not pi's
-        // `pi (...)` — see getPiUserAgent().
-        assertEquals(getPiUserAgent(), transport.requests.single().headers["User-Agent"])
+        // `pi (...)` — see formatUserAgent().
+        assertEquals(formatUserAgent(), transport.requests.single().headers["User-Agent"])
     }
 
     @Test

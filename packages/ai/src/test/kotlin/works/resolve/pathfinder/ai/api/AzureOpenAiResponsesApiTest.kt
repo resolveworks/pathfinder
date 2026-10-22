@@ -364,7 +364,7 @@ class AzureOpenAiResponsesApiTest {
         ).toList()
         assertEquals("x".repeat(64), bodyOf(transport)["prompt_cache_key"]!!.jsonPrimitive.content)
         assertEquals(
-            works.resolve.pathfinder.ai.utils.getPiUserAgent(),
+            works.resolve.pathfinder.ai.utils.formatUserAgent(),
             transport.requests.single().headers["User-Agent"]
         )
     }

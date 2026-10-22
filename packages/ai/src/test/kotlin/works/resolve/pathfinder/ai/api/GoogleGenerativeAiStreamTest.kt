@@ -35,7 +35,7 @@ import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
-import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.formatUserAgent
 import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class GoogleGenerativeAiStreamTest {
@@ -311,7 +311,7 @@ class GoogleGenerativeAiStreamTest {
         )
         assertEquals("k", request.headers["x-goog-api-key"])
         assertEquals("request-value", request.headers["x-model"])
-        assertEquals(getPiUserAgent(), request.headers["User-Agent"])
+        assertEquals(formatUserAgent(), request.headers["User-Agent"])
         assertNull(request.bearerToken)
 
         val body = Json.parseToJsonElement(request.body.decodeToString()).jsonObject

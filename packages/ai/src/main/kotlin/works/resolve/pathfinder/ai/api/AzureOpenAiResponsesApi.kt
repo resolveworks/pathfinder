@@ -26,9 +26,10 @@ import works.resolve.pathfinder.ai.toModelThinkingLevel
 import works.resolve.pathfinder.ai.toToolChoice
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.getDeclaredTools
-import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.getIdentityHeaders
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.resolveTranscript
@@ -96,6 +97,8 @@ data class AzureOpenAiResponsesOptions(
         works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
+    /** How the request identifies the calling app. */
+    val identity: ClientIdentity? = null,
     /**
      * Request hook that may return a replacement for the outgoing payload. It
      * receives full message content — installers must not log it. Never
@@ -161,6 +164,7 @@ internal fun buildAzureOpenAiResponsesOptions(
     maxRetryDelayMs = options.maxRetryDelayMs,
     env = options.env,
     headers = options.headers,
+    identity = options.identity,
     onPayload = options.onPayload,
     onResponse = options.onResponse,
     samplingParams = mergeSamplingParams(model, options),
@@ -232,7 +236,7 @@ class AzureOpenAiResponsesApi(
             val headers = LinkedHashMap<String, String?>()
             // Precedence: default User-Agent, then model headers (which may
             // override it), then options headers last.
-            headers.putAll(mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), model.headers))
+            headers.putAll(mergeHeaders(getIdentityHeaders(model, options.identity), model.headers))
             headers.putAll(options.headers)
             headers["api-key"] = apiKey
             headers["Accept"] = "text/event-stream"

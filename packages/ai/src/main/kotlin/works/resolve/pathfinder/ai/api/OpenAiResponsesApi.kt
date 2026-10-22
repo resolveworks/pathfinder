@@ -35,10 +35,11 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.getDeclaredTools
-import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.getIdentityHeaders
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.optionsToString
@@ -185,6 +186,8 @@ data class OpenAiResponsesOptions(
         works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
+    /** How the request identifies the calling app. */
+    val identity: ClientIdentity? = null,
     /**
      * Request hook that may return a replacement for the outgoing payload. It
      * receives full message content — installers must not log it. Never
@@ -249,6 +252,7 @@ internal fun buildOpenAiResponsesOptions(
     maxRetryDelayMs = options.maxRetryDelayMs,
     env = options.env,
     headers = options.headers,
+    identity = options.identity,
     onPayload = options.onPayload,
     onResponse = options.onResponse,
     samplingParams = mergeSamplingParams(model, options),
@@ -321,7 +325,7 @@ class OpenAiResponsesApi(
                 // Copilot dynamic headers (github-copilot only) sit between
                 // the model headers and the affinity/options headers.
                 mergeHeaders(
-                    mapOf("User-Agent" to getPiUserAgent()),
+                    getIdentityHeaders(model, options.identity),
                     mergeHeaders(model.headers, copilotDynamicHeadersFor(model, normalizedContext))
                 ).filterValues { it != null }.mapValues { it.value!! },
                 cacheSessionId,

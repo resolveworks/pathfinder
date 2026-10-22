@@ -32,13 +32,26 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.toModelThinkingLevel
 import works.resolve.pathfinder.ai.toThinkingLevelOrNull
+import works.resolve.pathfinder.ai.utils.ClientAttributionSetting
+import works.resolve.pathfinder.ai.utils.ClientIdentity
+import works.resolve.pathfinder.ai.utils.PATHFINDER_ATTRIBUTION
 import works.resolve.pathfinder.ai.utils.ToolStateChanges
 import works.resolve.pathfinder.ai.utils.getCurrentTools
 import works.resolve.pathfinder.ai.utils.getToolStateChanges
+import works.resolve.pathfinder.ai.utils.mergeClientIdentity
 import works.resolve.pathfinder.ai.utils.normalizeContext
 import works.resolve.pathfinder.ai.utils.parseStreamingJson
 import works.resolve.pathfinder.ai.utils.toToolDeclaration
 import works.resolve.pathfinder.ai.utils.validateToolArguments
+
+/**
+ * Request identity of agent loops: the ai layer's defaults with provider
+ * attribution to Pathfinder. [AgentLoopConfig.identity] overrides it field by
+ * field.
+ */
+val DEFAULT_AGENT_IDENTITY: ClientIdentity = ClientIdentity(
+    attribution = ClientAttributionSetting.On(PATHFINDER_ATTRIBUTION)
+)
 
 /**
  * Runs the agent loop: streams assistant turns and executes each response's
@@ -459,7 +472,13 @@ private suspend fun streamAssistantResponse(
     config: AgentLoopConfig,
     emit: suspend (AgentEvent) -> Unit
 ): AssistantMessage {
-    val response = config.streamFn.stream(config.model, llmContext, config.options)
+    val response = config.streamFn.stream(
+        config.model,
+        llmContext,
+        config.options.copy(
+            identity = mergeClientIdentity(DEFAULT_AGENT_IDENTITY, config.identity)
+        )
+    )
 
     var started = false
     val fold = AssistantStreamFold()

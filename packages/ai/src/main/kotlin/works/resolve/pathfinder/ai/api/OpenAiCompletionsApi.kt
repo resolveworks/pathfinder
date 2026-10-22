@@ -59,11 +59,12 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.getDeclaredTools
-import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.getIdentityHeaders
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
@@ -231,6 +232,8 @@ data class OpenAiCompletionsOptions(
     val env: Map<String, String> = emptyMap(),
     /** Explicit request headers; merged over resolved auth headers. */
     val headers: Map<String, String?> = emptyMap(),
+    /** How the request identifies the calling app. */
+    val identity: ClientIdentity? = null,
     /** Per-level thinking token budgets; consumed by budget-based adapters. */
     val thinkingBudgets: Map<ThinkingLevel, Int> = emptyMap(),
     /**
@@ -365,7 +368,10 @@ class OpenAiCompletionsApi(
                 mergeHeaders(
                     mergeHeaders(
                         mergeHeaders(
-                            mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), model.headers),
+                            mergeHeaders(
+                                getIdentityHeaders(model, options.identity),
+                                model.headers
+                            ),
                             copilotDynamicHeadersFor(model, normalizedContext)
                         ),
                         sessionAffinityHeaders(model, cacheSessionId)
