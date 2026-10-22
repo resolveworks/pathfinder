@@ -112,6 +112,12 @@ data class AgentToolResult(
     /** Usage of the final tool execution itself; not used for main LLM context accounting. */
     val usage: Usage? = null,
     /**
+     * Report a failure without throwing. The model sees [content] as an error
+     * result, like a thrown error, but [details] are kept for the UI and
+     * programmatic callers.
+     */
+    val isError: Boolean = false,
+    /**
      * Hint that the agent should stop after the current tool batch.
      * Early termination only happens when every finalized tool result in
      * the batch sets this to true.
@@ -275,10 +281,11 @@ sealed class AgentEvent {
     /**
      * Session-level: the prompt cycle settled — the agent run and every
      * post-run continuation (retry backoff, compaction) finished, or the
-     * run aborted. Emitted by the owning session after its terminal
+     * run aborted. [aborted] records whether the cycle settled because of
+     * an abort request. Emitted by the owning session after its terminal
      * `agent_end` handling; never appears in loop output.
      */
-    data object AgentSettled : AgentEvent()
+    data class AgentSettled(val aborted: Boolean) : AgentEvent()
 
     /**
      * Session-level: the session's effective thinking level changed (pi's

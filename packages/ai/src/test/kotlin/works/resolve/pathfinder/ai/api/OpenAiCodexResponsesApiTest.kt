@@ -125,6 +125,28 @@ class OpenAiCodexResponsesApiTest {
     }
 
     @Test
+    fun `lets model and caller headers override originator and User-Agent`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*doneEvents().toTypedArray()))
+        api(transport).stream(
+            model.copy(headers = mapOf("originator" to "my-app")),
+            context,
+            OpenAICodexResponsesOptions(
+                apiKey = apiKey,
+                headers = mapOf(
+                    "user-agent" to "my-app/1.0",
+                    "Authorization" to "Bearer ignored"
+                )
+            )
+        ).toList()
+
+        val headers = transport.requests.single().headers
+        assertEquals("my-app", headers["originator"])
+        assertEquals("my-app/1.0", headers["User-Agent"])
+        assertEquals("Bearer $apiKey", headers["Authorization"])
+    }
+
+    @Test
     fun `account id extracts from the jwt claim`() {
         assertEquals("acc-123", extractAccountId(apiKey))
         assertTrue(

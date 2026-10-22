@@ -47,6 +47,7 @@ import works.resolve.pathfinder.ai.utils.RetryPolicy
 import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.ai.utils.contentText
 import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
+import works.resolve.pathfinder.ai.utils.getCurrentTools
 import works.resolve.pathfinder.ai.utils.isContextOverflow
 import works.resolve.pathfinder.ai.utils.isRecoverableLength
 import works.resolve.pathfinder.ai.utils.retryDelayMs
@@ -402,10 +403,16 @@ class AgentSession(
      * message without tool declarations restores an empty loadout (pi
      * transcripts always declare their tools); the constructor's default
      * loadout applies only when the transcript has no system message.
+     *
+     * All system messages on the branch are replayed, including those before
+     * a compaction: the branch's later loadout changes and removals still
+     * apply, so tools removed before a compaction stay inactive.
      */
     private fun restoreToolsFromTranscript() {
-        val current = getCurrentSystemMessage(manager.buildSessionContext().messages) ?: return
-        val toolNames = current.toolsAdded.orEmpty()
+        val systemMessages = manager.getBranch()
+            .mapNotNull { (it as? MessageEntry)?.message as? SystemMessage }
+        if (systemMessages.isEmpty()) return
+        val toolNames = getCurrentTools(systemMessages)
             .map { it.name }
             .filter(toolRegistry::containsKey)
         agent.setTools(resolveTools(toolNames))
@@ -661,7 +668,7 @@ class AgentSession(
             withContext(NonCancellable) {
                 agentRunActive = false
                 _isStreaming.value = false
-                _events.emit(AgentEvent.AgentSettled)
+                _events.emit(AgentEvent.AgentSettled(aborted = agentRunAbortRequested))
             }
         }
     }

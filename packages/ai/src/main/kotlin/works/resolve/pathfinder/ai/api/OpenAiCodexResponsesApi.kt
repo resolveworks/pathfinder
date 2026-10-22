@@ -1466,10 +1466,10 @@ internal fun buildBaseCodexHeaders(
     identity: ClientIdentity? = null
 ): MutableMap<String, String?> {
     val headers = LinkedHashMap<String, String?>()
-    headers.putAll(modelHeaders)
+
     // Headers.set/delete semantics: names match case-insensitively, so a
-    // mixed-case option key replaces (or removes) an existing header.
-    for ((key, value) in optionsHeaders) {
+    // mixed-case model or option key replaces (or removes) a default header.
+    fun setHeader(key: String, value: String?) {
         val existing = headers.keys.firstOrNull { it.equals(key, ignoreCase = true) }
         if (value == null) {
             existing?.let { headers.remove(it) }
@@ -1479,13 +1479,15 @@ internal fun buildBaseCodexHeaders(
             headers[key] = value
         }
     }
-    headers["Authorization"] = "Bearer $token"
-    headers["chatgpt-account-id"] = accountId
     // pi sends `originator: "pi"`; Pathfinder identifies itself instead —
     // deliberate divergence, consistent with the OAuth authorize URL's
-    // originator default.
-    headers["originator"] = "pathfinder"
-    headers["User-Agent"] = formatUserAgent(identity)
+    // originator default. Model and caller headers may override both.
+    setHeader("originator", "pathfinder")
+    setHeader("User-Agent", formatUserAgent(identity))
+    for ((key, value) in modelHeaders) setHeader(key, value)
+    for ((key, value) in optionsHeaders) setHeader(key, value)
+    headers["Authorization"] = "Bearer $token"
+    headers["chatgpt-account-id"] = accountId
     return headers
 }
 

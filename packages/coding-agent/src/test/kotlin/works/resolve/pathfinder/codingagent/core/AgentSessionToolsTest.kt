@@ -214,6 +214,94 @@ class AgentSessionToolsTest {
     }
 
     @Test
+    fun `tools removed before a compaction stay inactive after resume`() = runTest {
+        val webSearch = tool("web_search")
+        val webFetch = tool("web_fetch")
+        val manager = SessionManager.create(
+            createTempDirectory("tools-compaction-test").toFile(),
+            ioDispatcher = Dispatchers.Unconfined
+        )
+        manager.appendMessage(
+            SystemMessage(
+                content = emptyList(),
+                toolsAdded = listOf(webSearch.definition, webFetch.definition),
+                timestamp = 1L
+            )
+        )
+        manager.appendMessage(
+            SystemMessage(
+                content = emptyList(),
+                toolsRemoved = listOf(works.resolve.pathfinder.ai.ToolReference("web_search")),
+                timestamp = 2L
+            )
+        )
+        manager.appendMessage(works.resolve.pathfinder.ai.UserMessage.ofText("hi"))
+        val kept = manager.getLeafId()!!
+        manager.appendCompaction("summary", kept, 1000, null)
+
+        val s = AgentSession(
+            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> okStream() }).apply {
+                replaceTranscript(manager.buildSessionContext().messages)
+            },
+            manager = manager,
+            settingsManager = SettingsManager.inMemory(),
+            models = Models(listOf(provider())),
+            tools = listOf(webSearch, webFetch)
+        )
+
+        assertEquals(listOf("web_fetch"), s.getActiveToolNames())
+    }
+
+    @Test
+    fun `tree navigation restores the target branch loadout`() = runTest {
+        val webSearch = tool("web_search")
+        val webFetch = tool("web_fetch")
+        val manager = SessionManager.create(
+            createTempDirectory("tools-tree-test").toFile(),
+            ioDispatcher = Dispatchers.Unconfined
+        )
+        manager.appendMessage(
+            SystemMessage(
+                content = emptyList(),
+                toolsAdded = listOf(webSearch.definition, webFetch.definition),
+                timestamp = 1L
+            )
+        )
+        manager.appendMessage(
+            SystemMessage(
+                content = emptyList(),
+                toolsRemoved = listOf(works.resolve.pathfinder.ai.ToolReference("web_fetch")),
+                timestamp = 2L
+            )
+        )
+        manager.appendMessage(works.resolve.pathfinder.ai.UserMessage.ofText("first"))
+        val target = manager.getLeafId()!!
+        manager.appendMessage(
+            SystemMessage(
+                content = emptyList(),
+                toolsAdded = listOf(webFetch.definition),
+                toolsRemoved = listOf(works.resolve.pathfinder.ai.ToolReference("web_search")),
+                timestamp = 3L
+            )
+        )
+
+        val s = AgentSession(
+            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> okStream() }).apply {
+                replaceTranscript(manager.buildSessionContext().messages)
+            },
+            manager = manager,
+            settingsManager = SettingsManager.inMemory(),
+            models = Models(listOf(provider())),
+            tools = listOf(webSearch, webFetch)
+        )
+        assertEquals(listOf("web_fetch"), s.getActiveToolNames())
+
+        s.navigateTree(target)
+
+        assertEquals(listOf("web_search"), s.getActiveToolNames())
+    }
+
+    @Test
     fun `an empty registry keeps everything inert`() = runTest {
         val s = session()
 
