@@ -58,6 +58,8 @@ class SettingsRepositoryTest {
         val settings = repository.currentSettings()
         assertNull(settings.activeSessionId)
         assertFalse(settings.showThinking)
+        assertEquals("", settings.customPrompt)
+        assertEquals("", settings.appendSystemPrompt)
         assertNull(repository.currentSettings().activeSessionId)
     }
 
@@ -89,6 +91,13 @@ class SettingsRepositoryTest {
     fun appPreferences_surviveRestart() = runTest {
         repository.setActiveSessionId("session-1")
         repository.setShowThinking(true)
+        repository.setCustomPrompt("You are a custom research assistant.")
+        repository.setAppendSystemPrompt("Prefer primary sources.")
+        assertEquals(
+            "You are a custom research assistant.",
+            repository.currentSettings().customPrompt
+        )
+        assertEquals("Prefer primary sources.", repository.currentSettings().appendSystemPrompt)
         val file = File(tmpFolder.root, "settings.preferences_pb")
         scope.coroutineContext[Job]!!.cancelAndJoin()
 
@@ -102,6 +111,11 @@ class SettingsRepositoryTest {
             )
             assertEquals("session-1", second.currentSettings().activeSessionId)
             assertTrue(second.currentSettings().showThinking)
+            assertEquals(
+                "You are a custom research assistant.",
+                second.currentSettings().customPrompt
+            )
+            assertEquals("Prefer primary sources.", second.currentSettings().appendSystemPrompt)
         } finally {
             secondScope.cancel()
         }

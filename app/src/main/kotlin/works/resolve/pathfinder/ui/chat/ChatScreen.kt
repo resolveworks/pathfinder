@@ -136,6 +136,8 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         onSessionSearchQueryChange = viewModel::onSessionSearchQueryChange,
         onSessionSearchSortChange = viewModel::setSessionSearchSort,
         onToggleShowThinking = viewModel::setShowThinking,
+        onCustomPromptChange = viewModel::setCustomPrompt,
+        onAppendSystemPromptChange = viewModel::setAppendSystemPrompt,
         onNavigateTreeEntry = viewModel::navigateToTreeEntry,
         onTreeFilterChange = viewModel::setTreeFilter,
         onDismissError = viewModel::dismissError,
@@ -185,6 +187,8 @@ fun ChatScreen(
     onSessionSearchQueryChange: (query: String) -> Unit,
     onSessionSearchSortChange: (sort: SessionSearchSort) -> Unit,
     onToggleShowThinking: (Boolean) -> Unit,
+    onCustomPromptChange: (String) -> Unit,
+    onAppendSystemPromptChange: (String) -> Unit,
     onNavigateTreeEntry: (entryId: String) -> Unit,
     onTreeFilterChange: (TreeFilter) -> Unit,
     onDismissError: () -> Unit,
@@ -464,11 +468,15 @@ fun ChatScreen(
                                     showDefaultThinkingRow =
                                         uiState.availableThinkingLevels.isNotEmpty(),
                                     showThinking = uiState.showThinking,
+                                    customPrompt = uiState.customPrompt,
+                                    appendSystemPrompt = uiState.appendSystemPrompt,
                                     onOpenDefaultModel = pushDefaultModel,
                                     onOpenDefaultThinking = pushDefaultThinking,
                                     onOpenProviders = pushProviders,
                                     onOpenSearchProviders = pushSearchProviders,
-                                    onToggleShowThinking = onToggleShowThinking
+                                    onToggleShowThinking = onToggleShowThinking,
+                                    onCustomPromptChange = onCustomPromptChange,
+                                    onAppendSystemPromptChange = onAppendSystemPromptChange
                                 )
                             }
                             entry<DefaultModelNavKey> {
@@ -943,6 +951,8 @@ private fun PreviewChatScreen(
             onSessionSearchQueryChange = {},
             onSessionSearchSortChange = {},
             onToggleShowThinking = {},
+            onCustomPromptChange = {},
+            onAppendSystemPromptChange = {},
             onNavigateTreeEntry = {},
             onTreeFilterChange = {},
             onDismissError = {},

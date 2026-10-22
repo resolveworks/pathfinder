@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNot
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -180,9 +181,12 @@ class ChatViewModel(
      * scope) live on the shared [settingsManager]; the running model lives
      * on the bound [AgentSession] — its branch fold at load,
      * [ModelSettingsController.selectModel] thereafter. App-owned values (active session id,
-     * show-thinking) flow through [settingsStore].
+     * show-thinking, system prompt) flow through [settingsStore].
      */
     private var agent: AgentSession? = null
+
+    /** Mutable manager backing the bound agent; live prompt changes rebuild over the same one. */
+    private var activeManager: SessionManager? = null
     private var agentStateJob: Job? = null
     private var agentEventsJob: Job? = null
     private var agentRunStateJob: Job? = null
@@ -237,6 +241,17 @@ class ChatViewModel(
             searchProviders.state.map { it.braveConfigured }.distinctUntilChanged().collect {
                 agent?.let(searchProviders::applyTo)
             }
+        }
+        // Prompt changes apply like pi's restart: rebuild the agent over the
+        // same manager so the transcript replays and the next request records
+        // a section-patch system message. The initial snapshot is already
+        // applied when the session is created.
+        viewModelScope.launch {
+            settingsStore.settings
+                .map { it.customPrompt to it.appendSystemPrompt }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { recreateAgentForPromptChange() }
         }
     }
 
@@ -386,6 +401,34 @@ class ChatViewModel(
             try {
                 settingsStore.setShowThinking(enabled)
                 _uiState.update { it.copy(showThinking = enabled) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(UiString(R.string.error_settings_save), e)
+            }
+        }
+    }
+
+    /** Persists the custom system prompt; not applied mid-run (see the settings collector). */
+    fun setCustomPrompt(customPrompt: String) {
+        viewModelScope.launch {
+            try {
+                settingsStore.setCustomPrompt(customPrompt)
+                _uiState.update { it.copy(customPrompt = customPrompt) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(UiString(R.string.error_settings_save), e)
+            }
+        }
+    }
+
+    /** Persists the appended system prompt; not applied mid-run (see the settings collector). */
+    fun setAppendSystemPrompt(appendSystemPrompt: String) {
+        viewModelScope.launch {
+            try {
+                settingsStore.setAppendSystemPrompt(appendSystemPrompt)
+                _uiState.update { it.copy(appendSystemPrompt = appendSystemPrompt) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -545,7 +588,9 @@ class ChatViewModel(
                     it.copy(
                         status = ChatStatus.NeedsConfiguration,
                         startKey = ProvidersNavKey,
-                        showThinking = appSettings.showThinking
+                        showThinking = appSettings.showThinking,
+                        customPrompt = appSettings.customPrompt,
+                        appendSystemPrompt = appSettings.appendSystemPrompt
                     )
                 }
                 return
@@ -589,7 +634,9 @@ class ChatViewModel(
             _uiState.update {
                 it.copy(
                     status = ChatStatus.Ready,
-                    showThinking = appSettings.showThinking
+                    showThinking = appSettings.showThinking,
+                    customPrompt = appSettings.customPrompt,
+                    appendSystemPrompt = appSettings.appendSystemPrompt
                 )
             }
         } catch (e: CancellationException) {
@@ -659,14 +706,19 @@ class ChatViewModel(
 
     /**
      * Makes [session] active with a prebuilt [agent]: persists the active id,
-     * binds the agent, and returns to the chat surface. Only called after
-     * the factory accepted the settings. Returns false when persisting the
-     * active id fails; in that case nothing is committed.
+     * binds the agent, and (unless [resetNavigation] is false) returns to the
+     * chat surface. Only called after the factory accepted the settings.
+     * Returns false when persisting the active id fails; in that case nothing
+     * is committed.
      *
      * Summaries are not touched here: activation changes no session file;
      * [AgentEvent.MessageEnd] patches the active row when one changes.
      */
-    private suspend fun activateSession(manager: SessionManager, agent: AgentSession): Boolean {
+    private suspend fun activateSession(
+        manager: SessionManager,
+        agent: AgentSession,
+        resetNavigation: Boolean = true
+    ): Boolean {
         try {
             settingsStore.setActiveSessionId(manager.getSessionId())
         } catch (e: CancellationException) {
@@ -702,13 +754,18 @@ class ChatViewModel(
         // collection can start immediately, and a frame must never render
         // incoming messages with the outgoing session's scroll state.
         bindAgent(agent)
+        activeManager = manager
         streamingFold = null
         _streamingState.value = StreamingUiState()
         _uiState.update {
             it.copy(
                 activeSessionId = manager.getSessionId(),
-                startKey = ChatNavKey,
-                navigationEpoch = it.navigationEpoch + 1,
+                startKey = if (resetNavigation) ChatNavKey else it.startKey,
+                navigationEpoch = if (resetNavigation) {
+                    it.navigationEpoch + 1
+                } else {
+                    it.navigationEpoch
+                },
                 messages = projectCommitted(
                     agent.state.value.messages,
                     conversation.getBranch(),
@@ -778,6 +835,22 @@ class ChatViewModel(
         // Synchronize web_search against the current Brave credential
         // before anything binds to the session.
         return result.session.also(searchProviders::applyTo)
+    }
+
+    /**
+     * Rebuilds the bound session's agent for a prompt change, pi's restart
+     * equivalent. A change during a run is skipped: it lands at the next
+     * adoption (session switch or app restart), like pi's restart semantics.
+     * tryCreateAgent re-applies web_search credential gating to the rebuild.
+     */
+    private suspend fun recreateAgentForPromptChange() {
+        val current = agent ?: return
+        if (_uiState.value.isStreaming) return
+        val manager = activeManager ?: return
+        val newAgent = tryCreateAgent(manager) ?: return
+        // A run or session switch raced the rebuild: leave the binding alone.
+        if (agent !== current || _uiState.value.isStreaming) return
+        activateSession(manager, newAgent, resetNavigation = false)
     }
 
     private fun bindAgent(newAgent: AgentSession) {

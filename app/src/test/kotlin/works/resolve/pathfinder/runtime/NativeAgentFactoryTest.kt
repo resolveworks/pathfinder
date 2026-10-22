@@ -43,11 +43,13 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.codingagent.core.CompactionSettings
 import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.PromptConfig
 import works.resolve.pathfinder.codingagent.core.SessionError
 import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.Settings
 import works.resolve.pathfinder.codingagent.core.SettingsManager
+import works.resolve.pathfinder.codingagent.core.buildSystemPrompt
 
 class NativeAgentFactoryTest {
 
@@ -119,12 +121,14 @@ class NativeAgentFactoryTest {
     private fun factory(
         store: FakeCredentialStore,
         transport: RecordingTransport,
-        settings: Settings = Settings()
+        settings: Settings = Settings(),
+        promptConfig: suspend () -> PromptConfig = { PromptConfig() }
     ): AgentFactory = NativeAgentFactory(
         credentials = store,
         catalog = catalog,
         transport = transport,
-        settingsManager = runBlocking { SettingsManager.inMemory(settings) }
+        settingsManager = runBlocking { SettingsManager.inMemory(settings) },
+        promptConfig = promptConfig
     )
 
     private fun settings(providerId: String = "zai", modelId: String = "glm-4.7") =
@@ -165,10 +169,15 @@ class NativeAgentFactoryTest {
         val manager = SessionManager.create(tmpFolder.newFolder())
         manager.appendMessage(UserMessage.ofText("hello"))
         manager.appendMessage(UserMessage.ofText("again"))
+        val promptConfig = PromptConfig(
+            customPrompt = "You are a custom research assistant.",
+            appendSystemPrompt = "Prefer primary sources."
+        )
         val result = factory(
             FakeCredentialStore(ApiKeyCredential("k")),
             RecordingTransport(),
-            settings()
+            settings(),
+            promptConfig = { promptConfig }
         )
             .create(manager)
         val agent = result.session
@@ -182,6 +191,9 @@ class NativeAgentFactoryTest {
                 (it as TextContent).text
             }
         )
+        assertEquals(buildSystemPrompt(emptyList(), promptConfig), agent.systemPrompt)
+        assertTrue("You are a custom research assistant." in agent.systemPrompt)
+        assertTrue("Prefer primary sources." in agent.systemPrompt)
     }
 
     @Test

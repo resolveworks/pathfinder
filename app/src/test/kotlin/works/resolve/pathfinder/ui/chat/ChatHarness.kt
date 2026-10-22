@@ -326,6 +326,7 @@ internal class ChatHarness(
     val factory = AgentFactory { sessionManager ->
         check(!rejectAll) { "factory unavailable" }
         require(settingsManager.getDefaultModel() !in rejectedModelIds) { "model rejected" }
+        val appSettings = settings.currentSettings()
         createAgentSession(
             manager = sessionManager,
             settingsManager = settingsManager,
@@ -335,6 +336,8 @@ internal class ChatHarness(
             // parallel hand-written Model.
             models = switchModels,
             tools = listOf(fakeWebSearchTool),
+            customPrompt = appSettings.customPrompt,
+            appendSystemPrompt = appSettings.appendSystemPrompt,
             // pi's restore presence check, wired like production.
             hasConfiguredAuth = { providerId -> authService.isConfigured(providerId) },
             // Keep the prompt loop inside runTest's virtual clock: the

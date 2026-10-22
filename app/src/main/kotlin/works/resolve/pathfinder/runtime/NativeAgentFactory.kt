@@ -28,6 +28,7 @@ import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.codingagent.core.AgentSession
 import works.resolve.pathfinder.codingagent.core.CreateAgentSessionResult
+import works.resolve.pathfinder.codingagent.core.PromptConfig
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.codingagent.core.createAgentSession
@@ -74,7 +75,9 @@ class NativeAgentFactory(
     private val authContext: AuthContext = NoopAuthContext,
     private val authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
     /** Tools available to every created agent; copied per agent. */
-    private val tools: List<AgentTool> = emptyList()
+    private val tools: List<AgentTool> = emptyList(),
+    /** User prompt inputs read per created session. */
+    private val promptConfig: suspend () -> PromptConfig = { PromptConfig() }
 ) : AgentFactory {
 
     override suspend fun create(sessionManager: SessionManager): CreateAgentSessionResult {
@@ -104,6 +107,7 @@ class NativeAgentFactory(
         // ProviderAuthService.isConfigured is that presence check.
         val authService = ProviderAuthService(catalog, authRegistry, credentials)
 
+        val prompt = promptConfig()
         val result =
             createAgentSession(
                 manager = sessionManager,
@@ -123,6 +127,8 @@ class NativeAgentFactory(
                         .flowOn(Dispatchers.Default)
                 },
                 tools = tools.toList(),
+                customPrompt = prompt.customPrompt,
+                appendSystemPrompt = prompt.appendSystemPrompt,
                 streamOptions = SimpleStreamOptions(
                     sessionId = sessionManager.getSessionId(),
                     timeoutMs = REQUEST_TIMEOUT_MS,

@@ -60,6 +60,8 @@ class BraveWebSearchToolTest {
         val freshness = (params["properties"] as JsonObject)["freshness"].toString()
         assertTrue(freshness.contains("pd") && freshness.contains("py"))
         assertEquals("Web Search", tool.label)
+        assertEquals(1, tool.promptGuidelines.size)
+        assertTrue(tool.promptSnippet.contains("Search the web"))
     }
 
     private fun BraveWebSearchTool.prepare(arguments: JsonObject): JsonObject =

@@ -3,15 +3,19 @@ package works.resolve.pathfinder.ui.chat
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -34,15 +38,20 @@ internal fun SettingsContent(
     defaultThinkingLevel: ModelThinkingLevel?,
     showDefaultThinkingRow: Boolean,
     showThinking: Boolean,
+    customPrompt: String,
+    appendSystemPrompt: String,
     onOpenDefaultModel: () -> Unit,
     onOpenDefaultThinking: () -> Unit,
     onOpenProviders: () -> Unit,
     onOpenSearchProviders: () -> Unit,
-    onToggleShowThinking: (Boolean) -> Unit
+    onToggleShowThinking: (Boolean) -> Unit,
+    onCustomPromptChange: (String) -> Unit,
+    onAppendSystemPromptChange: (String) -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
         ListItem(
@@ -97,6 +106,31 @@ internal fun SettingsContent(
                 )
             },
             modifier = Modifier.clickable { onToggleShowThinking(!showThinking) }
+        )
+        Text(
+            text = stringResource(R.string.settings_system_prompt),
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)
+        )
+        OutlinedTextField(
+            value = customPrompt,
+            onValueChange = onCustomPromptChange,
+            label = { Text(stringResource(R.string.settings_custom_prompt)) },
+            supportingText = { Text(stringResource(R.string.settings_custom_prompt_hint)) },
+            minLines = 3,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = appendSystemPrompt,
+            onValueChange = onAppendSystemPromptChange,
+            label = { Text(stringResource(R.string.settings_append_system_prompt)) },
+            supportingText = {
+                Text(stringResource(R.string.settings_append_system_prompt_hint))
+            },
+            minLines = 3,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp)
         )
     }
 }

@@ -53,6 +53,8 @@ class WebFetchToolTest {
             )
         )
         assertEquals("Web Fetch", tool.label)
+        assertTrue(tool.promptSnippet.contains("specific URL"))
+        assertEquals(2, tool.promptGuidelines.size)
     }
 
     @Test

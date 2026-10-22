@@ -17,6 +17,7 @@ import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
 import works.resolve.pathfinder.ai.transport.OkHttpWebSocketTransport
+import works.resolve.pathfinder.codingagent.core.PromptConfig
 import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
@@ -139,7 +140,14 @@ class PathfinderApplication : Application() {
             webSocketTransport = webSocketTransport,
             settingsManager = settingsManager,
             authRegistry = authRegistry,
-            tools = listOf(webSearchTool, webFetchTool)
+            tools = listOf(webSearchTool, webFetchTool),
+            promptConfig = {
+                val settings = settingsRepository.currentSettings()
+                PromptConfig(
+                    customPrompt = settings.customPrompt,
+                    appendSystemPrompt = settings.appendSystemPrompt
+                )
+            }
         )
     }
 
