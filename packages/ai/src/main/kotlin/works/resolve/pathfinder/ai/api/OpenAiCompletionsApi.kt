@@ -264,7 +264,7 @@ data class OpenAiCompletionsOptions(
      * Dormant: carried for shape fidelity, preserved through the streamSimple
      * conversion. Presence boolean only in toString().
      */
-    val telemetryContext: TelemetryContext? = null
+    val telemetry: TelemetryContext? = null
 ) {
     override fun toString(): String = optionsToString(
         "OpenAiCompletionsOptions",
@@ -283,7 +283,7 @@ data class OpenAiCompletionsOptions(
         "onPayload" to (onPayload != null),
         "onResponse" to (onResponse != null),
         "samplingParams" to samplingParams?.keys,
-        "telemetryContext" to (telemetryContext != null)
+        "telemetry" to (telemetry != null)
     )
 }
 

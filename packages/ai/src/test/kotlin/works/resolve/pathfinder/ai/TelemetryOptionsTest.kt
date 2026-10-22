@@ -59,34 +59,34 @@ class TelemetryOptionsTest {
     fun `telemetry defaults to null on every request option surface`() {
         assertNull(StreamOptions().telemetry)
         assertNull(SimpleStreamOptions().telemetry)
-        assertNull(OpenAiCompletionsOptions().telemetryContext)
-        assertNull(OpenAiResponsesOptions().telemetryContext)
-        assertNull(AzureOpenAiResponsesOptions().telemetryContext)
-        assertNull(OpenAICodexResponsesOptions().telemetryContext)
-        assertNull(AnthropicMessagesOptions().telemetryContext)
-        assertNull(GoogleGenerativeAiApi.GoogleOptions().telemetryContext)
-        assertNull(MistralOptions().telemetryContext)
+        assertNull(OpenAiCompletionsOptions().telemetry)
+        assertNull(OpenAiResponsesOptions().telemetry)
+        assertNull(AzureOpenAiResponsesOptions().telemetry)
+        assertNull(OpenAICodexResponsesOptions().telemetry)
+        assertNull(AnthropicMessagesOptions().telemetry)
+        assertNull(GoogleGenerativeAiApi.GoogleOptions().telemetry)
+        assertNull(MistralOptions().telemetry)
     }
 
     @Test
     fun `telemetry survives every simple to base conversion by identity`() {
         val options = SimpleStreamOptions(telemetry = telemetry)
-        assertSame(telemetry, options.toStreamOptions(null).telemetryContext)
-        assertSame(telemetry, buildBaseOptions(model, context, options).telemetryContext)
+        assertSame(telemetry, options.toStreamOptions(null).telemetry)
+        assertSame(telemetry, buildBaseOptions(model, context, options).telemetry)
         assertSame(
             telemetry,
-            buildOpenAiResponsesOptions(model, context, options, null).telemetryContext
+            buildOpenAiResponsesOptions(model, context, options, null).telemetry
         )
         assertSame(
             telemetry,
-            buildAzureOpenAiResponsesOptions(model, context, options, null).telemetryContext
+            buildAzureOpenAiResponsesOptions(model, context, options, null).telemetry
         )
         assertSame(
             telemetry,
-            buildOpenAICodexResponsesOptions(model, context, options, null).telemetryContext
+            buildOpenAICodexResponsesOptions(model, context, options, null).telemetry
         )
-        assertSame(telemetry, buildGoogleOptions(model, context, options).telemetryContext)
-        assertSame(telemetry, buildMistralOptions(model, context, options).telemetryContext)
+        assertSame(telemetry, buildGoogleOptions(model, context, options).telemetry)
+        assertSame(telemetry, buildMistralOptions(model, context, options).telemetry)
     }
 
     @Test
@@ -100,16 +100,16 @@ class TelemetryOptionsTest {
             assertFalse("InMemoryTelemetryContext" in text, text)
         }
         val provider = listOf(
-            OpenAiCompletionsOptions(telemetryContext = telemetry).toString(),
-            OpenAiResponsesOptions(telemetryContext = telemetry).toString(),
-            AzureOpenAiResponsesOptions(telemetryContext = telemetry).toString(),
-            OpenAICodexResponsesOptions(telemetryContext = telemetry).toString(),
-            AnthropicMessagesOptions(telemetryContext = telemetry).toString(),
-            GoogleGenerativeAiApi.GoogleOptions(telemetryContext = telemetry).toString(),
-            MistralOptions(telemetryContext = telemetry).toString()
+            OpenAiCompletionsOptions(telemetry = telemetry).toString(),
+            OpenAiResponsesOptions(telemetry = telemetry).toString(),
+            AzureOpenAiResponsesOptions(telemetry = telemetry).toString(),
+            OpenAICodexResponsesOptions(telemetry = telemetry).toString(),
+            AnthropicMessagesOptions(telemetry = telemetry).toString(),
+            GoogleGenerativeAiApi.GoogleOptions(telemetry = telemetry).toString(),
+            MistralOptions(telemetry = telemetry).toString()
         )
         for (text in provider) {
-            assertTrue("telemetryContext=true" in text, text)
+            assertTrue("telemetry=true" in text, text)
             assertFalse("InMemoryTelemetryContext" in text, text)
         }
         // Same presence-only convention as onPayload/onResponse.

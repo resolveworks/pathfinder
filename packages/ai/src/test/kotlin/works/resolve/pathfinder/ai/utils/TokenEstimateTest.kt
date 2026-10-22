@@ -193,6 +193,8 @@ class TokenEstimateTest {
             ),
             estimateContextTokens(context)
         )
+        val model = TestCatalogs.GLM_5_2.copy(contextWindow = 10_000, maxTokens = 8_000)
+        assertEquals(4_755, clampMaxTokensToContext(model, context, model.maxTokens))
     }
 
     @Test

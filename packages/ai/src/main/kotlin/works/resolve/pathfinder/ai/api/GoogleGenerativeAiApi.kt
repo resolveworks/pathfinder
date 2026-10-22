@@ -117,14 +117,14 @@ class GoogleGenerativeAiApi(
          * Explicit parent telemetry context for this request. Dormant in this
          * port — carried for shape fidelity.
          */
-        val telemetryContext: TelemetryContext? = null
+        val telemetry: TelemetryContext? = null
     ) {
         override fun toString(): String = CommonOptions(
             apiKey, sessionId, temperature, maxTokens, timeoutMs, maxRetries, maxRetryDelayMs,
             env, headers, toolChoice, thinking
         ).toString().dropLast(1) +
             ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
-            ", telemetryContext=${telemetryContext != null})"
+            ", telemetry=${telemetry != null})"
 
         internal fun toCommon() = CommonOptions(
             apiKey, sessionId, temperature, maxTokens, timeoutMs, maxRetries, maxRetryDelayMs,
@@ -547,7 +547,7 @@ internal object GoogleStreamEngine {
 
 /**
  * The streamSimple options conversion (resolved thinking config), extracted
- * as a named function so the conversion — including the telemetryContext
+ * as a named function so the conversion — including the telemetry
  * identity — is directly testable.
  */
 internal fun buildGoogleOptions(
@@ -581,7 +581,7 @@ internal fun buildGoogleOptions(
         options.reasoning,
         options.thinkingBudgets
     ),
-    telemetryContext = options.telemetry
+    telemetry = options.telemetry
 )
 
 /**

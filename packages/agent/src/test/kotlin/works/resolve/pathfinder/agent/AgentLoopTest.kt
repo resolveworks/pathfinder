@@ -808,31 +808,44 @@ class AgentLoopTest {
     }
 
     @Test
-    fun `records how long execute took on the tool result`() = runTest {
-        val tool = FakeTool(
-            executeImpl = { _, _, _ ->
-                Thread.sleep(30)
-                AgentToolResult(listOf(TextContent("ok")))
-            }
-        )
-        val events = mutableListOf<AgentEvent>()
-        val streamFn = scriptedStream(
-            toolCallAssistant(ToolCall("c1", "my_tool", JsonObject(emptyMap()))),
-            assistant("done")
-        )
-        val result = runAgentLoop(
-            listOf(UserMessage.ofText("q")),
-            toolContext(tool),
-            AgentLoopConfig(model, streamFn = streamFn)
-        ) { events.add(it) }
+    fun `records how long execute took on the tool result excluding surrounding loop work`() =
+        runTest {
+            // pi #10549: the measured span covers execute() only, so a ~30 ms
+            // tool stays far below the surrounding loop's own timing.
+            val tool = FakeTool(
+                executeImpl = { _, _, _ ->
+                    Thread.sleep(30)
+                    AgentToolResult(listOf(TextContent("ok")))
+                }
+            )
+            val events = mutableListOf<AgentEvent>()
+            val streamFn = scriptedStream(
+                toolCallAssistant(
+                    ToolCall("ran", "my_tool", JsonObject(emptyMap())),
+                    // No beforeToolCall hook in this port: a missing tool is the
+                    // equivalent never-executed call (pi's blocked case).
+                    ToolCall("blocked", "missing_tool", JsonObject(emptyMap()))
+                ),
+                assistant("done")
+            )
+            val result = runAgentLoop(
+                listOf(UserMessage.ofText("q")),
+                toolContext(tool),
+                AgentLoopConfig(model, streamFn = streamFn)
+            ) { events.add(it) }
 
-        val end = events.filterIsInstance<AgentEvent.ToolExecutionEnd>().single()
-        val trm = result.filterIsInstance<ToolResultMessage>().single()
-        assertEquals(end.durationMs, trm.durationMs)
-        assertTrue("duration set", trm.durationMs != null)
-        assertTrue("duration lower bound", trm.durationMs!! >= 25)
-        assertTrue("duration upper bound", trm.durationMs!! < 1000)
-    }
+            val ends = events.filterIsInstance<AgentEvent.ToolExecutionEnd>()
+            val results = result.filterIsInstance<ToolResultMessage>()
+            val ran = ends.single { it.toolCallId == "ran" }
+            val blocked = ends.single { it.toolCallId == "blocked" }
+            assertEquals(ran.durationMs, results.single { it.toolCallId == "ran" }.durationMs)
+            assertTrue("duration set", ran.durationMs != null)
+            assertTrue("duration lower bound", ran.durationMs!! >= 25)
+            assertTrue("duration upper bound", ran.durationMs!! < 100)
+            assertTrue(blocked.isError)
+            assertNull(blocked.durationMs)
+            assertNull(results.single { it.toolCallId == "blocked" }.durationMs)
+        }
 
     @Test
     fun `tool result fields survive message construction`() = runTest {

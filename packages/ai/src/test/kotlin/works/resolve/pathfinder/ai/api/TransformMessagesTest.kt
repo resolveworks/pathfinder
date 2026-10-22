@@ -120,6 +120,55 @@ class TransformMessagesTest {
     }
 
     @Test
+    fun `drops foreign thinking from an assistant turn that also carries a tool call`() {
+        // pi #10995: readable foreign thinking must not become text, and the
+        // surviving text and tool call keep the turn replayable.
+        val model = makeCopilotClaudeModel()
+        val messages: List<Message> = listOf(
+            UserMessage.ofText("Why does curl work but node fails?"),
+            AssistantMessage(
+                content = listOf(
+                    ThinkingContent(
+                        thinking = "The user asks about ECONNRESET. Candidates: proxy, IPv6, TLS.",
+                        thinkingSignature = "reasoning_content"
+                    ),
+                    TextContent("Let me check the TLS versions."),
+                    ToolCall(
+                        id = "call_1",
+                        name = "bash",
+                        arguments = buildJsonObject { put("command", "curl -v") }
+                    )
+                ),
+                api = "openai-completions",
+                provider = "sference",
+                model = "zai-org/GLM-5.3",
+                stopReason = StopReason.TOOL_USE
+            ),
+            ToolResultMessage(
+                toolCallId = "call_1",
+                toolName = "bash",
+                content = listOf(TextContent("TLSv1.2"))
+            )
+        )
+
+        val assistantMsg = transformMessages(messages, model)
+            .filterIsInstance<AssistantMessage>()
+            .single()
+
+        assertEquals(
+            listOf(
+                TextContent("Let me check the TLS versions."),
+                ToolCall(
+                    id = "call_1",
+                    name = "bash",
+                    arguments = buildJsonObject { put("command", "curl -v") }
+                )
+            ),
+            assistantMsg.content
+        )
+    }
+
+    @Test
     fun `removes thoughtSignature from tool calls when migrating between models`() {
         val model = makeCopilotClaudeModel()
         val messages: List<Message> = listOf(

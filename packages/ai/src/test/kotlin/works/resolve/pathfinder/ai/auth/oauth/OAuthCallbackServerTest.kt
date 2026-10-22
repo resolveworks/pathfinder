@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
@@ -184,6 +185,38 @@ class OAuthCallbackServerTest {
                     )
                 ).status
             )
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun `completes only the first callback`() = runBlocking {
+        // pi serves callbacks concurrently and rejects the second with 409 while
+        // the first exchange is in flight. This port's accept loop is sequential
+        // (one connection at a time), so the second is queued until the first
+        // completes; it still gets the same 409 and never settles the result.
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val server = start(
+            complete = { code ->
+                started.complete(Unit)
+                release.await()
+                "completed:$code"
+            }
+        )
+        try {
+            val url = callbackUrl(
+                server.redirectUri,
+                mapOf("code" to "c", "state" to "expected-state")
+            )
+            val first = async(Dispatchers.IO) { page(url) }
+            started.await()
+            val second = async(Dispatchers.IO) { page(url) }
+            release.complete(Unit)
+            assertEquals(200, first.await().status)
+            assertEquals(409, second.await().status)
+            assertEquals("completed:c", server.wait())
         } finally {
             server.close()
         }

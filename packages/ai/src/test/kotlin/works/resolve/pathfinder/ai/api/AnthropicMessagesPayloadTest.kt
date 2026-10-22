@@ -1486,6 +1486,52 @@ class AnthropicMessagesPayloadTest {
     }
 
     @Test
+    fun `native tool changes require both Anthropic capabilities`() {
+        val toolChangesOnly = claude.copy(
+            anthropicCompat = claude.anthropicCompat.copy(
+                supportsMidConvoToolChanges = true
+            )
+        )
+        val baseTool = tool.copy(name = "base_tool", description = "base_tool tool")
+        val lateTool = tool.copy(name = "late_tool", description = "late_tool tool")
+        val context = normalizeContext(
+            Context(
+                systemPrompt = "base prompt",
+                tools = listOf(baseTool),
+                messages = listOf(
+                    UserMessage.ofText("before", timestamp = 1),
+                    SystemMessage(
+                        content = emptyList(),
+                        toolsRemoved = listOf(
+                            works.resolve.pathfinder.ai.ToolReference("base_tool")
+                        ),
+                        toolsAdded = listOf(lateTool),
+                        timestamp = 2
+                    )
+                )
+            )
+        )
+        val json = body(
+            context,
+            AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE),
+            toolChangesOnly
+        )
+        assertTrue(
+            json["betas"]?.jsonArray?.none {
+                it.jsonPrimitive.content == "inline-tools-2026-09-15"
+            } ?: true
+        )
+        assertEquals(
+            listOf("late_tool"),
+            json["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
+        )
+        assertEquals(
+            listOf("user"),
+            json["messages"]!!.jsonArray.map { it.jsonObject["role"]!!.jsonPrimitive.content }
+        )
+    }
+
+    @Test
     fun `holds a mid-conversation system update past dropped assistant messages`() {
         val nativeModel = claude.copy(
             anthropicCompat = claude.anthropicCompat.copy(supportsMidConvoSystemMessages = true)

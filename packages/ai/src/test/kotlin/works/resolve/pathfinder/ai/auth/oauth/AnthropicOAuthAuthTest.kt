@@ -583,6 +583,22 @@ class AnthropicOAuthAuthTest {
     }
 
     @Test
+    fun `cancels when Anthropic login method selection is cancelled`() {
+        val (auth, http) = flow()
+        val interaction = object : AuthInteraction {
+            override suspend fun prompt(prompt: AuthPrompt): String =
+                throw IllegalStateException("Login cancelled")
+
+            override suspend fun notify(event: AuthEvent) {}
+        }
+        val error = assertFailsWith<IllegalStateException> {
+            runBlocking { auth.login(interaction) }
+        }
+        assertEquals("Login cancelled", error.message)
+        assertTrue(http.requests.isEmpty())
+    }
+
+    @Test
     fun `formUrlEncode matches URLSearchParams including tilde`() {
         assertEquals("x=%7E+*", formUrlEncode(mapOf("x" to "~ *")))
     }

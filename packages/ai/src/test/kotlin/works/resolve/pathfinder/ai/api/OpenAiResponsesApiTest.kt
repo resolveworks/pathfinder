@@ -986,6 +986,142 @@ class OpenAiResponsesApiTest {
         }
 
     @Test
+    fun `configuration update during a tool loop applies to the next reply`() = runTest {
+        val gpt6 = model.copy(
+            id = "gpt-6-luna",
+            thinkingLevelMap = ThinkingLevelMap.of(
+                ModelThinkingLevel.OFF to "none",
+                ModelThinkingLevel.LOW to "low",
+                ModelThinkingLevel.MEDIUM to "medium",
+                ModelThinkingLevel.HIGH to "high"
+            ),
+            responsesCompat = OpenAiResponsesCompat(supportsMidConvoEffort = true)
+        )
+        val toolChunk = listOf(
+            """{"type":"response.output_item.added","output_index":0,
+                "item":{"type":"function_call","id":"fc_1","call_id":"call_1",
+                    "name":"lookup","arguments":""}}""",
+            """{"type":"response.output_item.done","output_index":0,
+                "item":{"type":"function_call","id":"fc_1","call_id":"call_1",
+                    "name":"lookup","arguments":"{}","status":"completed"}}""",
+            """{"type":"response.completed","response":{"id":"resp_1","status":"completed",
+                "usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}""",
+            "[DONE]"
+        )
+        suspend fun run(
+            messages: List<Message>,
+            level: ModelThinkingLevel
+        ): Pair<JsonObject, AssistantMessage> {
+            val transport = FakeTransport()
+            transport.enqueueResponse(sse(*toolChunk.toTypedArray()))
+            val events = api(transport).stream(
+                gpt6,
+                normalizeContext(Context(messages = messages)),
+                OpenAiResponsesOptions(apiKey = "sk-test", reasoningEffort = level)
+            ).toList()
+            return body(transport) to (events.last() as AssistantMessageEvent.Done).message
+        }
+
+        val history = mutableListOf<Message>(UserMessage.ofText("one"))
+        val (toolBody, toolMessage) = run(history.toList(), ModelThinkingLevel.HIGH)
+        assertEquals("call_1|fc_1", (toolMessage.content.single() as ToolCall).id)
+        history += toolMessage
+        history += ToolResultMessage(
+            toolCallId = "call_1|fc_1",
+            toolName = "lookup",
+            content = listOf(TextContent("result"))
+        )
+        val (afterToolBody, afterToolMessage) = run(history.toList(), ModelThinkingLevel.LOW)
+
+        val input = afterToolBody["input"]!!.jsonArray.toList()
+        assertEquals(
+            toolBody["input"]!!.jsonArray.toList(),
+            input.take(toolBody["input"]!!.jsonArray.size)
+        )
+        val update = buildJsonObject {
+            put("type", "configuration_update")
+            put("reasoning", buildJsonObject { put("effort", "low") })
+        }
+        assertEquals(
+            listOf(
+                buildJsonObject {
+                    put("type", "function_call_output")
+                    put("call_id", "call_1")
+                    put("output", "result")
+                },
+                update
+            ),
+            input.takeLast(2)
+        )
+        assertEquals("low", afterToolMessage.providerThinkingLevel)
+    }
+
+    @Test
+    fun `configuration updates add items only before replies recorded by this model`() = runTest {
+        val gpt6 = model.copy(
+            id = "gpt-6-luna",
+            thinkingLevelMap = ThinkingLevelMap.of(
+                ModelThinkingLevel.OFF to "none",
+                ModelThinkingLevel.LOW to "low",
+                ModelThinkingLevel.MEDIUM to "medium",
+                ModelThinkingLevel.HIGH to "high"
+            ),
+            responsesCompat = OpenAiResponsesCompat(supportsMidConvoEffort = true)
+        )
+        fun reply(
+            provider: String = "openai",
+            modelId: String = "gpt-6-luna",
+            providerThinkingLevel: String? = null
+        ) = AssistantMessage(
+            content = listOf(TextContent("answer")),
+            api = "openai-responses",
+            provider = provider,
+            model = modelId,
+            stopReason = StopReason.STOP,
+            providerThinkingLevel = providerThinkingLevel
+        )
+
+        val history = listOf<Message>(
+            UserMessage.ofText("one"),
+            reply(),
+            UserMessage.ofText("two"),
+            reply(provider = "opencode", providerThinkingLevel = "high"),
+            UserMessage.ofText("three"),
+            reply(modelId = "gpt-6-sol", providerThinkingLevel = "high"),
+            UserMessage.ofText("four"),
+            reply(providerThinkingLevel = "high"),
+            UserMessage.ofText("five")
+        )
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        api(transport).stream(
+            gpt6,
+            normalizeContext(Context(messages = history)),
+            OpenAiResponsesOptions(apiKey = "sk-test", reasoningEffort = ModelThinkingLevel.LOW)
+        ).toList()
+        val input = body(transport)["input"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(
+            listOf(
+                "user", "message", "user", "message", "user", "message", "user",
+                "configuration_update", "message", "user", "configuration_update"
+            ),
+            input.map {
+                it["type"]?.jsonPrimitive?.content ?: it["role"]!!.jsonPrimitive.content
+            }
+        )
+        val update = { effort: String ->
+            buildJsonObject {
+                put("type", "configuration_update")
+                put("reasoning", buildJsonObject { put("effort", effort) })
+            }
+        }
+        assertEquals(
+            listOf(update("high"), update("low")),
+            input.filter { it["type"]?.jsonPrimitive?.content == "configuration_update" }
+        )
+    }
+
+    @Test
     fun `configuration updates are skipped for sign-in disabled compat and thinking off`() =
         runTest {
             val base = model.copy(
@@ -1077,9 +1213,9 @@ class OpenAiResponsesApiTest {
         assertNull(body["prompt_cache_options"])
         assertEquals("s1", body["prompt_cache_key"]!!.jsonPrimitive.content)
 
-        val apiKeyTransport = FakeTransport()
-        apiKeyTransport.enqueueResponse(sse(*completedChunk().toTypedArray()))
-        api(apiKeyTransport).stream(
+        val explicitApiKeyTransport = FakeTransport()
+        explicitApiKeyTransport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        api(explicitApiKeyTransport).stream(
             explicit,
             context,
             OpenAiResponsesOptions(
@@ -1090,9 +1226,46 @@ class OpenAiResponsesApiTest {
         ).toList()
         assertEquals(
             "30m",
-            body(apiKeyTransport)["prompt_cache_options"]!!.jsonObject["ttl"]!!
+            body(explicitApiKeyTransport)["prompt_cache_options"]!!.jsonObject["ttl"]!!
                 .jsonPrimitive.content
         )
+
+        // API keys and other compatible endpoints keep the fields ChatGPT drops.
+        val apiKeyTransport = FakeTransport()
+        apiKeyTransport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        api(apiKeyTransport).stream(
+            model,
+            context,
+            OpenAiResponsesOptions(
+                apiKey = "sk-test",
+                sessionId = "s1",
+                maxTokens = 1000,
+                temperature = 0.5,
+                cacheRetention = CacheRetention.LONG
+            )
+        ).toList()
+        val apiKeyBody = body(apiKeyTransport)
+        assertEquals(1000, apiKeyBody["max_output_tokens"]!!.jsonPrimitive.content.toInt())
+        assertEquals(0.5, apiKeyBody["temperature"]!!.jsonPrimitive.content.toDouble())
+        assertEquals("24h", apiKeyBody["prompt_cache_retention"]!!.jsonPrimitive.content)
+
+        val gatewayTransport = FakeTransport()
+        gatewayTransport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        api(gatewayTransport).stream(
+            model.copy(baseUrl = "https://gateway.example.com/v1"),
+            context,
+            OpenAiResponsesOptions(
+                apiKey = "gateway-key",
+                sessionId = "s1",
+                maxTokens = 1000,
+                temperature = 0.5,
+                cacheRetention = CacheRetention.LONG
+            )
+        ).toList()
+        val gatewayBody = body(gatewayTransport)
+        assertEquals(1000, gatewayBody["max_output_tokens"]!!.jsonPrimitive.content.toInt())
+        assertEquals(0.5, gatewayBody["temperature"]!!.jsonPrimitive.content.toDouble())
+        assertEquals("24h", gatewayBody["prompt_cache_retention"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -1226,6 +1399,66 @@ class OpenAiResponsesApiTest {
             }
                 .map { it["content"]!!.jsonPrimitive.content }
                 .filter { it.startsWith("This is an incremental tools update") }
+        )
+    }
+
+    @Test
+    fun `redefines an OpenAI tool with additional_tools instead of announcing a removal`() {
+        val additionalModel = model.copy(
+            responsesCompat = OpenAiResponsesCompat(
+                supportsMidConvoSystemMessages = true,
+                supportsAdditionalTools = true
+            )
+        )
+        val baseTool = makeTool("base_tool")
+        val payload = params(
+            additionalModel,
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        SystemMessage(
+                            content = listOf(TextContent("base prompt")),
+                            toolsAdded = listOf(baseTool),
+                            timestamp = 0
+                        ),
+                        UserMessage.ofText("before", 1),
+                        SystemMessage(
+                            content = emptyList(),
+                            toolsRemoved = listOf(
+                                works.resolve.pathfinder.ai.ToolReference("base_tool")
+                            ),
+                            toolsAdded = listOf(baseTool.copy(description = "changed")),
+                            timestamp = 2
+                        )
+                    )
+                )
+            )
+        )
+        assertNull(payload["tools"])
+        val input = payload["input"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(5, input.size)
+        assertEquals("additional_tools", input[0].typeName())
+        assertEquals(
+            listOf("base_tool"),
+            input[0]["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
+        )
+        assertEquals(
+            "The base_tool tool",
+            input[0]["tools"]!!.jsonArray[0].jsonObject["description"]!!.jsonPrimitive.content
+        )
+        assertEquals("developer", input[1]["role"]!!.jsonPrimitive.content)
+        assertEquals("base prompt", input[1]["content"]!!.jsonPrimitive.content)
+        assertEquals("user", input[2]["role"]!!.jsonPrimitive.content)
+        assertEquals("developer", input[3]["role"]!!.jsonPrimitive.content)
+        assertTrue(
+            input[3]["content"]!!.jsonPrimitive.content.contains(
+                "latest definition replaces the earlier one"
+            )
+        )
+        assertEquals("additional_tools", input[4].typeName())
+        assertEquals(
+            "changed",
+            input[4]["tools"]!!.jsonArray[0].jsonObject["description"]!!.jsonPrimitive.content
         )
     }
 

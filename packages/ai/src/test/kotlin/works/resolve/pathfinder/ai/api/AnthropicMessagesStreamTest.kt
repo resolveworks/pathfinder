@@ -9,8 +9,10 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -2208,25 +2210,128 @@ class AnthropicMessagesStreamTest {
         assertEquals(StopReason.STOP, done.reason)
         assertEquals(2, transport.requests.size)
 
-        fun additions(index: Int): List<Boolean?> {
-            val body = Json.parseToJsonElement(
-                transport.requests[index].body.decodeToString()
-            ).jsonObject
-            return body["messages"]!!.jsonArray.flatMap { message ->
+        fun body(index: Int): JsonObject = Json.parseToJsonElement(
+            transport.requests[index].body.decodeToString()
+        ).jsonObject
+        fun definitions(index: Int): List<JsonObject> =
+            body(index)["messages"]!!.jsonArray.flatMap { message ->
                 message.jsonObject["content"]!!.jsonArray.flatMap { block ->
                     val blockJson = block.jsonObject
                     if (blockJson["type"]!!.jsonPrimitive.content == "tool_addition") {
-                        listOf(
-                            blockJson["tool"]!!.jsonObject["definition"]!!.jsonObject["strict"]
-                                ?.jsonPrimitive?.content?.toBoolean()
-                        )
+                        listOf(blockJson["tool"]!!.jsonObject["definition"]!!.jsonObject)
                     } else {
                         emptyList()
                     }
                 }
             }
+        fun strict(definitions: List<JsonObject>): List<Boolean?> = definitions.map {
+            it["strict"]?.jsonPrimitive?.content?.toBoolean()
         }
-        assertEquals(listOf(true, true), additions(0))
-        assertEquals(listOf(null, true), additions(1))
+        assertEquals(listOf(true, true), strict(definitions(0)))
+        assertEquals(listOf(null, true), strict(definitions(1)))
+        // The top-level declarations stay unchanged; only the inline addition is downgraded.
+        assertEquals(body(0)["tools"], body(1)["tools"])
+        assertEquals(
+            JsonArray(listOf(JsonPrimitive("value"))),
+            definitions(1)[0]["input_schema"]!!.jsonObject["required"]
+        )
+        assertEquals(definitions(0)[1], definitions(1)[1])
+    }
+
+    @Test
+    fun `strict tool fallback is not attempted once the run is cancelled`() = runTest {
+        val grammarError = "The compiled grammar is too large"
+        val transport = FakeTransport()
+        lateinit var job: Job
+        transport.outcomes.add {
+            job.cancel()
+            throw ProviderHttpException(
+                400,
+                emptyMap(),
+                """{"type":"error","error":{"type":"invalid_request_error","message":"$grammarError"}}"""
+            )
+        }
+        job = launch {
+            api(transport)
+                .stream(
+                    claude.copy(
+                        anthropicCompat = claude.anthropicCompat.copy(supportsStrictTools = true)
+                    ),
+                    normalizeContext(
+                        Context(
+                            messages = listOf(UserMessage.ofText("hi")),
+                            tools = listOf(strictTool("lookup", "prefer"))
+                        )
+                    ),
+                    AnthropicMessagesOptions(apiKey = "k")
+                )
+                .toList()
+        }
+        job.join()
+        assertTrue(job.isCancelled)
+        assertEquals(1, transport.requests.size)
+    }
+
+    @Test
+    fun `strict tool fallback is not retried for an SSE error after headers`() = runTest {
+        val grammarError = "The compiled grammar is too large"
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            "error" to
+                """{"type":"error","error":{"type":"invalid_request_error","message":"$grammarError"}}"""
+        )
+        val result = api(transport)
+            .stream(
+                claude.copy(
+                    anthropicCompat = claude.anthropicCompat.copy(supportsStrictTools = true)
+                ),
+                normalizeContext(
+                    Context(
+                        messages = listOf(UserMessage.ofText("hi")),
+                        tools = listOf(strictTool("lookup", "prefer"))
+                    )
+                ),
+                AnthropicMessagesOptions(apiKey = "k")
+            )
+            .toList()
+            .last()
+        val error = assertIs<AssistantMessageEvent.Error>(result)
+        assertTrue(error.error.errorMessage!!.contains(grammarError), error.error.errorMessage)
+        assertEquals(1, transport.requests.size)
+    }
+
+    @Test
+    fun `strict sampling is not disabled on later requests`() = runTest {
+        val grammarError = "The compiled grammar is too large"
+        val strictModel = claude.copy(
+            anthropicCompat = claude.anthropicCompat.copy(supportsStrictTools = true)
+        )
+        val transcript = normalizeContext(
+            Context(
+                messages = listOf(UserMessage.ofText("hi")),
+                tools = listOf(strictTool("lookup", "prefer"))
+            )
+        )
+        val transport = FakeTransport()
+        transport.enqueueError(
+            400,
+            """{"type":"error","error":{"type":"invalid_request_error","message":"$grammarError"}}"""
+        )
+        transport.enqueueNamedResponse(textStream("ok"))
+        transport.enqueueNamedResponse(textStream("ok"))
+        api(transport)
+            .stream(strictModel, transcript, AnthropicMessagesOptions(apiKey = "k"))
+            .toList()
+        api(transport)
+            .stream(strictModel, transcript, AnthropicMessagesOptions(apiKey = "k"))
+            .toList()
+        assertEquals(
+            listOf(true, null, true),
+            transport.requests.map { request ->
+                Json.parseToJsonElement(request.body.decodeToString())
+                    .jsonObject["tools"]!!.jsonArray[0].jsonObject["strict"]
+                    ?.jsonPrimitive?.content?.toBoolean()
+            }
+        )
     }
 }
