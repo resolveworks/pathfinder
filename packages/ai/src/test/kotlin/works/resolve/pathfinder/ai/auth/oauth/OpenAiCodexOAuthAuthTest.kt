@@ -445,7 +445,7 @@ class OpenAiCodexOAuthAuthTest {
                 "&state=0123456789abcdef" +
                 "&id_token_add_organizations=true" +
                 "&codex_cli_simplified_flow=true" +
-                "&originator=Pathfinder",
+                "&originator=pathfinder",
             url.url
         )
 

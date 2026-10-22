@@ -43,7 +43,7 @@ import works.resolve.pathfinder.ai.utils.urlQueryParamsOrNull
  *   retried.
  * - **originator default.** The authorize request presents as whatever
  *   originator it names, so pi's `"pi"` default would misattribute
- *   Pathfinder's traffic; this app defaults to [ORIGINATOR] (`"Pathfinder"`) unless a login supplies its name.
+ *   Pathfinder's traffic; this app defaults to [ORIGINATOR] (`"pathfinder"`) unless a login supplies its name.
  *   Deliberate divergence; the parameter is otherwise kept as in pi.
  * - **HTTP boundary.** Pi `fetch`es with an `AbortSignal`; all HTTP goes
  *   through the injected [OAuthHttpClient] with a bounded request timeout,
@@ -649,7 +649,7 @@ class OpenAiCodexOAuthAuth(
         const val JWT_CLAIM_PATH: String = "https://api.openai.com/auth"
 
         /** Deliberate divergence from pi's `"pi"` default: Pathfinder's own name. */
-        const val ORIGINATOR: String = "Pathfinder"
+        const val ORIGINATOR: String = "pathfinder"
 
         const val CALLBACK_PORT: Int = 1455
 
