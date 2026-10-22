@@ -25,6 +25,9 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
 
         /** Raw pi settings JSON; owned by `SettingsManager`, not typed here. */
         val SETTINGS_JSON = stringPreferencesKey("settings_json")
+
+        /** Stable per-install device ID (pi's `LoginOptions.getDeviceId`). */
+        val DEVICE_ID = stringPreferencesKey("device_id")
     }
 
     val settings: Flow<AppSettings> = dataStore.data.map { prefs ->
@@ -56,6 +59,23 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
 
     suspend fun setAppendSystemPrompt(appendSystemPrompt: String) {
         dataStore.edit { it[Keys.APPEND_SYSTEM_PROMPT] = appendSystemPrompt }
+    }
+
+    /**
+     * The stable ID of this app installation, generated on first use and
+     * returned unchanged afterwards; logins send it as the agent host ID.
+     * DataStore's serialized `edit` calls keep concurrent first reads from
+     * producing two IDs.
+     */
+    suspend fun deviceId(): String {
+        val existing = dataStore.data.first()[Keys.DEVICE_ID]
+        if (existing != null) return existing
+        val generated = java.util.UUID.randomUUID().toString()
+        dataStore.edit { prefs ->
+            prefs[Keys.DEVICE_ID] = prefs[Keys.DEVICE_ID] ?: generated
+        }
+        return dataStore.data.first()[Keys.DEVICE_ID]
+            ?: throw IllegalStateException("device id missing after write")
     }
 
     suspend fun currentSettings(): AppSettings = settings.first()

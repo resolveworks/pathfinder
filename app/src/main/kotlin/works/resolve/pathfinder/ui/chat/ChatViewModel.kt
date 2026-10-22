@@ -114,6 +114,7 @@ class ChatViewModel(
     private val loginController = ProviderLoginController(
         scope = viewModelScope,
         authService = authService,
+        getDeviceId = settingsStore::deviceId,
         onLoginSucceeded = { onCredentialStored() },
         onLoginFailed = { cause -> setError(UiString(R.string.error_auth_login), cause) }
     )

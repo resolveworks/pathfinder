@@ -12,6 +12,7 @@ import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt as AuthInteractionPrompt
+import works.resolve.pathfinder.ai.auth.LoginOptions
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
 
 /**
@@ -27,6 +28,8 @@ import works.resolve.pathfinder.ai.auth.ProviderAuthService
 internal class ProviderLoginController(
     private val scope: CoroutineScope,
     private val authService: ProviderAuthService,
+    /** Supplies the stable per-install device ID; materialized before the login starts. */
+    private val getDeviceId: suspend () -> String,
     /** Runs in [scope] with the flow state already cleared. */
     private val onLoginSucceeded: suspend () -> Unit,
     /**
@@ -52,7 +55,13 @@ internal class ProviderLoginController(
         authJob = scope.launch {
             _flow.value = ProviderAuthFlow(providerId, method)
             try {
-                authService.login(providerId, method.type, UiAuthInteraction())
+                val deviceId = getDeviceId()
+                authService.login(
+                    providerId,
+                    method.type,
+                    UiAuthInteraction(),
+                    LoginOptions(getDeviceId = { deviceId })
+                )
             } catch (e: CancellationException) {
                 // User cancel or scope teardown aborts the login — not a
                 // failure: clear and stop without the failure path.
