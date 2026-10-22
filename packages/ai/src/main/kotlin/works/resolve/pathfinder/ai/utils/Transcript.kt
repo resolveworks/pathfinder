@@ -183,8 +183,11 @@ fun getDeclaredTools(messages: List<Message>): List<Tool> {
 }
 
 /**
- * Whether a tool name was declared twice with different definitions. Transports that
- * reference tools by name (Anthropic `tool_addition`/`tool_removal`) cannot express that.
+ * Whether a tool name was declared twice with different definitions. A transport that can
+ * only reference previously declared tools by name cannot replay such a history.
+ *
+ * Deprecated: no built-in transport needs this anymore; Anthropic expresses redefinitions
+ * with inline `tool_definition` blocks. Kept for API compatibility.
  */
 fun hasToolRedefinitions(messages: List<Message>): Boolean {
     val declared = LinkedHashMap<String, Tool>()
