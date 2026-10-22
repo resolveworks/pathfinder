@@ -137,27 +137,9 @@ interface AgentTool {
     val executionMode: ToolExecutionMode? get() = null
 
     /**
-     * Optional one-line snippet for the `tools` section of the default
-     * system prompt; tools without one are omitted from that section.
-     *
-     * Placement divergence: pi keeps this on its coding-agent `ToolDefinition`,
-     * but pathfinder has no separate coding-agent tool layer, so [AgentTool]
-     * hosts it.
-     */
-    val promptSnippet: String? get() = null
-
-    /**
-     * Guideline bullets appended to the default system prompt `rules`
-     * section while this tool is active; see [promptSnippet] for placement.
-     */
-    val promptGuidelines: List<String> get() = emptyList()
-
-    /**
      * pi's optional compatibility shim for raw tool-call arguments before
      * schema validation (types.ts); must return an object that satisfies
-     * [definition.parameters]. Only the edit tool declares one, absorbing
-     * models that send `edits` as a JSON string or a single object, or
-     * legacy top-level `oldText`/`newText`.
+     * [definition.parameters].
      */
     val prepareArguments: ((JsonObject) -> JsonObject)? get() = null
 
@@ -324,8 +306,7 @@ sealed class AgentEvent {
         val summary: String,
         val tokensBefore: Int,
         val estimatedTokensAfter: Int,
-        val usage: Usage?,
-        val details: works.resolve.pathfinder.agent.CompactionDetails?
+        val usage: Usage?
     )
 
     /** Automatic compaction started; emitted by [AgentSession] between agent runs. */

@@ -9,9 +9,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import works.resolve.pathfinder.agent.CompactionDetails
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
@@ -28,7 +26,6 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevel
-import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
@@ -86,16 +83,14 @@ class CompactionLlmTest {
     private fun createCompactionEntry(
         summary: String,
         parentId: String? = null,
-        firstKeptEntryId: String? = null,
-        details: CompactionDetails? = null
+        firstKeptEntryId: String? = null
     ): CompactionEntry = CompactionEntry(
         id = createId(),
         parentId = parentId,
         timestamp = nextId.toLong(),
         summary = summary,
         tokensBefore = 1234,
-        firstKeptEntryId = firstKeptEntryId ?: "",
-        details = details
+        firstKeptEntryId = firstKeptEntryId ?: ""
     )
 
     private class FauxApi : ChatApi {
@@ -283,26 +278,10 @@ class CompactionLlmTest {
     }
 
     @Test
-    fun `prepares split-turn compaction with prior file-operation details`() {
+    fun `prepares split-turn compaction after a previous compaction`() {
         val u1 = createMessageEntry(createUserMessage("user msg 1"))
-        val assistantMessage = createAssistantMessage("assistant msg 1").copy(
-            content = listOf(
-                ToolCall(
-                    id = "tool-1",
-                    name = "write",
-                    arguments = buildJsonObject { put("path", "written.ts") }
-                )
-            )
-        )
-        val a1 = createMessageEntry(assistantMessage, u1.id)
-        val compaction1 = createCompactionEntry(
-            "First summary",
-            a1.id,
-            details = CompactionDetails(
-                readFiles = listOf("old-read.ts"),
-                modifiedFiles = listOf("old-edit.ts", "written.ts")
-            )
-        )
+        val a1 = createMessageEntry(createAssistantMessage("assistant msg 1"), u1.id)
+        val compaction1 = createCompactionEntry("First summary", a1.id)
         val u2 = createMessageEntry(createUserMessage("large turn"), compaction1.id)
         val a2 = createMessageEntry(createAssistantMessage("large assistant message"), u2.id)
         val preparation = preparationValue(
@@ -320,9 +299,6 @@ class CompactionLlmTest {
                 it.role
             }
         )
-        assertTrue("old-read.ts" in preparation.fileOps.read)
-        assertTrue("old-edit.ts" in preparation.fileOps.edited)
-        assertTrue("written.ts" in preparation.fileOps.edited)
     }
 
     @Test
@@ -668,7 +644,6 @@ class CompactionLlmTest {
         isSplitTurn = isSplitTurn,
         tokensBefore = tokensBefore,
         previousSummary = null,
-        fileOps = createFileOps(),
         settings = settings
     )
 
@@ -832,19 +807,11 @@ class CompactionLlmTest {
     }
 
     @Test
-    fun `returns a compaction result with file details`() = runTest {
+    fun `returns a compaction result`() = runTest {
         val u1 = createMessageEntry(createUserMessage("read a file"))
         val assistantMessage = createAssistantMessage(
             "calling tool",
             createMockUsage(1000, 200)
-        ).copy(
-            content = listOf(
-                ToolCall(
-                    id = "tool-1",
-                    name = "read",
-                    arguments = buildJsonObject { put("path", "src/index.ts") }
-                )
-            )
         )
         val a1 = createMessageEntry(assistantMessage, u1.id)
         val u2 = createMessageEntry(createUserMessage("continue"), a1.id)
@@ -865,10 +832,5 @@ class CompactionLlmTest {
         assertTrue(result.summary.isNotEmpty())
         assertTrue((result.usage?.totalTokens ?: 0) > 0)
         assertEquals(prep.firstKeptEntryId, result.firstKeptEntryId)
-        assertEquals(
-            CompactionDetails(readFiles = listOf("src/index.ts"), modifiedFiles = emptyList()),
-            result.details
-        )
-        assertTrue("<read-files>\nsrc/index.ts\n</read-files>" in result.summary)
     }
 }

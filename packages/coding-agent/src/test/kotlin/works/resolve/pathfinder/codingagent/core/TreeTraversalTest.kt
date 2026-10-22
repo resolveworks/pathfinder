@@ -142,7 +142,7 @@ class TreeTraversalTest {
         val id1 = m.getLeafId()!!
         m.appendMessage(assistant("2"))
         val id2 = m.getLeafId()!!
-        m.appendCompaction("summary", id1, 1000, null, usage)
+        m.appendCompaction("summary", id1, 1000, usage)
         val compactionId = m.getLeafId()!!
         m.appendMessage(user("3"))
 
@@ -447,7 +447,7 @@ class TreeTraversalTest {
             m.appendMessage(user("3"))
             val id3 = m.getLeafId()!!
 
-            val summaryId = m.branchWithSummary(id1, "Summary of abandoned work", null, usage)
+            val summaryId = m.branchWithSummary(id1, "Summary of abandoned work", usage)
 
             assertEquals(summaryId, m.getLeafId())
 
@@ -463,7 +463,7 @@ class TreeTraversalTest {
         val m = manager(createTempDirectory())
         m.appendMessage(user("hello"))
 
-        assertFailsWith<SessionError> { m.branchWithSummary("nonexistent", "summary", null, null) }
+        assertFailsWith<SessionError> { m.branchWithSummary("nonexistent", "summary", null) }
             .let {
                 assertEquals(SessionErrorCode.NOT_FOUND, it.code)
                 assertEquals("Entry nonexistent not found", it.message)
@@ -554,8 +554,8 @@ class TreeTraversalTest {
                 timestamp = clock.now().toEpochMilliseconds()
             )
         )
-        m.appendCompaction("summary", rootId, 100, null, usage)
-        m.branchWithSummary(rootId, "branch summary", null, usage)
+        m.appendCompaction("summary", rootId, 100, usage)
+        m.branchWithSummary(rootId, "branch summary", usage)
 
         val file = dir.listFiles { f: File -> f.name.endsWith(".jsonl") }!!.single()
         val reopened = SessionManager.open(file, clock, ioDispatcher = Dispatchers.Unconfined)

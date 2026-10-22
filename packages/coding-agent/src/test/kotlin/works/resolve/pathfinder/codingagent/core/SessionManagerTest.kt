@@ -165,7 +165,6 @@ class SessionManagerTest {
         val summaryId = m.branchWithSummary(
             firstUserId,
             summary = "went elsewhere",
-            details = null,
             usage = null
         )
 
@@ -178,7 +177,7 @@ class SessionManagerTest {
         assertTrue("went elsewhere" in file.readText())
 
         assertFailsWith<SessionError> {
-            m.branchWithSummary("nope", "s", null, null)
+            m.branchWithSummary("nope", "s", null)
         }.let { assertEquals(SessionErrorCode.NOT_FOUND, it.code) }
     }
 
@@ -367,7 +366,7 @@ class SessionManagerTest {
         val file = File(dir, "notime.jsonl")
         file.writeText(
             """{"type":"session","version":3,"id":"s",""" +
-                """"timestamp":"2026-09-05T19:03:40.000Z","cwd":""}""" + "\n" +
+                """"timestamp":"2026-09-05T19:03:40.000Z"}""" + "\n" +
                 """{"type":"message","id":"m1","parentId":null,""" +
                 """"timestamp":"2026-09-05T19:03:42.000Z",""" +
                 """"message":{"role":"user",""" +

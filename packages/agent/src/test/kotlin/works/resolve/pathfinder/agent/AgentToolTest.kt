@@ -94,7 +94,7 @@ class AgentToolTest {
     }
 
     @Test
-    fun `optional interface members default to run-level mode and no prompt contributions`() {
+    fun `optional interface members default to run-level mode`() {
         val tool = object : AgentTool {
             override val definition = Tool("t", "d", buildJsonObject { put("type", "object") })
             override val label = "t"
@@ -105,8 +105,6 @@ class AgentToolTest {
             ) = AgentToolResult(content = emptyList())
         }
         assertNull(tool.executionMode)
-        assertNull(tool.promptSnippet)
-        assertTrue(tool.promptGuidelines.isEmpty())
     }
 
     @Test

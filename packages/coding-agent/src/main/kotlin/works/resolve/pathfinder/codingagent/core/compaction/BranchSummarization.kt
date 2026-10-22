@@ -1,9 +1,6 @@
 package works.resolve.pathfinder.codingagent.core.compaction
 
 import kotlin.time.Clock
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.MessageRole
@@ -30,18 +27,9 @@ import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.codingagent.core.createBranchSummaryMessage
 import works.resolve.pathfinder.codingagent.core.createCompactionSummaryMessage
 
-data class BranchSummaryResult(
-    val summary: String,
-    val usage: Usage?,
-    val readFiles: List<String>,
-    val modifiedFiles: List<String>
-)
+data class BranchSummaryResult(val summary: String, val usage: Usage?)
 
-data class BranchPreparation(
-    val messages: List<Message>,
-    val fileOps: FileOperations,
-    val totalTokens: Int
-)
+data class BranchPreparation(val messages: List<Message>, val totalTokens: Int)
 
 data class CollectEntriesResult(val entries: List<SessionEntry>, val commonAncestorId: String?)
 
@@ -105,46 +93,18 @@ private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
 }
 
 /**
- * [BranchSummaryEntry.details] stays the raw persisted JSON, so the file
- * lists are read leniently and malformed fields are skipped, as upstream.
- * Upstream declares this shape as the `BranchSummaryDetails` interface
- * (`readFiles`/`modifiedFiles`) and casts `entry.details` to it under
- * `Array.isArray` guards; per the JsonElement convention pathfinder keeps
- * `details` untyped and reads the same fields leniently here instead of a
- * parallel details type.
- */
-private fun carryBranchSummaryDetails(details: JsonObject?, fileOps: FileOperations) {
-    fun strings(name: String): List<String> = (details?.get(name) as? JsonArray)
-        ?.filterIsInstance<JsonPrimitive>()
-        ?.filter { it.isString }
-        ?.map { it.content }
-        ?: emptyList()
-    for (f in strings("readFiles")) fileOps.read.add(f)
-    for (f in strings("modifiedFiles")) fileOps.edited.add(f)
-}
-
-/**
  * Newest→oldest within the token budget; an over-budget compaction or
  * branch-summary entry is still kept while the running total is under 90%
  * of the budget — the summary of already-summarized history is cheap
  * context — then the walk stops.
  *
- * Nested branch-summary details contribute their file ops before the budget
- * walk, so they count even when the entry itself is cut.
  */
 fun prepareBranchEntries(entries: List<SessionEntry>, tokenBudget: Int = 0): BranchPreparation {
     val messages = mutableListOf<Message>()
-    val fileOps = createFileOps()
     var totalTokens = 0
-    for (entry in entries) {
-        if (entry is BranchSummaryEntry) {
-            carryBranchSummaryDetails(entry.details as? JsonObject, fileOps)
-        }
-    }
     for (i in entries.indices.reversed()) {
         val entry = entries[i]
         val message = getMessageFromEntry(entry) ?: continue
-        extractFileOpsFromMessage(message, fileOps)
 
         val tokens = estimateEntryTokens(entry)
         if (tokenBudget > 0 && totalTokens + tokens > tokenBudget) {
@@ -161,7 +121,7 @@ fun prepareBranchEntries(entries: List<SessionEntry>, tokenBudget: Int = 0): Bra
         totalTokens += tokens
     }
 
-    return BranchPreparation(messages = messages, fileOps = fileOps, totalTokens = totalTokens)
+    return BranchPreparation(messages = messages, totalTokens = totalTokens)
 }
 
 const val BRANCH_SUMMARY_PREAMBLE =
@@ -248,9 +208,7 @@ suspend fun generateBranchSummary(
         return BranchSummaryCallResult.Ok(
             BranchSummaryResult(
                 summary = "No content to summarize",
-                usage = null,
-                readFiles = emptyList(),
-                modifiedFiles = emptyList()
+                usage = null
             )
         )
     }
@@ -311,16 +269,12 @@ suspend fun generateBranchSummary(
         )
     }
 
-    var summary = BRANCH_SUMMARY_PREAMBLE + contentText(response.content)
-    val (readFiles, modifiedFiles) = computeFileLists(preparation.fileOps)
-    summary += formatFileOperations(readFiles, modifiedFiles)
+    val summary = BRANCH_SUMMARY_PREAMBLE + contentText(response.content)
 
     return BranchSummaryCallResult.Ok(
         BranchSummaryResult(
             summary = summary.ifEmpty { "No summary generated" },
-            usage = response.usage,
-            readFiles = readFiles,
-            modifiedFiles = modifiedFiles
+            usage = response.usage
         )
     )
 }

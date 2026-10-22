@@ -153,7 +153,7 @@ class LoadEntriesTest {
             it.appendMessage(user("kept"))
             val keptId = it.getEntries().last().id
             it.appendMessage(assistant("answer"))
-            it.appendCompaction("summary so far", keptId, 1000, null, null)
+            it.appendCompaction("summary so far", keptId, 1000, null)
         }
 
         val keptId = source.getEntries()[1].id
@@ -165,7 +165,7 @@ class LoadEntriesTest {
         kotlin.io.path.createTempDirectory("load-entries-test").toFile()
 
     private fun piHeader() = """{"type":"session","version":3,"id":"pi-1",""" +
-        """"timestamp":"2026-09-05T19:03:40.386Z","cwd":"/home/u/p"}"""
+        """"timestamp":"2026-09-05T19:03:40.386Z"}"""
 
     private fun piUserLine() = """{"type":"message","id":"m1","parentId":null,""" +
         """"timestamp":"2026-09-05T19:03:41.000Z",""" +
@@ -180,8 +180,8 @@ class LoadEntriesTest {
                 """{"type":"message","id":"m2","parentId":"m1",""" +
                 """"timestamp":"2026-09-05T19:03:42.000Z",""" +
                 """"message":{"role":"assistant","timestamp":1788635022000,""" +
-                """"content":[{"type":"toolCall","id":"call_1","name":"bash",""" +
-                """"arguments":{"command":"ls"}}],""" +
+                """"content":[{"type":"toolCall","id":"call_1","name":"web_fetch",""" +
+                """"arguments":{"url":"https://example.com"}}],""" +
                 """"api":"anthropic-messages","provider":"anthropic",""" +
                 """"model":"claude-sonnet-4",""" +
                 """"usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,""" +
@@ -190,8 +190,8 @@ class LoadEntriesTest {
                 """{"type":"message","id":"m3","parentId":"m2",""" +
                 """"timestamp":"2026-09-05T19:03:43.000Z",""" +
                 """"message":{"role":"toolResult","timestamp":1788635023000,""" +
-                """"toolCallId":"call_1","toolName":"bash",""" +
-                """"content":[{"type":"text","text":"a.txt"}],"isError":false}}""" + "\n"
+                """"toolCallId":"call_1","toolName":"web_fetch",""" +
+                """"content":[{"type":"text","text":"page"}],"isError":false}}""" + "\n"
         )
 
         val loaded = SessionManager.open(file, clock, ioDispatcher = Dispatchers.Unconfined)
@@ -202,7 +202,7 @@ class LoadEntriesTest {
             assertIs<AssistantMessage>((loaded.getEntry("m2") as MessageEntry).message)
         assertEquals(StopReason.TOOL_USE, assistant.stopReason)
         val call = assertIs<ToolCall>(assistant.content.single())
-        assertEquals(buildJsonObject { put("command", "ls") }, call.arguments)
+        assertEquals(buildJsonObject { put("url", "https://example.com") }, call.arguments)
     }
 
     @Test
@@ -210,7 +210,7 @@ class LoadEntriesTest {
         val file = File(createTempDirectory(), "lenient.jsonl")
         file.writeText(
             """{"type":"session","version":3,"id":"s",""" +
-                """"timestamp":"2026-09-05T19:03:40Z","cwd":""}""" + "\n" +
+                """"timestamp":"2026-09-05T19:03:40Z"}""" + "\n" +
                 """{"type":"message","id":"a","parentId":null,""" +
                 """"timestamp":"2026-09-05T21:03:40+0200",""" +
                 """"message":{"role":"user","timestamp":1788635020000,"content":[]}}""" + "\n" +
@@ -242,7 +242,7 @@ class LoadEntriesTest {
         val file = File(createTempDirectory(), "raw.jsonl")
         file.writeText(
             """{"type":"session","version":3,"id":"s",""" +
-                """"timestamp":"2026-09-05T19:03:40.000Z","cwd":""}""" + "\n" +
+                """"timestamp":"2026-09-05T19:03:40.000Z"}""" + "\n" +
                 piUserLine() + "\n" +
                 """{"type":"message","id":"m2","parentId":"m1",""" +
                 """"timestamp":"2026-09-05T19:03:42.000Z",""" +

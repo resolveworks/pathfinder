@@ -1,7 +1,6 @@
 package works.resolve.pathfinder.codingagent.core.compaction
 
 import kotlin.time.Clock
-import works.resolve.pathfinder.agent.CompactionDetails
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.Context
@@ -12,7 +11,6 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ToolCall
@@ -79,12 +77,11 @@ fun getLastAssistantUsage(entries: List<SessionEntry>): Usage? {
 
 /**
  * pi's compaction-local estimator, deliberately not the ai-module
- * `estimateMessageTokens`: system messages are prompt state, not
- * conversation, and estimate to 0 (pi's role switch has no system case).
- * pi additionally estimates custom/bashExecution/summary roles; pathfinder
- * has no custom or bash messages, and the summary roles are estimated from
- * their entries by [estimateEntryTokens] because they project to wrapped
- * user messages (Messages.kt).
+ * `estimateMessageTokens`: system messages estimate to 0 (pi's role switch
+ * has no system case). pi additionally estimates custom and summary roles;
+ * pathfinder has no custom messages, and the summary roles are estimated
+ * from their entries by [estimateEntryTokens] because they project to
+ * wrapped user messages (Messages.kt).
  */
 fun estimateTokens(message: Message): Int = when (message.role) {
     MessageRole.SYSTEM -> 0
@@ -175,9 +172,7 @@ private fun entryContextMessages(entry: SessionEntry): List<Message> =
  * pi sums `estimateTokens` over an entry's context messages, where the
  * summary entries project dedicated branchSummary/compactionSummary roles
  * estimated as `summary.length/4`; pathfinder projects wrapped user
- * messages, so the summary length is measured at the entry instead. The
- * compaction entry's system-message replay estimates 0 upstream and is
- * dropped here.
+ * messages, so the summary length is measured at the entry instead.
  */
 internal fun estimateEntryTokens(entry: SessionEntry): Int = when (entry) {
     is CompactionEntry -> estimateTextTokens(entry.summary)
@@ -274,27 +269,6 @@ const val SUMMARIZATION_SYSTEM_PROMPT =
         "Do NOT continue the conversation. Do NOT respond to any questions in the conversation. " +
         "ONLY output the structured summary."
 
-/**
- * Upstream reads the previous compaction entry's details out of the entries
- * list and tolerates unknown shapes; pathfinder's details are typed, so the
- * previous [CompactionDetails] are passed in directly and the entry lookup
- * happens in [prepareCompaction].
- */
-fun extractFileOperations(
-    messages: List<Message>,
-    prevCompactionDetails: CompactionDetails? = null
-): FileOperations {
-    val fileOps = createFileOps()
-    if (prevCompactionDetails != null) {
-        for (f in prevCompactionDetails.readFiles) fileOps.read.add(f)
-        for (f in prevCompactionDetails.modifiedFiles) fileOps.edited.add(f)
-    }
-    for (msg in messages) {
-        extractFileOpsFromMessage(msg, fileOps)
-    }
-    return fileOps
-}
-
 private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
     is MessageEntry -> entry.message
 
@@ -318,15 +292,10 @@ private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
 
 /**
  * Compaction entries contribute no message: their stored summary re-enters
- * summarization via `previousSummary` instead, and system messages are
- * prompt state, not conversation — the compaction entry carries their
- * replay.
+ * summarization via `previousSummary` instead.
  */
-internal fun getMessageFromEntryForCompaction(entry: SessionEntry): Message? = when {
-    entry is CompactionEntry -> null
-    entry is MessageEntry && entry.message is SystemMessage -> null
-    else -> getMessageFromEntry(entry)
-}
+internal fun getMessageFromEntryForCompaction(entry: SessionEntry): Message? =
+    if (entry is CompactionEntry) null else getMessageFromEntry(entry)
 
 enum class CompactionErrorCode { ABORTED, SUMMARIZATION_FAILED }
 
@@ -364,8 +333,7 @@ data class CompactResult(
     val tokensBefore: Int,
     val usage: Usage?,
     /** Id of the first entry kept after the compaction boundary. */
-    val firstKeptEntryId: String,
-    val details: CompactionDetails?
+    val firstKeptEntryId: String
 )
 
 private val DEFAULT_RETRY = Retry()
@@ -620,7 +588,6 @@ data class CompactionPreparation(
     val isSplitTurn: Boolean,
     val tokensBefore: Int,
     val previousSummary: String?,
-    val fileOps: FileOperations,
     val settings: CompactionSettings
 )
 
@@ -676,18 +643,6 @@ fun prepareCompaction(
     if (messagesToSummarize.isEmpty() && turnPrefixMessages.isEmpty()) {
         return ok(null)
     }
-    val prevDetails = if (prevCompactionIndex >= 0) {
-        (pathEntries[prevCompactionIndex] as CompactionEntry).details
-    } else {
-        null
-    }
-    val fileOps = extractFileOperations(messagesToSummarize, prevDetails)
-    if (cutPoint.isSplitTurn) {
-        for (msg in turnPrefixMessages) {
-            extractFileOpsFromMessage(msg, fileOps)
-        }
-    }
-
     return ok(
         CompactionPreparation(
             firstKeptEntryId = firstKeptEntryId,
@@ -696,7 +651,6 @@ fun prepareCompaction(
             isSplitTurn = cutPoint.isSplitTurn,
             tokensBefore = tokensBefore,
             previousSummary = previousSummary,
-            fileOps = fileOps,
             settings = settings
         )
     )
@@ -704,9 +658,8 @@ fun prepareCompaction(
 
 /**
  * Divergences from upstream: no `signal` parameter (aborts are coroutine
- * cancellation); `details` is typed [CompactionDetails] rather than
- * upstream's unknown-typed generic; the wall [clock] is received from the
- * caller (TS→Kotlin timing rule).
+ * cancellation); the wall [clock] is received from the caller (TS→Kotlin
+ * timing rule).
  */
 suspend fun compact(
     preparation: CompactionPreparation,
@@ -721,7 +674,7 @@ suspend fun compact(
 ): CompactionResult<CompactResult> {
     val (
         firstKeptEntryId, messagesToSummarize, turnPrefixMessages, isSplitTurn, tokensBefore,
-        previousSummary, fileOps, settings
+        previousSummary, settings
     ) = preparation
 
     val summary: String
@@ -762,16 +715,12 @@ suspend fun compact(
         summaryUsage = summaryResult.value.usage
     }
 
-    val (readFiles, modifiedFiles) = computeFileLists(fileOps)
-    val summaryWithFiles = summary + formatFileOperations(readFiles, modifiedFiles)
-
     return ok(
         CompactResult(
-            summary = summaryWithFiles,
+            summary = summary,
             tokensBefore = tokensBefore,
             usage = summaryUsage,
-            firstKeptEntryId = firstKeptEntryId,
-            details = CompactionDetails(readFiles = readFiles, modifiedFiles = modifiedFiles)
+            firstKeptEntryId = firstKeptEntryId
         )
     )
 }

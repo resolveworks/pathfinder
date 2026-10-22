@@ -174,7 +174,7 @@ class NativeAgentFactoryTest {
         val agent = result.session
         val messages = agent.state.value.messages
         // The restored transcript is the branch fold as-is: the prompt is
-        // recorded as a section patch at the next prompt, not seeded here.
+        // recorded by the transcript, not seeded here.
         assertEquals(2, messages.size)
         assertEquals(
             "hello",
@@ -576,18 +576,17 @@ class NativeAgentFactoryTest {
             assertEquals("gpt-4.1", body["model"]!!.jsonPrimitive.content)
 
             val state = agent.state.value
-            // prompt baseline, ping, Hi, pong, reply
-            assertEquals(5, state.messages.size)
+            // ping, Hi, pong, reply
+            assertEquals(4, state.messages.size)
             val entries = agent.sessionManager.getEntries()
             // The factory seeds model_change/thinking entries for the new
-            // session, so the switch's entry is the sixth (the prompt's
-            // section-patch message entry comes after them).
+            // session, so the switch's entry follows the first exchange.
             assertTrue(
-                entries[5] is ModelChangeEntry
+                entries[4] is ModelChangeEntry
             )
             assertEquals(
                 "Hi",
-                ((state.messages[2] as AssistantMessage).content.single() as TextContent).text
+                ((state.messages[1] as AssistantMessage).content.single() as TextContent).text
             )
         }
     }

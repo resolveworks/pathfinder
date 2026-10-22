@@ -51,8 +51,8 @@ internal fun projectCommitted(
     // The session re-emits message_end before appending to the tree (pi's
     // order), so the just-ended message has no entry yet at projection
     // time; it renders from live state after the branch rows and re-keys
-    // onto its entry id once the append lands. The agent-state baseline
-    // system prompt never enters the tree and stays unrendered, as before.
+    // onto its entry id once the append lands. System messages stay
+    // unrendered.
     val appended = java.util.Collections.newSetFromMap(
         java.util.IdentityHashMap<Message, Boolean>()
     )

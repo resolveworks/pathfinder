@@ -130,7 +130,7 @@ class JsonlCodecTest {
         )
         entries.forEach { assertEquals(it, roundtripEntry(it)) }
 
-        // Compaction details and usage roundtrip.
+        // Compaction usage roundtrips.
         val compaction = CompactionEntry(
             id = "e5",
             parentId = "e4",
@@ -138,10 +138,6 @@ class JsonlCodecTest {
             summary = "sum2",
             firstKeptEntryId = "e4",
             tokensBefore = 200,
-            details = works.resolve.pathfinder.agent.CompactionDetails(
-                readFiles = listOf("a.kt"),
-                modifiedFiles = listOf("b.kt")
-            ),
             usage = Usage(1, 2, 0, 0, 0, 0, 3, Cost(0.0, 0.0, 0.0, 0.0, 0.0))
         )
         assertEquals(compaction, roundtripEntry(compaction))
@@ -311,10 +307,10 @@ class JsonlCodecTest {
     fun `header requires string id and iso timestamp`() {
         assertNull(
             JsonlCodec.parseLine(
-                """{"type":"session","version":3,"timestamp":"2026-09-05T19:03:40.386Z","cwd":""}"""
+                """{"type":"session","version":3,"timestamp":"2026-09-05T19:03:40.386Z"}"""
             )
         )
-        assertNull(JsonlCodec.parseLine("""{"type":"session","version":3,"id":"a","cwd":""}"""))
+        assertNull(JsonlCodec.parseLine("""{"type":"session","version":3,"id":"a"}"""))
     }
 
     @Test

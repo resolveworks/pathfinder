@@ -9,11 +9,6 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.add
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonArray
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ChatApi
@@ -78,19 +73,14 @@ class BranchSummarizationTest {
         message = message
     )
 
-    private fun branchSummaryEntry(
-        summary: String,
-        parentId: String?,
-        fromId: String,
-        details: JsonObject? = null
-    ) = BranchSummaryEntry(
-        id = createId(),
-        parentId = parentId,
-        timestamp = nextId.toLong(),
-        fromId = fromId,
-        summary = summary,
-        details = details
-    )
+    private fun branchSummaryEntry(summary: String, parentId: String?, fromId: String) =
+        BranchSummaryEntry(
+            id = createId(),
+            parentId = parentId,
+            timestamp = nextId.toLong(),
+            fromId = fromId,
+            summary = summary
+        )
 
     @Test
     fun `collects nothing when there is no old leaf`() {
@@ -259,22 +249,6 @@ class BranchSummarizationTest {
         assertTrue((projected.content[0] as TextContent).text.contains(BRANCH_SUMMARY_SUFFIX))
     }
 
-    @Test
-    fun `nested branch summary details carry into file operations`() {
-        val details = buildJsonObject {
-            putJsonArray("readFiles") { add("a.txt") }
-            putJsonArray("modifiedFiles") {
-                add("b.txt")
-                add("c.txt")
-            }
-        }
-        val summary = branchSummaryEntry("s", parentId = null, fromId = "x", details = details)
-        val preparation = prepareBranchEntries(listOf(summary), tokenBudget = 0)
-        val (readFiles, modifiedFiles) = computeFileLists(preparation.fileOps)
-        assertEquals(listOf("a.txt"), readFiles)
-        assertEquals(listOf("b.txt", "c.txt"), modifiedFiles)
-    }
-
     private class FauxApi : ChatApi {
         val seenContexts = mutableListOf<TranscriptContext>()
         val seenOptions = mutableListOf<SimpleStreamOptions>()
@@ -375,8 +349,6 @@ class BranchSummarizationTest {
             ok.value.summary
         )
         assertEquals(15, ok.value.usage?.totalTokens)
-        assertEquals(emptyList(), ok.value.readFiles)
-        assertEquals(emptyList(), ok.value.modifiedFiles)
 
         assertEquals(
             SUMMARIZATION_SYSTEM_PROMPT,
@@ -421,34 +393,6 @@ class BranchSummarizationTest {
         )
         assertTrue(
             promptText(faux.api.seenContexts[1]).endsWith("</conversation>\n\ncustom prompt")
-        )
-    }
-
-    @Test
-    fun `appends file operations from nested branch summary details`() = runTest {
-        val faux = createFaux()
-        faux.api.responses += fauxAssistantMessage("s")
-        val details = buildJsonObject {
-            putJsonArray("readFiles") { add("read-only.txt") }
-            putJsonArray("modifiedFiles") { add("also-read.txt") }
-        }
-        val entries = listOf(
-            branchSummaryEntry("inner", parentId = null, fromId = "x", details = details),
-            messageEntry(user("tail"))
-        )
-
-        val result = generateBranchSummary(
-            entries,
-            GenerateBranchSummaryOptions(models = faux.models, model = faux.model)
-        )
-
-        val ok = assertIs<BranchSummaryCallResult.Ok>(result)
-        assertEquals(listOf("read-only.txt"), ok.value.readFiles)
-        assertEquals(listOf("also-read.txt"), ok.value.modifiedFiles)
-        assertTrue(
-            ok.value.summary.endsWith(
-                "<read-files>\nread-only.txt\n</read-files>\n\n<modified-files>\nalso-read.txt\n</modified-files>"
-            )
         )
     }
 

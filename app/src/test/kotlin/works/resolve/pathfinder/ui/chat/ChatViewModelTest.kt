@@ -239,24 +239,24 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         vm.awaitState { it.isStreaming }
         vm.awaitStreaming { it.streaming != null }
         val mid = vm.uiState.value
-        assertEquals(2, mid.messages.size)
-        assertEquals("Hello", mid.messages[1].singleText())
-        assertTrue(mid.messages[1].message() is UserMessage)
+        assertEquals(1, mid.messages.size)
+        assertEquals("Hello", mid.messages[0].singleText())
+        assertTrue(mid.messages[0].message() is UserMessage)
         assertFalse(mid.canSend)
         assertEquals("", mid.draft)
 
         gate.complete(Unit)
 
-        vm.awaitState { !it.isStreaming && it.messages.size == 3 }
+        vm.awaitState { !it.isStreaming && it.messages.size == 2 }
         val done = vm.uiState.value
         assertNull(vm.streamingState.value.streaming)
-        assertEquals("world", done.messages[2].singleText())
-        assertTrue(done.messages[2].message() is AssistantMessage)
+        assertEquals("world", done.messages[1].singleText())
+        assertTrue(done.messages[1].message() is AssistantMessage)
         assertNull(done.error)
 
         vm.awaitState {
             it.sessionSummaries.firstOrNull()?.firstMessage == "Hello" &&
-                it.sessionSummaries.firstOrNull()?.messageCount == 3
+                it.sessionSummaries.firstOrNull()?.messageCount == 2
         }
         vm.onDraftChange("next")
         assertTrue(vm.uiState.value.canSend)
@@ -295,13 +295,13 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
             gate.complete(Unit)
 
-            val done = vm.awaitState { !it.isStreaming && it.messages.size == 5 }
+            val done = vm.awaitState { !it.isStreaming && it.messages.size == 4 }
             // The steering message was delivered as a transcript row (after
             // the first reply, before the steered response)...
-            assertEquals("steer this", done.messages[3].singleText())
-            assertTrue(done.messages[3].message() is UserMessage)
-            assertEquals("steered reply", done.messages[4].singleText())
-            assertTrue(done.messages[4].message() is AssistantMessage)
+            assertEquals("steer this", done.messages[2].singleText())
+            assertTrue(done.messages[2].message() is UserMessage)
+            assertEquals("steered reply", done.messages[3].singleText())
+            assertTrue(done.messages[3].message() is AssistantMessage)
             // ...and the queued rows cleared once delivery began.
             assertTrue(done.queued.steering.isEmpty())
             assertNull(done.error)
@@ -373,15 +373,15 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
         vm.stop()
 
-        vm.awaitState { !it.isStreaming && it.messages.size == 3 }
+        vm.awaitState { !it.isStreaming && it.messages.size == 2 }
         val state = vm.uiState.value
         assertEquals(ChatStatus.Ready, state.status)
-        assertTrue(state.messages[2].message() is AssistantMessage)
-        assertNotNull(state.messages[2].errorMessage())
+        assertTrue(state.messages[1].message() is AssistantMessage)
+        assertNotNull(state.messages[1].errorMessage())
         val sessionId = state.activeSessionId!!
         vm.awaitState {
             it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount ==
-                3
+                2
         }
 
         vm.closeForTest()
@@ -414,7 +414,6 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             summary = "SUMMARY",
             firstKeptEntryId = session.sessionManager.getLeafId()!!,
             tokensBefore = 190_010,
-            details = null,
             usage = null
         )
         session.agent.processEvent(
@@ -457,16 +456,16 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.onDraftChange("Hello")
             vm.send()
 
-            vm.awaitState { !it.isStreaming && it.messages.size == 3 }
+            vm.awaitState { !it.isStreaming && it.messages.size == 2 }
             val state = vm.uiState.value
             assertNull(state.retryStatus)
-            assertTrue(state.messages[2].message() is AssistantMessage)
-            assertNull(state.messages[2].errorMessage())
+            assertTrue(state.messages[1].message() is AssistantMessage)
+            assertNull(state.messages[1].errorMessage())
 
             val sessionId = state.activeSessionId!!
             vm.awaitState {
                 it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount ==
-                    4
+                    3
             }
 
             vm.closeForTest()
@@ -495,9 +494,9 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         // per-run flag already reports idle.
         vm.awaitState { it.isStreaming && it.retryStatus != null }
 
-        vm.awaitState { !it.isStreaming && it.messages.size == 3 && it.retryStatus == null }
+        vm.awaitState { !it.isStreaming && it.messages.size == 2 && it.retryStatus == null }
         val state = vm.uiState.value
-        assertTrue(state.messages[2].message() is AssistantMessage)
+        assertTrue(state.messages[1].message() is AssistantMessage)
         vm.closeForTest()
     }
 
@@ -513,16 +512,16 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         vm.onDraftChange("Hello")
         vm.send()
 
-        vm.awaitState { !it.isStreaming && it.messages.size == 3 }
+        vm.awaitState { !it.isStreaming && it.messages.size == 2 }
         val state = vm.uiState.value
         // Agent-run errors render as transcript rows only (pi's contract);
         // the snackbar error stays reserved for ViewModel-sourced failures.
         assertNull(state.error)
-        assertNotNull(state.messages[2].errorMessage())
+        assertNotNull(state.messages[1].errorMessage())
         val sessionId = state.activeSessionId!!
         vm.awaitState {
             it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount ==
-                3
+                2
         }
 
         vm.onDraftChange("Again")
@@ -536,9 +535,9 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             )
         )
         vm.send()
-        vm.awaitState { !it.isStreaming && it.messages.size == 5 }
+        vm.awaitState { !it.isStreaming && it.messages.size == 4 }
         assertNull(vm.uiState.value.error)
-        assertNull(vm.uiState.value.messages[4].errorMessage())
+        assertNull(vm.uiState.value.messages[3].errorMessage())
 
         vm.closeForTest()
     }
@@ -555,18 +554,18 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         h.scriptedStreams.add(h.gatedStream("world", gate))
         vm.onDraftChange("Hello")
         vm.send()
-        vm.awaitState { !it.isStreaming && it.messages.size == 3 }
+        vm.awaitState { !it.isStreaming && it.messages.size == 2 }
         val originalId = vm.uiState.value.activeSessionId
         vm.awaitState {
             it.sessionSummaries.firstOrNull { s -> s.id == originalId }?.messageCount ==
-                3
+                2
         }
         vm.closeForTest()
 
         val vm2 = h.newViewModel()
         val state = vm2.awaitState { it.status == ChatStatus.Ready }
         assertEquals(originalId, state.activeSessionId)
-        assertEquals(3, state.messages.size)
+        assertEquals(2, state.messages.size)
         // Summaries land asynchronously after Ready; wait for the build.
         vm2.awaitState { it.sessionSummaries.any { s -> s.id == originalId } }
         assertEquals(
@@ -590,9 +589,9 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         h.scriptedStreams.add(h.gatedStream("world", gate))
         vm.onDraftChange("Hello")
         vm.send()
-        vm.awaitState { !it.isStreaming && it.messages.size == 3 }
+        vm.awaitState { !it.isStreaming && it.messages.size == 2 }
         vm.awaitState {
-            it.sessionSummaries.firstOrNull { s -> s.id == firstId }?.messageCount == 3
+            it.sessionSummaries.firstOrNull { s -> s.id == firstId }?.messageCount == 2
         }
 
         vm.newSession()
@@ -606,8 +605,8 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         assertTrue(fresh.sessionSummaries.none { it.id == fresh.activeSessionId })
 
         vm.switchSession(firstId)
-        val restored = vm.awaitState { it.activeSessionId == firstId && it.messages.size == 3 }
-        assertEquals("Hello", restored.messages[1].singleText())
+        val restored = vm.awaitState { it.activeSessionId == firstId && it.messages.size == 2 }
+        assertEquals("Hello", restored.messages[0].singleText())
 
         vm.closeForTest()
     }
@@ -625,7 +624,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         // draft dance get an exchange first.
         vm.exchange(h, "Hello", "world")
         vm.awaitState {
-            it.sessionSummaries.firstOrNull { s -> s.id == firstId }?.messageCount == 3
+            it.sessionSummaries.firstOrNull { s -> s.id == firstId }?.messageCount == 2
         }
 
         vm.onDraftChange("typed in first")
@@ -635,7 +634,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
         vm.exchange(h, "Second", "reply")
         vm.awaitState {
-            it.sessionSummaries.firstOrNull { s -> s.id == secondId }?.messageCount == 3
+            it.sessionSummaries.firstOrNull { s -> s.id == secondId }?.messageCount == 2
         }
 
         vm.onDraftChange("typed in second")
@@ -668,7 +667,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         vm.exchange(h, "Hello", "world")
         vm.awaitState {
             it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount ==
-                3
+                2
         }
         val userEntryId = vm.uiState.value.treeRows
             .first {
@@ -702,7 +701,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             h.scriptedStreams.add(h.gatedStream("world", gate))
             vm.onDraftChange("Hello")
             vm.send()
-            vm.awaitState { !it.isStreaming && it.messages.size == 3 }
+            vm.awaitState { !it.isStreaming && it.messages.size == 2 }
 
             val session = h.createdAgents.single()
             val call = AssistantMessage(
@@ -722,11 +721,11 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             )
             session.agent.processEvent(AgentEvent.MessageStart(call))
             session.agent.processEvent(AgentEvent.MessageEnd(call))
-            waitUntil { vm.uiState.value.messages.size == 5 }
+            waitUntil { vm.uiState.value.messages.size == 4 }
 
             // The row exists as soon as the call commits — resultless while
             // the execution runs, never absent in between.
-            val runningRow = vm.uiState.value.messages[4] as TranscriptRow.Tool
+            val runningRow = vm.uiState.value.messages[3] as TranscriptRow.Tool
             assertEquals("call-1", runningRow.call.id)
             assertEquals("get_weather", runningRow.call.name)
             assertNull(runningRow.result)
@@ -744,7 +743,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
                     isError = false
                 )
             )
-            val settledRow = vm.uiState.value.messages[4] as TranscriptRow.Tool
+            val settledRow = vm.uiState.value.messages[3] as TranscriptRow.Tool
             assertEquals(runningRow.id, settledRow.id)
             assertNull(settledRow.result)
 
@@ -757,7 +756,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             session.agent.processEvent(AgentEvent.MessageStart(ok))
             session.agent.processEvent(AgentEvent.MessageEnd(ok))
             waitUntil {
-                vm.uiState.value.messages.size == 5 &&
+                vm.uiState.value.messages.size == 4 &&
                     vm.streamingState.value.streaming == null
             }
 
@@ -766,7 +765,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             // live-keyed pending id to the entry id — when the append
             // landed at this projection; result joins and the later error
             // update keep that settled id (no remove-and-re-add).
-            val okRow = vm.uiState.value.messages[4] as TranscriptRow.Tool
+            val okRow = vm.uiState.value.messages[3] as TranscriptRow.Tool
             assertEquals("call-1", okRow.call.id)
             val okResult = okRow.result!!
             assertEquals("call-1", okResult.toolCallId)
@@ -787,10 +786,10 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             session.agent.processEvent(AgentEvent.MessageStart(failed))
             session.agent.processEvent(AgentEvent.MessageEnd(failed))
             waitUntil {
-                (vm.uiState.value.messages[4] as TranscriptRow.Tool).result?.isError == true
+                (vm.uiState.value.messages[3] as TranscriptRow.Tool).result?.isError == true
             }
 
-            val errorRow = vm.uiState.value.messages[4] as TranscriptRow.Tool
+            val errorRow = vm.uiState.value.messages[3] as TranscriptRow.Tool
             assertEquals(okRow.id, errorRow.id)
             assertEquals("boom\nexit 1", errorRow.result!!.content.textContent())
 
@@ -910,14 +909,14 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         vm.onDraftChange("   ")
         assertFalse(vm.uiState.value.canSend)
         vm.send()
-        assertEquals(2, vm.uiState.value.messages.size)
+        assertEquals(1, vm.uiState.value.messages.size)
 
         gate.complete(Unit)
-        vm.awaitState { !it.isStreaming && it.messages.size == 3 }
+        vm.awaitState { !it.isStreaming && it.messages.size == 2 }
         // Wait for the final persistence before tearing the scope down.
         vm.awaitState {
             it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount ==
-                3
+                2
         }
 
         vm.closeForTest()
@@ -938,7 +937,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         h.scriptedStreams.add(h.gatedStream("world", gate))
         vm.onDraftChange("Hello")
         vm.send()
-        vm.awaitState { !it.isStreaming && it.messages.size == 3 }
+        vm.awaitState { !it.isStreaming && it.messages.size == 2 }
 
         vm.newSession()
         val state = vm.awaitState { it.activeSessionId != firstId }
@@ -947,7 +946,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         // The finished transcript stays with the old session; the freshly
         // adopted one starts empty and unlisted (never flushed).
         assertTrue(state.messages.isEmpty())
-        assertEquals(3, state.sessionSummaries.first { s -> s.id == firstId }.messageCount)
+        assertEquals(2, state.sessionSummaries.first { s -> s.id == firstId }.messageCount)
 
         h.scriptedStreams.add(
             h.gatedStream(
@@ -959,9 +958,9 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         )
         vm.onDraftChange("Second")
         vm.send()
-        vm.awaitState { !it.isStreaming && it.messages.size == 3 }
+        vm.awaitState { !it.isStreaming && it.messages.size == 2 }
         vm.awaitState {
-            it.sessionSummaries.firstOrNull { s -> s.id == secondId }?.messageCount == 3
+            it.sessionSummaries.firstOrNull { s -> s.id == secondId }?.messageCount == 2
         }
 
         vm.closeForTest()
@@ -1060,7 +1059,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.sessionSummaries.size == 1 }
             val listed = vm.uiState.value.sessionSummaries.single()
             assertEquals(firstId, listed.id)
-            assertEquals(3, listed.messageCount)
+            assertEquals(2, listed.messageCount)
             assertEquals("Hello", listed.firstMessage)
 
             // A new chat has no drawer row until its first assistant commit.
@@ -1079,7 +1078,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.stop()
             vm.awaitState {
                 it.sessionSummaries.any { s ->
-                    s.id == fresh.activeSessionId && s.messageCount == 3
+                    s.id == fresh.activeSessionId && s.messageCount == 2
                 }
             }
 
@@ -1147,28 +1146,28 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.exchange(h, "Again", "fine")
             vm.awaitState {
                 it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount ==
-                    5
+                    4
             }
-            assertEquals(5, vm.uiState.value.treeRows.size)
+            assertEquals(4, vm.uiState.value.treeRows.size)
             assertTrue(vm.uiState.value.treeRows.last().isCurrentLeaf)
 
             // Transcript truncates to the root..entry path; tree rows keep every
             // entry.
-            val assistantEntryId = vm.uiState.value.treeRows[2].id
+            val assistantEntryId = vm.uiState.value.treeRows[1].id
             vm.navigateToTreeEntry(assistantEntryId)
-            val truncated = vm.awaitState { it.messages.size == 3 }
-            assertEquals(5, truncated.treeRows.size)
+            val truncated = vm.awaitState { it.messages.size == 2 }
+            assertEquals(4, truncated.treeRows.size)
             assertEquals(assistantEntryId, truncated.treeRows.first { it.isCurrentLeaf }.id)
             assertTrue(truncated.treeRows[0].isOnActivePath)
-            assertFalse(truncated.treeRows[4].isOnActivePath)
-            assertEquals("world", truncated.messages[2].singleText())
+            assertFalse(truncated.treeRows[3].isOnActivePath)
+            assertEquals("world", truncated.messages[1].singleText())
 
             // A new exchange from here forks: the new user message becomes a
             // sibling of the old one under the same assistant entry.
             vm.exchange(h, "Third", "forked")
             vm.awaitState {
-                it.messages.size == 5 &&
-                    it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount == 7
+                it.messages.size == 4 &&
+                    it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount == 6
             }
 
             vm.closeForTest()
@@ -1179,9 +1178,9 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             }
             // The reload resumes at the last entry in file order: the fork's
             // branch, with every entry still in the tree panel.
-            assertEquals(5, restored.messages.size)
-            assertEquals("Third", restored.messages[3].singleText())
-            assertEquals(7, restored.treeRows.size)
+            assertEquals(4, restored.messages.size)
+            assertEquals("Third", restored.messages[2].singleText())
+            assertEquals(6, restored.treeRows.size)
             vm2.closeForTest()
         }
 
@@ -1198,33 +1197,32 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.exchange(h, "Hello", "world")
             vm.awaitState {
                 it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount ==
-                    3
+                    2
             }
 
-            // Re-edit: the leaf resets onto the prompt baseline entry (the
-            // first user message's parent); the tree keeps every entry.
-            val userEntryId = vm.uiState.value.treeRows[1].id
+            // Re-edit: the leaf resets onto the first user message's parent
+            // (the root); the tree keeps every entry.
+            val userEntryId = vm.uiState.value.treeRows[0].id
             vm.navigateToTreeEntry(userEntryId)
             val reedit = vm.awaitState { it.draft == "Hello" }
-            assertEquals(1, reedit.messages.size)
-            assertEquals(3, reedit.treeRows.size)
+            assertEquals(0, reedit.messages.size)
+            assertEquals(2, reedit.treeRows.size)
             assertTrue(reedit.canSend)
 
-            // The next send appends as a sibling under the prompt baseline,
-            // not a child of the old exchange.
+            // The next send appends as a sibling under the root, not a
+            // child of the old exchange.
             vm.exchange(h, "Hello edited", "rewritten")
             val resent = vm.awaitState {
-                it.messages.size == 3 &&
-                    it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount == 5
+                it.messages.size == 2 &&
+                    it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount == 4
             }
-            assertEquals("Hello edited", resent.messages[1].singleText())
+            assertEquals("Hello edited", resent.messages[0].singleText())
 
             val rows = vm.uiState.value.treeRows
-            assertEquals(5, rows.size)
+            assertEquals(4, rows.size)
             assertTrue(rows[1].isCurrentLeaf || rows[2].isCurrentLeaf)
-            // The re-edit forked as a sibling of the original user message,
-            // the active branch sorting first.
-            assertEquals(rows[3].path.first(), rows[1].path.first())
+            // The re-edit forked from the root: both user messages are roots.
+            assertEquals(2, rows.count { it.path.size == 1 })
 
             vm.closeForTest()
         }
@@ -1238,15 +1236,15 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         vm.awaitState { it.status == ChatStatus.Ready }
 
         vm.exchange(h, "Hello", "world")
-        vm.awaitState { it.treeRows.size == 3 }
+        vm.awaitState { it.treeRows.size == 2 }
 
         vm.onDraftChange("half-typed draft")
-        val userEntryId = vm.uiState.value.treeRows[1].id
+        val userEntryId = vm.uiState.value.treeRows[0].id
         vm.navigateToTreeEntry(userEntryId)
 
         // Navigation loads the re-edit text only into an empty draft; a typed
         // draft is never clobbered.
-        val state = vm.awaitState { it.messages.size == 1 }
+        val state = vm.awaitState { it.messages.size == 0 }
         assertEquals("half-typed draft", state.draft)
 
         vm.closeForTest()
@@ -1266,12 +1264,12 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
             vm.navigateToTreeEntry(leafId)
             vm.awaitState { it.error == UiString(R.string.error_already_at_point) }
-            assertEquals(3, vm.uiState.value.messages.size)
+            assertEquals(2, vm.uiState.value.messages.size)
             vm.dismissError()
 
             vm.navigateToTreeEntry("no-such-entry")
             vm.awaitState { it.error != null }
-            assertEquals(3, vm.uiState.value.messages.size)
+            assertEquals(2, vm.uiState.value.messages.size)
 
             vm.closeForTest()
         }
@@ -1295,12 +1293,12 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
         vm.navigateToTreeEntry(firstEntry)
         vm.awaitState { it.error != null }
-        assertEquals(4, vm.uiState.value.messages.size) // user message already committed
+        assertEquals(3, vm.uiState.value.messages.size) // user message already committed
         vm.dismissError()
 
         gate.complete(Unit)
-        vm.awaitState { !it.isStreaming && it.messages.size == 5 }
-        vm.awaitState { it.sessionSummaries.firstOrNull()?.messageCount == 5 }
+        vm.awaitState { !it.isStreaming && it.messages.size == 4 }
+        vm.awaitState { it.sessionSummaries.firstOrNull()?.messageCount == 4 }
 
         vm.closeForTest()
     }
@@ -1319,7 +1317,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         assertEquals(1, filtered.size)
         assertEquals("You: Hello", (filtered[0].body as TreeRowBody.Text).preview)
         vm.setTreeFilter(TreeFilter.DEFAULT)
-        assertEquals(3, vm.uiState.value.treeRows.size)
+        assertEquals(2, vm.uiState.value.treeRows.size)
 
         vm.closeForTest()
     }

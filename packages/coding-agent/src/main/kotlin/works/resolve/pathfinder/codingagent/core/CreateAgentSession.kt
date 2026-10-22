@@ -66,8 +66,6 @@ suspend fun createAgentSession(
     hasConfiguredAuth: suspend (providerId: String) -> Boolean,
     streamFn: StreamFn,
     tools: List<AgentTool> = emptyList(),
-    /** Working directory threaded to the session's system-prompt cwd line. */
-    cwd: String = "",
     streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
     /** Dispatcher for the session's prompt loop; see [AgentSession]. */
     loopDispatcher: CoroutineDispatcher = Dispatchers.Default
@@ -168,11 +166,9 @@ suspend fun createAgentSession(
             tools = emptyList(),
             streamFn = streamFn
         )
-    // pi passes initialState {systemPrompt: "", tools: []}: the prompt and
-    // tool loadout are transcript state, applied by the session's
-    // prompt-time loadout preparation — never seeded here. pi applies the
-    // resolved thinking level in the Agent's initialState; the Agent
-    // constructor has no level parameter, so it is applied right after.
+    // pi applies the resolved thinking level in the Agent's initialState;
+    // the Agent constructor has no level parameter, so it is applied right
+    // after.
     agent.setThinkingLevel(thinkingLevel)
 
     if (hasExistingSession) {
@@ -191,7 +187,6 @@ suspend fun createAgentSession(
         settingsManager = settingsManager,
         scopedModels = scopedModels,
         tools = tools,
-        cwd = cwd,
         models = models,
         loopDispatcher = loopDispatcher
     )

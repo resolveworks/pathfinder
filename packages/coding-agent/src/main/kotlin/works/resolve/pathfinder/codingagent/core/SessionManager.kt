@@ -35,7 +35,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
-import works.resolve.pathfinder.agent.CompactionDetails
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
 import works.resolve.pathfinder.ai.Content
@@ -55,7 +54,6 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.constrainedSamplingToJson
-import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
@@ -95,9 +93,7 @@ data class MessageEntry(
 /**
  * A compaction cut: the summary replacing the compacted history and the id
  * of the first entry kept after it (entries between the previous leaf path
- * root and that id are summarized away). [systemMessage] is the complete
- * prompt and tool state replayed at this boundary; it leads the compacted
- * context in place of the system messages dropped from the kept cut.
+ * root and that id are summarized away).
  */
 data class CompactionEntry(
     override val id: String,
@@ -106,11 +102,8 @@ data class CompactionEntry(
     val summary: String,
     val firstKeptEntryId: String,
     val tokensBefore: Int,
-    /** File-operation details of the compacted history. */
-    val details: CompactionDetails? = null,
     /** Usage from the LLM call(s) that generated this summary. */
-    val usage: Usage? = null,
-    val systemMessage: SystemMessage? = null
+    val usage: Usage? = null
 ) : SessionEntry()
 
 /**
@@ -142,7 +135,6 @@ data class BranchSummaryEntry(
     override val timestamp: Long,
     val fromId: String,
     val summary: String,
-    val details: kotlinx.serialization.json.JsonElement? = null,
     /** Usage from the LLM call(s) that generated this summary. */
     val usage: Usage? = null
 ) : SessionEntry()
@@ -272,10 +264,8 @@ data class SessionContext(
 fun sessionEntryToContextMessages(entry: SessionEntry): List<Message> = when (entry) {
     is MessageEntry -> listOf(entry.message)
 
-    is CompactionEntry -> buildList {
-        entry.systemMessage?.let(::add)
-        add(createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp))
-    }
+    is CompactionEntry ->
+        listOf(createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp))
 
     // Upstream guards summary truthiness; with a non-null summary here, that
     // reduces to excluding the empty string.
@@ -314,10 +304,7 @@ fun buildContextEntries(
     for (i in 0 until compactionIndex) {
         val entry = pathEntries[i]
         if (entry.id == compaction!!.firstKeptEntryId) foundFirstKept = true
-        // System messages among the kept entries are dropped: the compaction
-        // entry's systemMessage already carries their replay.
-        val isSystemMessage = entry is MessageEntry && entry.message is SystemMessage
-        if (foundFirstKept && !isSystemMessage) contextEntries.add(entry)
+        if (foundFirstKept) contextEntries.add(entry)
     }
     contextEntries.addAll(pathEntries.subList(compactionIndex + 1, pathEntries.size))
     return contextEntries
@@ -365,12 +352,6 @@ data class SessionInfo(
  * of optional fields, absent optionals are omitted, never materialized.
  *
  * Divergences from pi:
- * - `cwd` carries the session's working directory (a connected SSH remote,
- *   annotated app-side) or the empty string when there is none; unlike pi's
- *   constructor-time `process.cwd()`, it is supplied after construction via
- *   [updateCwd] because the SSH connection is established after the manager
- *   exists. Updates land before the header line's lazy first persistence;
- *   the persisted header stays immutable like pi's.
  * - Decode is permissive like pi's parseSessionEntryLine but entry payloads
  *   decode into typed [SessionEntry]s: any line that fails typed decode is
  *   skipped. Unported entry `type`s decode as [RawEntry]s retained verbatim
@@ -382,7 +363,7 @@ data class SessionInfo(
 internal object JsonlCodec {
     const val SESSION_VERSION = 3
 
-    data class SessionHeader(val id: String, val timestamp: Long, val cwd: String = "")
+    data class SessionHeader(val id: String, val timestamp: Long)
 
     /** Header or entry produced by one line. */
     sealed interface Line {
@@ -467,7 +448,6 @@ internal object JsonlCodec {
         put("version", SESSION_VERSION)
         put("id", header.id)
         put("timestamp", formatIso(header.timestamp))
-        put("cwd", header.cwd)
     }.toString() + "\n"
 
     fun encodeEntryLine(entry: SessionEntry): String {
@@ -488,14 +468,7 @@ internal object JsonlCodec {
                     put("summary", entry.summary)
                     put("firstKeptEntryId", entry.firstKeptEntryId)
                     put("tokensBefore", entry.tokensBefore)
-                    entry.details?.let {
-                        putJsonObject("details") {
-                            put("readFiles", JsonArray(it.readFiles.map(::JsonPrimitive)))
-                            put("modifiedFiles", JsonArray(it.modifiedFiles.map(::JsonPrimitive)))
-                        }
-                    }
                     entry.usage?.let { put("usage", encodeUsage(it)) }
-                    entry.systemMessage?.let { put("systemMessage", encodeMessage(it)) }
                 }
 
                 is ModelChangeEntry -> {
@@ -513,7 +486,6 @@ internal object JsonlCodec {
                     put("type", "branch_summary")
                     put("fromId", entry.fromId)
                     put("summary", entry.summary)
-                    entry.details?.let { put("details", it) }
                     entry.usage?.let { put("usage", encodeUsage(it)) }
                 }
             }
@@ -533,8 +505,7 @@ internal object JsonlCodec {
                 "session" -> {
                     val id = obj.string("id") ?: return null
                     val timestamp = obj.string("timestamp")?.let(::parseIso) ?: return null
-                    val cwd = obj.string("cwd") ?: ""
-                    Line.Header(SessionHeader(id, timestamp, cwd))
+                    Line.Header(SessionHeader(id, timestamp))
                 }
 
                 "message", "compaction", "model_change", "thinking_level_change",
@@ -566,11 +537,7 @@ internal object JsonlCodec {
                 summary = obj.string("summary") ?: invalid(),
                 firstKeptEntryId = obj.string("firstKeptEntryId") ?: invalid(),
                 tokensBefore = obj.strictDouble("tokensBefore")?.toInt() ?: invalid(),
-                details = decodeDetails(obj["details"]),
-                usage = obj["usage"]?.let(::decodeUsage),
-                systemMessage = obj["systemMessage"]?.let {
-                    decodeMessage(it, timestamp) as? SystemMessage ?: invalid()
-                }
+                usage = obj["usage"]?.let(::decodeUsage)
             )
 
             "model_change" -> ModelChangeEntry(
@@ -594,7 +561,6 @@ internal object JsonlCodec {
                 timestamp = timestamp,
                 fromId = obj.string("fromId") ?: invalid(),
                 summary = obj.string("summary") ?: invalid(),
-                details = obj["details"],
                 usage = obj["usage"]?.let(::decodeUsage)
             )
 
@@ -611,16 +577,6 @@ internal object JsonlCodec {
         val parentId = (obj["parentId"] as? JsonPrimitive)?.takeIf { it.isString }?.content
         val timestamp = obj.string("timestamp")?.let(::parseIso) ?: invalid()
         return RawEntry(id, parentId, timestamp, obj)
-    }
-
-    private fun decodeDetails(
-        element: kotlinx.serialization.json.JsonElement?
-    ): CompactionDetails? {
-        val obj = element as? JsonObject ?: return null
-        return CompactionDetails(
-            readFiles = decodeStringList(obj["readFiles"]),
-            modifiedFiles = decodeStringList(obj["modifiedFiles"])
-        )
     }
 
     private fun invalid(reason: String = "malformed session line"): Nothing =
@@ -869,11 +825,6 @@ internal object JsonlCodec {
         }
     }
 
-    private fun decodeStringList(element: kotlinx.serialization.json.JsonElement?): List<String> {
-        val array = element as? JsonArray ?: return emptyList()
-        return array.mapNotNull { it.stringOrNull() }
-    }
-
     private fun kotlinx.serialization.json.JsonObjectBuilder.putUsage(usage: Usage) {
         put("input", usage.input)
         put("output", usage.output)
@@ -1069,18 +1020,6 @@ class SessionManager private constructor(
 
     private fun now(): Long = clock.now().toEpochMilliseconds()
 
-    /**
-     * pi fixes the header cwd at construction from process.cwd(); Android
-     * has none, and the session's cwd (the SSH remote) is only known once
-     * the app factory has connected. [writeFullFileLocked] reads [header]
-     * under the persistence mutex, so a value set before the lazy first
-     * flush lands in the persisted header line; a later update cannot
-     * rewrite an already-persisted header, matching pi's immutable header.
-     */
-    fun updateCwd(cwd: String) {
-        header = header.copy(cwd = cwd)
-    }
-
     private fun encodeLine(entry: SessionEntry): String = JsonlCodec.encodeEntryLine(entry)
 
     /** pi's openSync "wx" for the lazy creation; truncation only rewrites an adopted empty file. */
@@ -1171,7 +1110,6 @@ class SessionManager private constructor(
         summary: String,
         firstKeptEntryId: String,
         tokensBefore: Int,
-        details: CompactionDetails?,
         usage: Usage?
     ) {
         appendEntry { id, parentId, timestamp ->
@@ -1182,10 +1120,7 @@ class SessionManager private constructor(
                 summary,
                 firstKeptEntryId,
                 tokensBefore,
-                details,
-                usage,
-                systemMessage = getCurrentSystemMessage(buildSessionContext().messages)
-                    ?.copy(timestamp = timestamp)
+                usage
             )
         }
     }
@@ -1215,34 +1150,29 @@ class SessionManager private constructor(
      * the leaf moves to [branchFromId], and the entry is appended as its
      * child. Returns the entry id.
      */
-    suspend fun branchWithSummary(
-        branchFromId: String?,
-        summary: String,
-        details: kotlinx.serialization.json.JsonElement?,
-        usage: Usage?
-    ): String = withContext(ioDispatcher) {
-        mutex.withLock {
-            if (branchFromId != null && !byId.containsKey(branchFromId)) {
-                throw SessionError(SessionErrorCode.NOT_FOUND, "Entry $branchFromId not found")
+    suspend fun branchWithSummary(branchFromId: String?, summary: String, usage: Usage?): String =
+        withContext(ioDispatcher) {
+            mutex.withLock {
+                if (branchFromId != null && !byId.containsKey(branchFromId)) {
+                    throw SessionError(SessionErrorCode.NOT_FOUND, "Entry $branchFromId not found")
+                }
+                val fromId = leafIdLocked ?: "root"
+                leafIdLocked = branchFromId
+                val entry = BranchSummaryEntry(
+                    id = generateId(),
+                    parentId = branchFromId,
+                    timestamp = now(),
+                    fromId = fromId,
+                    summary = summary,
+                    usage = usage
+                )
+                byId[entry.id] = entry
+                leafIdLocked = entry.id
+                rebuildSnapshot()
+                persistLocked(entry)
+                entry.id
             }
-            val fromId = leafIdLocked ?: "root"
-            leafIdLocked = branchFromId
-            val entry = BranchSummaryEntry(
-                id = generateId(),
-                parentId = branchFromId,
-                timestamp = now(),
-                fromId = fromId,
-                summary = summary,
-                details = details,
-                usage = usage
-            )
-            byId[entry.id] = entry
-            leafIdLocked = entry.id
-            rebuildSnapshot()
-            persistLocked(entry)
-            entry.id
         }
-    }
 
     // =========================================================================
     // Reads (pi's tree traversal and context projection)
@@ -1678,9 +1608,6 @@ class SessionManager private constructor(
          * [File.lastModified] in [dir], or null when none. Candidates are
          * ordered by mtime so the first file with a valid session header
          * wins — headers are read newest-first, not for every file.
-         * Divergence: pi optionally filters sessions by header cwd;
-         * sessions here share one unscoped directory, so that filter is
-         * omitted.
          */
         suspend fun findMostRecentSession(
             dir: File,

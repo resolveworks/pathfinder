@@ -6,54 +6,6 @@ import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.utils.contentText
-import works.resolve.pathfinder.ai.utils.string
-
-/** File paths touched by a session branch or compaction range. */
-data class FileOperations(
-    /** Files read but not necessarily modified. */
-    val read: MutableSet<String>,
-    val written: MutableSet<String>,
-    val edited: MutableSet<String>
-)
-
-fun createFileOps(): FileOperations = FileOperations(mutableSetOf(), mutableSetOf(), mutableSetOf())
-
-fun extractFileOpsFromMessage(message: Message, fileOps: FileOperations) {
-    if (message !is AssistantMessage) return
-
-    for (block in message.content) {
-        if (block !is ToolCall) continue
-
-        val path = block.arguments.string("path") ?: continue
-
-        when (block.name) {
-            "read" -> fileOps.read.add(path)
-            "write" -> fileOps.written.add(path)
-            "edit" -> fileOps.edited.add(path)
-        }
-    }
-}
-
-fun computeFileLists(fileOps: FileOperations): Pair<List<String>, List<String>> {
-    val modified = mutableSetOf<String>()
-    modified.addAll(fileOps.edited)
-    modified.addAll(fileOps.written)
-    val readOnly = fileOps.read.filterNot { it in modified }.sorted()
-    val modifiedFiles = modified.sorted()
-    return readOnly to modifiedFiles
-}
-
-fun formatFileOperations(readFiles: List<String>, modifiedFiles: List<String>): String {
-    val sections = mutableListOf<String>()
-    if (readFiles.isNotEmpty()) {
-        sections.add("<read-files>\n${readFiles.joinToString("\n")}\n</read-files>")
-    }
-    if (modifiedFiles.isNotEmpty()) {
-        sections.add("<modified-files>\n${modifiedFiles.joinToString("\n")}\n</modified-files>")
-    }
-    if (sections.isEmpty()) return ""
-    return "\n\n${sections.joinToString("\n\n")}"
-}
 
 private const val TOOL_RESULT_MAX_CHARS = 2000
 

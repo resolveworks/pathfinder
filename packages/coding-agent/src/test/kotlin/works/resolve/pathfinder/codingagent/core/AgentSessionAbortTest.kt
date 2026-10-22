@@ -269,7 +269,7 @@ class AgentSessionAbortTest {
     @Test
     fun `post-abort threshold compaction runs before the aborted final turn`() = runTest {
         val faux = FauxProvider(model = model)
-        val largeResult = "large-tool-result:" + "x".repeat(6_800)
+        val largeResult = "large-tool-result:" + "x".repeat(8_000)
         val largeTool = object : AgentTool {
             override val definition = Tool(
                 "large_result",
@@ -302,7 +302,6 @@ class AgentSessionAbortTest {
         val session = AgentSession(
             agent = Agent(
                 model = model,
-                systemPrompt = "You are a test assistant.",
                 tools = listOf(largeTool, slowTool),
                 streamFn = modelsStreamFn(faux.models)
             ),

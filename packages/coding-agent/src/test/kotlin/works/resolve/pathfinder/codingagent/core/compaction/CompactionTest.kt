@@ -9,7 +9,6 @@ import kotlin.test.assertTrue
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import works.resolve.pathfinder.agent.CompactionDetails
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.StopReason
@@ -272,9 +271,9 @@ class CompactionTest {
         assertTrue(estimateTokens(assistantWithThinkingAndTool) > 0)
         assertTrue(estimateTokens(toolResultWithImage) > 1000)
         // pi's estimator has no system case, so system messages estimate 0
-        // (see estimateTokens in Compaction.kt); custom/bashExecution roles
-        // have no pathfinder counterpart, and the summary roles are estimated
-        // from their entries (estimateEntryTokens) — the wrapped user-message
+        // (see estimateTokens in Compaction.kt); custom roles have no
+        // pathfinder counterpart, and the summary roles are estimated from
+        // their entries (estimateEntryTokens) — the wrapped user-message
         // projections asserted here keep the message-level chars/4 estimate.
         assertEquals(
             0,
@@ -374,89 +373,6 @@ class CompactionTest {
                 """[Assistant tool calls]: read(path="file.ts")""",
             result
         )
-    }
-
-    @Test
-    fun `extracts file operations from tool calls`() {
-        val assistantWithCalls = AssistantMessage(
-            content = listOf(
-                ToolCall(
-                    id = "1",
-                    name = "read",
-                    arguments = buildJsonObject { put("path", "a.ts") }
-                ),
-                ToolCall(
-                    id = "2",
-                    name = "write",
-                    arguments = buildJsonObject { put("path", "b.ts") }
-                ),
-                ToolCall(
-                    id = "3",
-                    name = "edit",
-                    arguments = buildJsonObject { put("path", "c.ts") }
-                ),
-                ToolCall(
-                    id = "4",
-                    name = "read",
-                    arguments = buildJsonObject { put("other", "no path") }
-                ),
-                ToolCall(id = "5", name = "read", arguments = JsonObject(emptyMap()))
-            ),
-            api = "anthropic-messages",
-            provider = "anthropic",
-            model = "claude-sonnet-4-5",
-            stopReason = StopReason.STOP
-        )
-
-        val fileOps = extractFileOperations(listOf(assistantWithCalls))
-        assertEquals(setOf("a.ts"), fileOps.read)
-        assertEquals(setOf("b.ts"), fileOps.written)
-        assertEquals(setOf("c.ts"), fileOps.edited)
-    }
-
-    @Test
-    fun `extractFileOperations carries previous compaction details`() {
-        val assistant = AssistantMessage(
-            content = listOf(
-                ToolCall(
-                    id = "1",
-                    name = "read",
-                    arguments = buildJsonObject { put("path", "new.ts") }
-                )
-            ),
-            api = "anthropic-messages",
-            provider = "anthropic",
-            model = "claude-sonnet-4-5",
-            stopReason = StopReason.STOP
-        )
-        val fileOps = extractFileOperations(
-            listOf(assistant),
-            prevCompactionDetails = CompactionDetails(
-                readFiles = listOf("old-read.ts"),
-                modifiedFiles = listOf("old-edit.ts")
-            )
-        )
-        assertEquals(setOf("old-read.ts", "new.ts"), fileOps.read)
-        assertEquals(setOf("old-edit.ts"), fileOps.edited)
-    }
-
-    @Test
-    fun `computes and formats file lists`() {
-        val fileOps = createFileOps()
-        fileOps.read.add("read-only.ts")
-        fileOps.read.add("both.ts")
-        fileOps.edited.add("both.ts")
-        fileOps.written.add("written.ts")
-
-        val (readFiles, modifiedFiles) = computeFileLists(fileOps)
-        assertEquals(listOf("read-only.ts"), readFiles)
-        assertEquals(listOf("both.ts", "written.ts"), modifiedFiles)
-
-        assertEquals(
-            "\n\n<read-files>\nread-only.ts\n</read-files>\n\n<modified-files>\nboth.ts\nwritten.ts\n</modified-files>",
-            formatFileOperations(readFiles, modifiedFiles)
-        )
-        assertEquals("", formatFileOperations(emptyList(), emptyList()))
     }
 
     @Test

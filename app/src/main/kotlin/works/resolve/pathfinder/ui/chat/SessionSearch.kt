@@ -207,7 +207,7 @@ internal fun matchSession(searchText: String, parsed: ParsedSearchQuery): MatchR
     return MatchResult(matches = true, score = totalScore)
 }
 
-/** Search text mirrors pi's getSearchText, minus name and cwd: sessions can't be named and Android sessions carry no cwd. */
+/** Search text mirrors pi's getSearchText, minus name: sessions can't be named. */
 private fun searchText(session: SessionInfo): String = "${session.id} ${session.allMessagesText}"
 
 internal fun filterAndSortSessions(

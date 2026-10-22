@@ -21,10 +21,9 @@ import works.resolve.pathfinder.ai.UserMessage
  * LLM-ready messages.
  *
  * The remaining upstream surface is deliberately omitted:
- * `BashExecutionMessage`/`bashExecutionToText` (pathfinder has no bash
- * surface) and `CustomMessage`/`createCustomMessage` (no custom-message
- * producer; `CustomEntry` data exists for wire replay only and projects
- * nothing into context).
+ * `CustomMessage`/`createCustomMessage` (no custom-message producer;
+ * `CustomEntry` data exists for wire replay only and projects nothing into
+ * context).
  */
 
 const val COMPACTION_SUMMARY_PREFIX =
