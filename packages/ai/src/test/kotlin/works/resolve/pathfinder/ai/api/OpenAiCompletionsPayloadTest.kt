@@ -104,6 +104,124 @@ class OpenAiCompletionsPayloadTest {
     }
 
     @Test
+    fun `merges request sampling params into the request body`() {
+        val b = body(
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
+            OpenAiCompletionsOptions(
+                apiKey = "k",
+                samplingParams = mapOf(
+                    "top_p" to JsonPrimitive(0.95),
+                    "top_k" to JsonPrimitive(0),
+                    "min_p" to JsonPrimitive(0)
+                )
+            )
+        )
+        assertEquals(0.95, b["top_p"]!!.jsonPrimitive.content.toDouble())
+        assertEquals(0, b["top_k"]!!.jsonPrimitive.longOrNull)
+        assertEquals(0, b["min_p"]!!.jsonPrimitive.longOrNull)
+    }
+
+    @Test
+    fun `applies model sampling params with request keys taking precedence`() {
+        val sampled = model.copy(
+            samplingParams = mapOf(
+                "top_p" to JsonPrimitive(0.95),
+                "min_p" to JsonPrimitive(0.05)
+            )
+        )
+        val b = body(
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
+            OpenAiCompletionsOptions(
+                apiKey = "k",
+                samplingParams = mapOf("top_p" to JsonPrimitive(0.5))
+            ),
+            sampled
+        )
+        assertEquals(0.5, b["top_p"]!!.jsonPrimitive.content.toDouble())
+        assertEquals(0.05, b["min_p"]!!.jsonPrimitive.content.toDouble())
+    }
+
+    @Test
+    fun `applies sampling params for the effective thinking level over model defaults`() {
+        val sampled = model.copy(
+            reasoning = true,
+            thinkingLevelMap = works.resolve.pathfinder.ai.ThinkingLevelMap.of(
+                ModelThinkingLevel.LOW to null,
+                ModelThinkingLevel.MEDIUM to null
+            ),
+            samplingParams = mapOf(
+                "temperature" to JsonPrimitive(1),
+                "top_p" to JsonPrimitive(0.95)
+            ),
+            samplingParamsByThinkingLevel = mapOf(
+                ModelThinkingLevel.HIGH to mapOf(
+                    "temperature" to JsonPrimitive(0.8),
+                    "top_k" to JsonPrimitive(64)
+                )
+            )
+        )
+        val b = body(
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
+            OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.LOW),
+            sampled
+        )
+        assertEquals(0.8, b["temperature"]!!.jsonPrimitive.content.toDouble())
+        assertEquals(0.95, b["top_p"]!!.jsonPrimitive.content.toDouble())
+        assertEquals(64, b["top_k"]!!.jsonPrimitive.longOrNull)
+    }
+
+    @Test
+    fun `applies off sampling params when reasoning is disabled`() {
+        val sampled = model.copy(
+            samplingParamsByThinkingLevel = mapOf(
+                ModelThinkingLevel.OFF to mapOf("temperature" to JsonPrimitive(0.7))
+            )
+        )
+        val b = body(
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
+            model = sampled
+        )
+        assertEquals(0.7, b["temperature"]!!.jsonPrimitive.content.toDouble())
+    }
+
+    @Test
+    fun `merges request keys over thinking-level keys`() {
+        val sampled = model.copy(
+            reasoning = true,
+            samplingParamsByThinkingLevel = mapOf(
+                ModelThinkingLevel.HIGH to mapOf(
+                    "temperature" to JsonPrimitive(0.6),
+                    "top_p" to JsonPrimitive(0.95)
+                )
+            )
+        )
+        val b = body(
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
+            OpenAiCompletionsOptions(
+                apiKey = "k",
+                reasoningEffort = ModelThinkingLevel.HIGH,
+                samplingParams = mapOf("top_p" to JsonPrimitive(0.5))
+            ),
+            sampled
+        )
+        assertEquals(0.6, b["temperature"]!!.jsonPrimitive.content.toDouble())
+        assertEquals(0.5, b["top_p"]!!.jsonPrimitive.content.toDouble())
+    }
+
+    @Test
+    fun `sampling params override named request fields`() {
+        val b = body(
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
+            OpenAiCompletionsOptions(
+                apiKey = "k",
+                temperature = 0.0,
+                samplingParams = mapOf("temperature" to JsonPrimitive(1))
+            )
+        )
+        assertEquals(1.0, b["temperature"]!!.jsonPrimitive.content.toDouble())
+    }
+
+    @Test
     fun `tool choice serialized to chat completions wire form`() {
         val cases = mapOf(
             ToolChoice.Auto to JsonPrimitive("auto"),
@@ -1040,6 +1158,29 @@ class OpenAiCompletionsPayloadTest {
             "(no tool output)",
             b["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonPrimitive.content
         )
+    }
+
+    @Test
+    fun `whitespace-only tool result text gets the empty placeholder`() {
+        for (text in listOf("", "\r\n", " \n\t")) {
+            val b = body(
+                normalizeContext(
+                    Context(
+                        messages = listOf(
+                            ToolResultMessage(
+                                toolCallId = "c1",
+                                toolName = "t",
+                                content = listOf(TextContent(text))
+                            )
+                        )
+                    )
+                )
+            )
+            assertEquals(
+                "(no tool output)",
+                b["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonPrimitive.content
+            )
+        }
     }
 
     @Test

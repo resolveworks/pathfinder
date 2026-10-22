@@ -53,7 +53,6 @@ import works.resolve.pathfinder.ai.calculateCost
 import works.resolve.pathfinder.ai.hasHeader
 import works.resolve.pathfinder.ai.headersToRecord
 import works.resolve.pathfinder.ai.mergeHeaders
-import works.resolve.pathfinder.ai.mergeSamplingParams
 import works.resolve.pathfinder.ai.toModelThinkingLevel
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
@@ -61,20 +60,24 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.applyOpenRouterReportedCost
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.getDeclaredTools
 import works.resolve.pathfinder.ai.utils.getIdentityHeaders
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.int
+import works.resolve.pathfinder.ai.utils.isOpenRouterModel
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.long
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.parseStreamingJson
+import works.resolve.pathfinder.ai.utils.parseToolCallArguments
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
+import works.resolve.pathfinder.ai.utils.resolveSamplingParams
 import works.resolve.pathfinder.ai.utils.resolveTranscript
 import works.resolve.pathfinder.ai.utils.resolveTranscriptTools
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
@@ -84,6 +87,7 @@ import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.strictDoubleOrNull
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.ai.utils.truthyString
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
@@ -249,9 +253,9 @@ data class OpenAiCompletionsOptions(
     val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
     /**
      * Merged into the params object last so custom keys override the named
-     * request fields. Already merged over [Model.samplingParams] by
-     * [mergeSamplingParams] on the streamSimple path. Only keys appear in
-     * toString().
+     * request fields. Merged over [Model.samplingParams] and the effective
+     * [Model.samplingParamsByThinkingLevel] entry by [resolveSamplingParams].
+     * Only keys appear in toString().
      */
     val samplingParams: Map<String, JsonElement>? = null,
     /**
@@ -313,8 +317,7 @@ class OpenAiCompletionsApi(
         return stream(
             model,
             context,
-            options.toStreamOptions(effort)
-                .copy(maxTokens = maxTokens, samplingParams = mergeSamplingParams(model, options))
+            options.toStreamOptions(effort).copy(maxTokens = maxTokens)
         )
     }
 
@@ -506,10 +509,6 @@ class OpenAiCompletionsApi(
         val delta = choice.obj("delta") ?: return emptyList()
 
         val events = mutableListOf<AssistantMessageEvent>()
-        delta["content"].strOrNull()?.takeIf { it.isNotEmpty() }?.let {
-            events +=
-                state.appendText(it)
-        }
 
         // Reasoning arrives in reasoning_content (llama.cpp-style), reasoning,
         // or reasoning_text; the first non-empty field wins so duplicated
@@ -532,18 +531,26 @@ class OpenAiCompletionsApi(
             }
         }
 
-        delta.arr("tool_calls")?.forEach { element ->
-            (element as? JsonObject)?.let {
-                events += state.appendToolCallDelta(it, grammarToolInputProperties)
-            }
-        }
-
         // reasoning_details deltas keep the provider replay data in the
         // thinking signature slot; they are not user-visible stream deltas,
         // so no thinking_delta is emitted.
         delta.arr("reasoning_details")?.forEach { element ->
             if (element is JsonObject && isOpenAiReasoningDetail(element)) {
                 state.appendReasoningDetail(LinkedHashMap(element))
+            }
+        }
+
+        // Reasoning is handled before content: some proxies (e.g. LiteLLM)
+        // aggregate reasoning and answer into one delta, and the thinking
+        // block must precede the text block.
+        delta["content"].strOrNull()?.takeIf { it.isNotEmpty() }?.let {
+            events +=
+                state.appendText(it)
+        }
+
+        delta.arr("tool_calls")?.forEach { element ->
+            (element as? JsonObject)?.let {
+                events += state.appendToolCallDelta(it, grammarToolInputProperties)
             }
         }
         return events
@@ -571,7 +578,12 @@ class OpenAiCompletionsApi(
             reasoning = reasoningTokens,
             totalTokens = input + outputTokens + cacheReadTokens + cacheWriteTokens
         )
-        return usage.copy(cost = calculateCost(model, usage))
+        val catalogUsage = usage.copy(cost = calculateCost(model, usage))
+        return if (isOpenRouterModel(model)) {
+            applyOpenRouterReportedCost(catalogUsage, raw)
+        } else {
+            catalogUsage
+        }
     }
 
     private fun mapStopReason(reason: String): Pair<StopReason, String?> = when (reason) {
@@ -660,6 +672,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         var name: String = ""
         val partialArgs = StringBuilder()
         var arguments: JsonObject = JsonObject(emptyMap())
+        var argumentsError: String? = null
 
         /** Grammar input buffer for `custom` tool calls; null for function calls. */
         var customInput: CustomToolInput? = null
@@ -884,8 +897,9 @@ internal class StreamingState(private val model: Model, private val timestampMs:
                             events.add(AssistantMessageEvent.ToolCallDelta(index, delta))
                         }
                     } else {
-                        accumulator.arguments =
-                            parseStreamingJson(accumulator.partialArgs.toString())
+                        val parsed = parseToolCallArguments(accumulator.partialArgs.toString())
+                        accumulator.arguments = parsed.arguments
+                        accumulator.argumentsError = parsed.argumentsError
                     }
                     invalidate(index)
                     events.add(
@@ -904,7 +918,8 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     private fun toolCallOf(accumulator: ToolCallAccumulator): ToolCall = ToolCall(
         id = accumulator.id,
         name = accumulator.name,
-        arguments = accumulator.arguments
+        arguments = accumulator.arguments,
+        argumentsError = accumulator.argumentsError
     )
 
     fun snapshot(): AssistantMessage = AssistantMessage(
@@ -1010,7 +1025,11 @@ object OpenAiCompletionsPayload {
 
         applyThinking(model, options, compat)?.let { body.putAll(it) }
 
-        options.samplingParams?.let { body.putAll(it) }
+        resolveSamplingParams(
+            model,
+            options.reasoningEffort ?: ModelThinkingLevel.OFF,
+            options.samplingParams
+        )?.let { body.putAll(it) }
 
         return JsonObject(body)
     }
@@ -1431,8 +1450,9 @@ object OpenAiCompletionsPayload {
                                 (it as works.resolve.pathfinder.ai.TextContent).text
                             }
                         val hasImages = toolMsg.content.any { it.type == ContentType.IMAGE }
+                        val hasText = trimJsWhitespace(textResult).isNotEmpty()
                         val toolResultText = when {
-                            textResult.isNotEmpty() -> textResult
+                            hasText -> textResult
                             hasImages -> "(see attached image)"
                             else -> "(no tool output)"
                         }
