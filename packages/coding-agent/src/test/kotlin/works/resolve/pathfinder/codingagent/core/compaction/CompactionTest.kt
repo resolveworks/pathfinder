@@ -349,11 +349,11 @@ class CompactionTest {
     }
 
     @Test
-    fun `serializes conversation with user text, thinking, and tool calls`() {
+    fun `serializes conversation without thinking`() {
         val assistant = AssistantMessage(
             content = listOf(
-                ThinkingContent("let me think"),
-                TextContent("answer"),
+                ThinkingContent("private reasoning"),
+                TextContent("visible reply"),
                 ToolCall(
                     id = "t1",
                     name = "read",
@@ -368,8 +368,7 @@ class CompactionTest {
         val result = serializeConversation(listOf(UserMessage.ofText("hi"), assistant))
         assertEquals(
             "[User]: hi\n\n" +
-                "[Assistant thinking]: let me think\n\n" +
-                "[Assistant]: answer\n\n" +
+                "[Assistant]: visible reply\n\n" +
                 """[Assistant tool calls]: read(path="file.ts")""",
             result
         )

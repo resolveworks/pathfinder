@@ -226,9 +226,6 @@ suspend fun generateBranchSummary(
     }
     val promptText = "<conversation>\n$conversationText\n</conversation>\n\n$instructions"
 
-    val maxTokens =
-        if (options.model.maxTokens > 0) minOf(4096, options.model.maxTokens) else 4096
-
     val response = completeSimpleWithRetries(
         options.models,
         options.model,
@@ -241,7 +238,7 @@ suspend fun generateBranchSummary(
                 )
             )
         ),
-        SimpleStreamOptions(maxTokens = maxTokens),
+        SimpleStreamOptions(),
         options.retry,
         options.callbacks,
         options.retryRunner

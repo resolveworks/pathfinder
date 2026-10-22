@@ -15,6 +15,13 @@ private fun truncateForSummary(text: String, maxChars: Int): String {
     return "${text.substring(0, maxChars)}\n\n[... $truncatedChars more characters truncated]"
 }
 
+/**
+ * Thinking is omitted: providers return summaries of the real reasoning, and
+ * replayed thinking is often not part of the model's live context (a block that
+ * does not match its request is dropped), so including it can make the
+ * summarization request larger than the context it summarizes. Visible text,
+ * tool calls, and tool results record what happened.
+ */
 fun serializeConversation(messages: List<Message>): String {
     val parts = mutableListOf<String>()
 
@@ -26,15 +33,10 @@ fun serializeConversation(messages: List<Message>): String {
             }
 
             is AssistantMessage -> {
-                val thinkingParts = mutableListOf<String>()
                 val toolCalls = mutableListOf<String>()
 
                 for (block in msg.content) {
                     when (block) {
-                        is works.resolve.pathfinder.ai.ThinkingContent -> thinkingParts.add(
-                            block.thinking
-                        )
-
                         is ToolCall -> {
                             val argsStr = block.arguments.entries.joinToString(", ") { (k, v) ->
                                 "$k=$v"
@@ -46,9 +48,6 @@ fun serializeConversation(messages: List<Message>): String {
                     }
                 }
 
-                if (thinkingParts.isNotEmpty()) {
-                    parts.add("[Assistant thinking]: ${thinkingParts.joinToString("\n")}")
-                }
                 if (msg.content.any { it.type == ContentType.TEXT }) {
                     parts.add("[Assistant]: ${contentText(msg.content)}")
                 }
