@@ -7,10 +7,14 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -23,6 +27,7 @@ import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelCost
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.ProviderAuthException
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.SimpleToolChoice
@@ -30,6 +35,7 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ThinkingLevel
+import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolChoice
@@ -39,6 +45,8 @@ import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.NetworkException
+import works.resolve.pathfinder.ai.transport.SseEvent
+import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.normalizeContext
 
@@ -356,13 +364,11 @@ class MistralConversationsApiTest {
             .toList()
 
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
-        assertEquals(
-            listOf(
-                ToolCall("shared1", "lookup", JsonObject(emptyMap())),
-                ToolCall("shared1", "lookup", JsonObject(emptyMap()))
-            ),
-            done.message.content
-        )
+        val toolCalls = done.message.content.filterIsInstance<ToolCall>()
+        assertEquals(listOf("shared1", "shared1"), toolCalls.map { it.id })
+        // Both final argument texts are malformed, so neither keeps a parsed prefix.
+        assertTrue(toolCalls.all { it.arguments == JsonObject(emptyMap()) })
+        assertTrue(toolCalls.all { it.argumentsError != null })
     }
 
     @Test
@@ -417,28 +423,48 @@ class MistralConversationsApiTest {
     }
 
     @Test
-    fun `applies the request timeout while waiting for a chunk`() = runTest {
+    fun `applies the request timeout while waiting for response headers`() = runTest {
         val transport = FakeTransport()
-        transport.outcomes.add {
-            throw NetworkException(java.io.IOException("timeout"))
-        }
+        transport.outcomes.add { awaitCancellation() }
         val error = api(transport)
             .stream(model, context, MistralOptions(apiKey = "test", timeoutMs = 5))
             .toList()
             .last()
         val errorEvent = assertIs<AssistantMessageEvent.Error>(error)
         assertEquals(StopReason.ERROR, errorEvent.error.stopReason)
-        assertContains(errorEvent.error.errorMessage ?: "", "timeout")
+        assertEquals("Mistral response headers timed out after 5ms", errorEvent.error.errorMessage)
     }
 
     @Test
-    fun `default request timeout is 60s when timeoutMs is unset`() = runTest {
+    fun `does not abort an active stream that lasts longer than the request timeout`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse(terminalEvent()))
-        api(transport)
-            .stream(model, context, MistralOptions(apiKey = "test"))
+        transport.outcomes.add {
+            val events = flow {
+                repeat(5) {
+                    emit(
+                        SseEvent(
+                            """{"choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"x"}]}]}}]}"""
+                        )
+                    )
+                    delay(10)
+                }
+                emit(SseEvent(terminalEvent()))
+                emit(SseEvent("[DONE]"))
+            }
+            TransportResponse(
+                status = 200,
+                headers = mapOf("content-type" to listOf("text/event-stream")),
+                events = events
+            )
+        }
+
+        val done = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test", timeoutMs = 20))
             .toList()
-        assertEquals(60_000L, transport.requests.single().timeoutMs)
+            .last()
+        val doneEvent = assertIs<AssistantMessageEvent.Done>(done)
+        assertEquals(StopReason.STOP, doneEvent.reason)
+        assertEquals(listOf(ThinkingContent("xxxxx")), doneEvent.message.content)
     }
 
     @Test
@@ -457,25 +483,47 @@ class MistralConversationsApiTest {
     }
 
     @Test
-    fun `empty text chunk opens a text block with an empty delta`() = runTest {
+    fun `ignores empty content deltas`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(
-            sse(
-                """{"choices":[{"index":0,"delta":{"content":[{"type":"text","text":""}]}}]}""",
-                terminalEvent()
-            )
+        val thinking = { text: String ->
+            """{"type":"thinking","thinking":[{"type":"text","text":"$text"}]}"""
+        }
+        val toolCall = { args: String, first: Boolean ->
+            val id = if (first) """"id":"abc123456",""" else ""
+            val name = if (first) "read" else ""
+            val arguments = JsonPrimitive(args).toString()
+            """{"index":0,$id"function":{"name":"$name","arguments":$arguments}}"""
+        }
+        val deltas = listOf(
+            """{"content":""}""",
+            """{"content":[${thinking("first part,")}]}""",
+            """{"content":""}""",
+            """{"content":[{"type":"text","text":""}]}""",
+            """{"content":[${thinking(" second part.")},{"type":"text","text":"Reading."}]}""",
+            """{"content":"","tool_calls":[${toolCall("", true)}]}""",
+            """{"content":"","tool_calls":[${toolCall("{\"path\":", false)}]}""",
+            """{"content":"","tool_calls":[${toolCall("\"a.txt\"}", false)}]}""",
+            """{"content":""}"""
         )
-        val events = api(transport)
+        val events = deltas.mapIndexed { i, delta ->
+            val finish = if (i == deltas.size - 1) "\"tool_calls\"" else "null"
+            """{"id":"response-1","model":"${model.id}","choices":[{"index":0,"finish_reason":$finish,"delta":$delta}]}"""
+        }
+        transport.enqueueResponse(events + "[DONE]")
+
+        val done = api(transport)
             .stream(model, context, MistralOptions(apiKey = "test"))
             .toList()
-        val start = events.filterIsInstance<AssistantMessageEvent.TextStart>().single()
-        val delta = events.filterIsInstance<AssistantMessageEvent.TextDelta>().single()
-        assertEquals(start.contentIndex, delta.contentIndex)
-        assertEquals("", delta.delta)
-        assertIs<AssistantMessageEvent.Done>(events.last())
+            .last()
+        val message = assertIs<AssistantMessageEvent.Done>(done).message
+
         assertEquals(
-            listOf(TextContent("")),
-            (events.last() as AssistantMessageEvent.Done).message.content
+            listOf(
+                ThinkingContent("first part, second part."),
+                TextContent("Reading."),
+                ToolCall("abc123456", "read", buildJsonObject { put("path", "a.txt") })
+            ),
+            message.content
         )
     }
 
@@ -584,22 +632,21 @@ class MistralConversationsApiTest {
     }
 
     @Test
-    fun `timeout expiry mid body ends as an error event not cancellation`() = runTest {
-        // pi threads its AbortSignal.timeout into the body reader, capping the
-        // whole exchange; expiry surfaces as TimeoutError, an error event.
+    fun `timeout expiry does not cut off an active body`() = runTest {
+        // The request deadline covers only response headers; body stalls are
+        // left to the HTTP client idle timeout.
         val transport = FakeTransport()
         transport.enqueueHangingResponse(
             """{"id":"r","choices":[{"index":0,"finish_reason":null,
-               "delta":{"content":"partial"}}]}"""
+               "delta":{"content":"partial"}}]}""",
+            terminalEvent(),
+            "[DONE]"
         )
         val events = api(transport)
             .stream(model, context, MistralOptions(apiKey = "test", timeoutMs = 5))
             .toList()
-        val error = assertIs<AssistantMessageEvent.Error>(events.last())
-        assertEquals(StopReason.ERROR, error.reason)
-        assertEquals("The operation was aborted due to timeout", error.error.errorMessage)
-        // Deltas received before expiry survive in the error snapshot.
-        assertEquals(listOf(TextContent("partial")), error.error.content)
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(listOf(TextContent("partial")), done.message.content)
     }
 
     @Test
@@ -635,7 +682,10 @@ class MistralConversationsApiTest {
 
     @Test
     fun `preserves raw finish reasons for provider error stops`() = runTest {
-        for (reason in listOf("error", "unmapped_error")) {
+        for ((reason, message) in listOf(
+            "error" to "Provider stopped with: error (server error)",
+            "unmapped_error" to "Provider stopped with: unmapped_error"
+        )) {
             val transport = FakeTransport()
             transport.enqueueResponse(sse(terminalEvent(reason), "[DONE]"))
             val error = api(transport)
@@ -645,7 +695,7 @@ class MistralConversationsApiTest {
             val errorEvent = assertIs<AssistantMessageEvent.Error>(error)
             assertEquals(StopReason.ERROR, errorEvent.error.stopReason)
             assertEquals(reason, errorEvent.error.rawStopReason)
-            assertEquals("Provider stopped with: $reason", errorEvent.error.errorMessage)
+            assertEquals(message, errorEvent.error.errorMessage)
         }
     }
 
@@ -664,37 +714,104 @@ class MistralConversationsApiTest {
     }
 
     @Test
-    fun `streamSimple uses reasoning_effort for Mistral Small and Medium`() = runTest {
-        for (id in listOf("mistral-small-2603", "mistral-small-latest", "mistral-medium-3.5")) {
-            val payload = captureStreamSimplePayload(
-                mistralModel(id = id, reasoning = true),
-                SimpleStreamOptions(apiKey = "test", reasoning = ThinkingLevel.MEDIUM)
-            )
-            assertNull(payload["prompt_mode"])
-            assertEquals("high", payload["reasoning_effort"]!!.jsonPrimitive.content)
-        }
-    }
+    fun `streamSimple uses reasoning_effort from the model thinking level map`() = runTest {
+        val noneHighLevels = ThinkingLevelMap.of(
+            ModelThinkingLevel.OFF to "none",
+            ModelThinkingLevel.MINIMAL to null,
+            ModelThinkingLevel.LOW to null,
+            ModelThinkingLevel.MEDIUM to null,
+            ModelThinkingLevel.HIGH to "high",
+            ModelThinkingLevel.XHIGH to null,
+            ModelThinkingLevel.MAX to null
+        )
+        val glm52Levels = ThinkingLevelMap.of(
+            ModelThinkingLevel.OFF to "none",
+            ModelThinkingLevel.MINIMAL to null,
+            ModelThinkingLevel.LOW to null,
+            ModelThinkingLevel.MEDIUM to null,
+            ModelThinkingLevel.HIGH to "high",
+            ModelThinkingLevel.XHIGH to null,
+            ModelThinkingLevel.MAX to "max"
+        )
+        val glm53Levels = ThinkingLevelMap.of(
+            ModelThinkingLevel.OFF to null,
+            ModelThinkingLevel.MINIMAL to null,
+            ModelThinkingLevel.LOW to "low",
+            ModelThinkingLevel.MEDIUM to null,
+            ModelThinkingLevel.HIGH to "high",
+            ModelThinkingLevel.XHIGH to null,
+            ModelThinkingLevel.MAX to "max"
+        )
 
-    @Test
-    fun `streamSimple omits reasoning controls when thinking is off`() = runTest {
-        for (id in listOf("mistral-small-2603", "mistral-medium-3.5")) {
-            val payload = captureStreamSimplePayload(
-                mistralModel(id = id, reasoning = true),
-                SimpleStreamOptions(apiKey = "test")
-            )
-            assertNull(payload["reasoning_effort"])
-            assertNull(payload["prompt_mode"])
-        }
-    }
-
-    @Test
-    fun `streamSimple uses prompt_mode for Magistral reasoning models`() = runTest {
-        val payload = captureStreamSimplePayload(
+        val magistral = captureStreamSimplePayload(
             mistralModel(id = "magistral-medium-latest", reasoning = true),
             SimpleStreamOptions(apiKey = "test", reasoning = ThinkingLevel.MEDIUM)
         )
-        assertEquals("reasoning", payload["prompt_mode"]!!.jsonPrimitive.content)
-        assertNull(payload["reasoning_effort"])
+        assertEquals("reasoning", magistral["prompt_mode"]!!.jsonPrimitive.content)
+        assertNull(magistral["reasoning_effort"])
+
+        val magistralOff = captureStreamSimplePayload(
+            mistralModel(id = "magistral-medium-latest", reasoning = true),
+            SimpleStreamOptions(apiKey = "test")
+        )
+        assertNull(magistralOff["prompt_mode"])
+        assertNull(magistralOff["reasoning_effort"])
+
+        for ((id, map) in listOf(
+            "mistral-small-2603" to noneHighLevels,
+            "mistral-medium-latest" to noneHighLevels,
+            "zai-glm-5-2" to glm52Levels
+        )) {
+            val high = captureStreamSimplePayload(
+                mistralModel(id = id, reasoning = true, thinkingLevelMap = map),
+                SimpleStreamOptions(apiKey = "test", reasoning = ThinkingLevel.HIGH)
+            )
+            assertEquals("high", high["reasoning_effort"]!!.jsonPrimitive.content)
+            assertNull(high["prompt_mode"])
+
+            val low = captureStreamSimplePayload(
+                mistralModel(id = id, reasoning = true, thinkingLevelMap = map),
+                SimpleStreamOptions(apiKey = "test", reasoning = ThinkingLevel.LOW)
+            )
+            assertEquals("high", low["reasoning_effort"]!!.jsonPrimitive.content)
+
+            val off = captureStreamSimplePayload(
+                mistralModel(id = id, reasoning = true, thinkingLevelMap = map),
+                SimpleStreamOptions(apiKey = "test")
+            )
+            assertEquals("none", off["reasoning_effort"]!!.jsonPrimitive.content)
+            assertNull(off["prompt_mode"])
+        }
+
+        val glm52Max = captureStreamSimplePayload(
+            mistralModel(id = "zai-glm-5-2", reasoning = true, thinkingLevelMap = glm52Levels),
+            SimpleStreamOptions(apiKey = "test", reasoning = ThinkingLevel.MAX)
+        )
+        assertEquals("max", glm52Max["reasoning_effort"]!!.jsonPrimitive.content)
+
+        for (level in listOf(ThinkingLevel.LOW, ThinkingLevel.HIGH, ThinkingLevel.MAX)) {
+            val payload = captureStreamSimplePayload(
+                mistralModel(id = "zai-glm-5-3", reasoning = true, thinkingLevelMap = glm53Levels),
+                SimpleStreamOptions(apiKey = "test", reasoning = level)
+            )
+            assertEquals(
+                level.name.lowercase(),
+                payload["reasoning_effort"]!!.jsonPrimitive.content
+            )
+            assertNull(payload["prompt_mode"])
+        }
+        val glm53Medium = captureStreamSimplePayload(
+            mistralModel(id = "zai-glm-5-3", reasoning = true, thinkingLevelMap = glm53Levels),
+            SimpleStreamOptions(apiKey = "test", reasoning = ThinkingLevel.MEDIUM)
+        )
+        assertEquals("high", glm53Medium["reasoning_effort"]!!.jsonPrimitive.content)
+
+        val nonReasoning = captureStreamSimplePayload(
+            mistralModel(id = "mistral-medium-2505", reasoning = false),
+            SimpleStreamOptions(apiKey = "test", reasoning = ThinkingLevel.MEDIUM)
+        )
+        assertNull(nonReasoning["reasoning_effort"])
+        assertNull(nonReasoning["prompt_mode"])
     }
 
     @Test
@@ -883,7 +1000,7 @@ class MistralConversationsApiTest {
         }
 
     @Test
-    fun `cross-model thinking replays as plain text`() = runTest {
+    fun `cross-model thinking is dropped on replay`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
         api(transport).stream(
@@ -910,11 +1027,10 @@ class MistralConversationsApiTest {
         ).toList()
         val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
             .jsonObject["messages"]!!.jsonArray
-        // pi's transformMessages: foreign thinking becomes text; redacted thinking is dropped.
+        // pi's transformMessages drops thinking from other models.
         assertEquals(
             """[{"role":"assistant","prefix":false,""" +
-                """"content":[{"type":"text","text":"deep thought"},""" +
-                """{"type":"text","text":"answer"}]},""" +
+                """"content":[{"type":"text","text":"answer"}]},""" +
                 """{"role":"user","content":"continue"}]""",
             messages.toString()
         )
@@ -939,7 +1055,8 @@ class MistralConversationsApiTest {
 internal fun mistralModel(
     id: String = "mistral-large-latest",
     reasoning: Boolean = false,
-    input: List<InputModality> = listOf(InputModality.TEXT)
+    input: List<InputModality> = listOf(InputModality.TEXT),
+    thinkingLevelMap: ThinkingLevelMap? = null
 ): Model = Model(
     id = id,
     name = id,
@@ -947,6 +1064,7 @@ internal fun mistralModel(
     provider = "mistral",
     baseUrl = "https://api.mistral.ai",
     reasoning = reasoning,
+    thinkingLevelMap = thinkingLevelMap,
     input = input,
     cost = ModelCost(input = 2.0, output = 6.0, cacheRead = 0.5),
     contextWindow = 131_000,

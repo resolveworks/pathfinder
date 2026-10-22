@@ -63,10 +63,9 @@ import okhttp3.sse.EventSources
  * reads carry no whole-request deadline at this layer; their inter-read idle
  * cap is the client's readTimeout, the analog of the undici dispatcher
  * `bodyTimeout` (300s by default) that pi installs process-wide. pi's mistral
- * adapter alone threads its timeout signal into the body reader, capping that
- * stream's total duration; the mistral adapter reproduces that cap with a
- * `withTimeout` around its whole exchange, so no transport-level support is
- * needed. The composition root (PathfinderApplication) documents the full
+ * adapter applies its deadline only while awaiting response headers and owns
+ * that timeout itself, leaving [TransportRequest.timeoutMs] unset. The
+ * composition root (PathfinderApplication) documents the full
  * client topology — this transport runs on the app's shared client, and why
  * OAuth keeps a separate one.
  */

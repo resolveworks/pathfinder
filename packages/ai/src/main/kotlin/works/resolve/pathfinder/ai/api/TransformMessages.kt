@@ -13,17 +13,41 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 
 /**
  * Normalizes a replayed history into a shape the target provider accepts:
- * non-vision image downgrade, cross-model thinking handling, tool call ID
+ * non-vision image downgrade, cross-model thinking removal, tool call ID
  * normalization, synthetic error results for orphaned tool calls.
- *
- * Cross-model thinking degrades to bare text without `<thinking>` tagging;
- * tagging belongs to callers that want it (mirrors pi's handoff behavior).
  */
 
 private const val NON_VISION_USER_IMAGE_PLACEHOLDER =
     "(image omitted: model does not support images)"
 private const val NON_VISION_TOOL_IMAGE_PLACEHOLDER =
     "(tool image omitted: model does not support images)"
+private const val ERROR_TOOL_IMAGE_PLACEHOLDER = "(image attached after the tool results)"
+
+/** An error tool result split into a text-only result and the images to send after the tool results. */
+internal data class SplitErrorToolResult(
+    /** The result content with each run of images replaced by a note. */
+    val content: List<Content>,
+    /** Text naming the tool call, to send before [images]. */
+    val caption: String,
+    val images: List<ImageContent>
+)
+
+/**
+ * Split the images out of an error tool result, for APIs that reject images in error results
+ * (Anthropic, and Claude on Bedrock). Send the returned content as the tool result and the caption and
+ * images after all tool results of the turn, in the same user message. Returns null for results
+ * that need no split (#10794).
+ */
+internal fun splitErrorToolResultImages(msg: ToolResultMessage): SplitErrorToolResult? {
+    if (!msg.isError) return null
+    val images = msg.content.filterIsInstance<ImageContent>()
+    if (images.isEmpty()) return null
+    return SplitErrorToolResult(
+        content = replaceImagesWithPlaceholder(msg.content, ERROR_TOOL_IMAGE_PLACEHOLDER),
+        caption = "Images from the error result of tool call ${msg.toolCallId} (${msg.toolName}):",
+        images = images
+    )
+}
 
 private fun replaceImagesWithPlaceholder(
     content: List<Content>,
@@ -124,18 +148,20 @@ internal fun transformMessages(
                 val transformedContent = assistantMsg.content.flatMap { block ->
                     when (block) {
                         is ThinkingContent -> {
-                            // Redacted thinking is opaque encrypted content, only valid
-                            // for the same model; drop it cross-model.
-                            if (block.redacted) {
-                                if (isSameModel) listOf(block) else emptyList()
-                            } else if (isSameModel && !block.thinkingSignature.isNullOrEmpty()) {
+                            // Thinking from another model is dropped. Signatures and
+                            // encrypted reasoning are only valid for the model that
+                            // produced them, and readable thinking sent as plain text
+                            // makes the new model treat it as part of the reply.
+                            if (!isSameModel) {
+                                emptyList()
+                            } else if (block.redacted || !block.thinkingSignature.isNullOrEmpty()) {
+                                // Keep redacted and signed blocks even if the thinking text
+                                // is empty (OpenAI encrypted reasoning); they are needed for replay.
                                 listOf(block)
                             } else if (block.thinking.isBlank()) {
                                 emptyList()
-                            } else if (isSameModel) {
-                                listOf(block)
                             } else {
-                                listOf(TextContent(block.thinking))
+                                listOf(block)
                             }
                         }
 

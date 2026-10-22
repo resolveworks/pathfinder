@@ -55,7 +55,7 @@ class TransformMessagesTest {
     )
 
     @Test
-    fun `converts thinking blocks to plain text when source model differs`() {
+    fun `drops thinking blocks from other models instead of sending them as text`() {
         val model = makeCopilotClaudeModel()
         val messages: List<Message> = listOf(
             UserMessage.ofText("hello"),
@@ -77,11 +77,46 @@ class TransformMessagesTest {
         val result = transformMessages(messages, model, anthropicNormalizeToolCallId)
         val assistantMsg = result.filterIsInstance<AssistantMessage>().single()
 
-        // Thinking block should be converted to text since models differ
-        val textBlocks = assistantMsg.content.filterIsInstance<TextContent>()
-        val thinkingBlocks = assistantMsg.content.filterIsInstance<ThinkingContent>()
-        assertEquals(0, thinkingBlocks.size)
-        assertTrue(textBlocks.size >= 2)
+        assertEquals(listOf(TextContent("Hi there!")), assistantMsg.content)
+    }
+
+    @Test
+    fun `keeps thinking only from the target model when models alternate`() {
+        val model = makeCopilotClaudeModel()
+        val thinking = { text: String ->
+            ThinkingContent(text, thinkingSignature = "reasoning_content")
+        }
+        fun assistant(modelId: String, content: List<Content>) = AssistantMessage(
+            content = content,
+            api = "anthropic-messages",
+            provider = "github-copilot",
+            model = modelId,
+            stopReason = StopReason.STOP
+        )
+        val messages: List<Message> = listOf(
+            UserMessage.ofText("1"),
+            assistant(model.id, listOf(thinking("claude 1"), TextContent("a"))),
+            UserMessage.ofText("2"),
+            assistant("gpt-4o", listOf(thinking("gpt 1"), TextContent("b"))),
+            UserMessage.ofText("3"),
+            assistant(model.id, listOf(thinking("claude 2"), TextContent("c"))),
+            UserMessage.ofText("4"),
+            assistant("gpt-4o", listOf(thinking("gpt 2"), TextContent("d")))
+        )
+
+        val contents = transformMessages(messages, model)
+            .filterIsInstance<AssistantMessage>()
+            .map { it.content }
+
+        assertEquals(
+            listOf(
+                listOf(thinking("claude 1"), TextContent("a")),
+                listOf(TextContent("b")),
+                listOf(thinking("claude 2"), TextContent("c")),
+                listOf(TextContent("d"))
+            ),
+            contents
+        )
     }
 
     @Test

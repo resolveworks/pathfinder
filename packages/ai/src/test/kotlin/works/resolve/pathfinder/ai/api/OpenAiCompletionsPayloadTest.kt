@@ -1410,7 +1410,7 @@ class OpenAiCompletionsPayloadTest {
     }
 
     @Test
-    fun `cross-model thinking replayed as plain text`() {
+    fun `cross-model thinking is dropped on replay`() {
         val b = body(
             normalizeContext(
                 Context(
@@ -1433,7 +1433,7 @@ class OpenAiCompletionsPayloadTest {
             )
         )
         val assistant = b["messages"]!!.jsonArray[0].jsonObject
-        assertEquals("let me thinkanswer", assistant["content"]!!.jsonPrimitive.content)
+        assertEquals("answer", assistant["content"]!!.jsonPrimitive.content)
         assertFalse(assistant.containsKey("reasoning_content"))
     }
 

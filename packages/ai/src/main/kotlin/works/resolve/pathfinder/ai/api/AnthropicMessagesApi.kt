@@ -1092,51 +1092,6 @@ private fun insertThinkingLevelMessages(
     return messages
 }
 
-private const val ERROR_TOOL_IMAGE_PLACEHOLDER = "(image attached after the tool results)"
-
-private data class AnthropicSplitErrorToolResult(
-    /** The result content with each run of images replaced by a note. */
-    val content: List<Content>,
-    /** Text naming the tool call, to send before [images]. */
-    val caption: String,
-    val images: List<ImageContent>
-)
-
-private fun replaceImagesWithPlaceholder(
-    content: List<Content>,
-    placeholder: String
-): List<Content> {
-    val result = mutableListOf<Content>()
-    var previousWasPlaceholder = false
-    for (block in content) {
-        if (block is ImageContent) {
-            if (!previousWasPlaceholder) result.add(TextContent(placeholder))
-            previousWasPlaceholder = true
-            continue
-        }
-        result.add(block)
-        previousWasPlaceholder = block is TextContent && block.text == placeholder
-    }
-    return result
-}
-
-/**
- * Anthropic rejects images in error tool results; split them out so they follow all
- * tool results of the turn in the same user message (#10794).
- */
-private fun splitAnthropicErrorToolResultImages(
-    msg: ToolResultMessage
-): AnthropicSplitErrorToolResult? {
-    if (!msg.isError) return null
-    val images = msg.content.filterIsInstance<ImageContent>()
-    if (images.isEmpty()) return null
-    return AnthropicSplitErrorToolResult(
-        content = replaceImagesWithPlaceholder(msg.content, ERROR_TOOL_IMAGE_PLACEHOLDER),
-        caption = "Images from the error result of tool call ${msg.toolCallId} (${msg.toolName}):",
-        images = images
-    )
-}
-
 private fun convertToolResult(
     msg: ToolResultMessage,
     content: List<Content> = msg.content
@@ -1351,7 +1306,7 @@ internal fun convertMessages(
                     works.resolve.pathfinder.ai.MessageRole.TOOL_RESULT
                 ) {
                     val toolMsg = transformedMessages[j] as ToolResultMessage
-                    val split = splitAnthropicErrorToolResultImages(toolMsg)
+                    val split = splitErrorToolResultImages(toolMsg)
                     toolResults.add(
                         convertToolResult(toolMsg, split?.content ?: toolMsg.content)
                     )

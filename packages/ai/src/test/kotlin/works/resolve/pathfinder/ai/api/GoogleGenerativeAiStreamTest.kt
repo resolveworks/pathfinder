@@ -451,6 +451,23 @@ class GoogleGenerativeAiStreamTest {
     }
 
     @Test
+    fun `gemini4 models use thinking levels`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
+        api(transport).streamSimple(
+            geminiModel(id = "gemini-4-argon"),
+            context,
+            SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.MEDIUM)
+        ).toList()
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
+        val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
+        assertEquals("MEDIUM", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
+        assertNull(thinkingConfig["thinkingBudget"])
+    }
+
+    @Test
     fun `gemini3 pro maps low and minimal to LOW`() = runTest {
         for (level in listOf(ThinkingLevel.LOW, ThinkingLevel.MINIMAL)) {
             val transport = FakeTransport()

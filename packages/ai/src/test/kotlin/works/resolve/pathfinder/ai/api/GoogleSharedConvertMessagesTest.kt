@@ -164,7 +164,7 @@ class GoogleSharedConvertMessagesTest {
     }
 
     @Test
-    fun `cross-provider thinking converts to plain text without tags`() {
+    fun `cross-provider thinking is dropped before conversion`() {
         val model = model()
         val foreign = AssistantMessage(
             content = listOf(ThinkingContent("foreign reasoning")),
@@ -177,10 +177,8 @@ class GoogleSharedConvertMessagesTest {
             model,
             normalizeContext(Context(messages = listOf(UserMessage.ofText("Hi"), foreign)))
         )
-        val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
-        val part = partsOf(modelTurn).single()
-        assertEquals("foreign reasoning", part["text"]!!.jsonPrimitive.content)
-        assertNull(part["thought"])
+
+        assertTrue(turns.none { it["role"]!!.jsonPrimitive.content == "model" })
     }
 
     private fun imageToolContext() = normalizeContext(
@@ -233,6 +231,41 @@ class GoogleSharedConvertMessagesTest {
         val imageResponse = partsOf(toolResultTurn)[1]["functionResponse"]!!.jsonObject
         assertEquals(1, imageResponse["parts"]!!.jsonArray.size)
         assertTrue(imageResponse["parts"]!!.jsonArray[0].jsonObject.containsKey("inlineData"))
+    }
+
+    @Test
+    fun `treats whitespace-only tool result text as no text`() {
+        val model =
+            model(
+                id = "gemini-3-pro-preview",
+                input = listOf(InputModality.TEXT, InputModality.IMAGE)
+            )
+        val source = imageToolContext()
+        val context = normalizeContext(
+            Context(
+                messages = source.messages.map { msg ->
+                    if (msg !is ToolResultMessage) {
+                        msg
+                    } else {
+                        when (msg.toolCallId) {
+                            "call_a" -> msg.copy(content = listOf(TextContent("\r\n")))
+
+                            "call_img" -> msg.copy(
+                                content = listOf(TextContent(" \n")) + msg.content
+                            )
+
+                            else -> msg
+                        }
+                    }
+                }
+            )
+        )
+        val turns = contents(model, context)
+
+        val responses = partsOf(turns[2]).map { it["functionResponse"]!!.jsonObject["response"] }
+        assertEquals("""{"output":""}""", responses[0].toString())
+        assertEquals("""{"output":"(see attached image)"}""", responses[1].toString())
+        assertEquals("""{"output":"beta text"}""", responses[2].toString())
     }
 
     @Test

@@ -30,6 +30,7 @@ import works.resolve.pathfinder.ai.utils.collapseSystemMessages
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strictBoolean
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.ai.utils.withoutInitialSystemMessage
 
 /**
@@ -93,6 +94,7 @@ object GoogleShared {
     fun usesGoogleThinkingLevel(model: Model): Boolean {
         val id = model.id.lowercase()
         return Regex("gemini-3(?:\\.\\d+)?-(?:pro|flash)").containsMatchIn(id) ||
+            Regex("gemini-(?:[4-9]|[1-9]\\d)").containsMatchIn(id) ||
             id == "gemini-flash-latest" ||
             id == "gemini-flash-lite-latest" ||
             Regex("gemma-?4").containsMatchIn(id)
@@ -316,13 +318,15 @@ object GoogleShared {
                             emptyList()
                         }
 
+                    val hasText = trimJsWhitespace(textResult).isNotEmpty()
                     val hasImages = imageContent.isNotEmpty()
+
                     val modelSupportsMultimodalFunctionResponse =
                         supportsMultimodalFunctionResponse(model.id)
 
                     // Use "output" for success, "error" for errors, per SDK docs.
                     val responseValue = when {
-                        textResult.isNotEmpty() -> sanitizeSurrogates(textResult)
+                        hasText -> sanitizeSurrogates(textResult)
                         hasImages -> "(see attached image)"
                         else -> ""
                     }
