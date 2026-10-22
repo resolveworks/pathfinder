@@ -1994,7 +1994,7 @@ class OpenAiCompletionsStreamTest {
     fun `fireworks catalog model sends session affinity header`() = runTest {
         val fireworks = realAsset().getProvider(
             "fireworks"
-        )!!.model("accounts/fireworks/models/glm-5p2")!!
+        )!!.model("accounts/fireworks/models/glm-5p3")!!
         val transport = FakeTransport()
         transport.enqueueResponse(
             sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")

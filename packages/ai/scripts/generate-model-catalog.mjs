@@ -55,8 +55,8 @@ const PROVIDER_IDENTITY = {
 	// ANTHROPIC_OAUTH_TOKEN paths are deliberately reduced.
 	anthropic: { name: "Anthropic", label: "Anthropic API key", envKey: "ANTHROPIC_API_KEY" },
 	"ant-ling": { name: "Ant Ling", label: "Ant Ling API key", envKey: "ANT_LING_API_KEY" },
-	"azure-openai-responses": {
-		name: "Azure OpenAI",
+	azure: {
+		name: "Azure",
 		label: "Azure OpenAI API key",
 		envKey: "AZURE_OPENAI_API_KEY",
 	},
@@ -122,6 +122,8 @@ function buildCatalog(piModels, { piRevision = null } = {}) {
 	const providers = [];
 	for (const [providerId, models] of Object.entries(piModels)) {
 		if (EXCLUDED_PROVIDERS.has(providerId)) continue;
+		// Classifier/image-only providers have no chat models to emit.
+		if (Object.keys(models).length === 0) continue;
 		if (!(providerId in PROVIDER_IDENTITY) && !(providerId in OAUTH_METADATA)) {
 			throw new Error(`pi static provider '${providerId}' has no PROVIDER_IDENTITY entry`);
 		}

@@ -34,7 +34,6 @@ import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.resolveSamplingParams
 import works.resolve.pathfinder.ai.utils.resolveTranscript
 import works.resolve.pathfinder.ai.utils.resolveTranscriptTools
-import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
@@ -45,36 +44,11 @@ import works.resolve.pathfinder.telemetry.TelemetryContext
  * (see OpenAiCompletionsApi).
  */
 
-private const val DEFAULT_AZURE_API_VERSION = "v1"
-
 private val AZURE_TOOL_CALL_PROVIDERS =
-    OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS + "azure-openai-responses"
+    OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS + "azure"
 
 // OpenAI Responses rejects max_output_tokens below 16.
 private const val OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16
-
-/** Parses `modelId=deployment,modelId2=deployment2` entries. */
-internal fun parseDeploymentNameMap(value: String?): Map<String, String> {
-    if (value.isNullOrBlank()) return emptyMap()
-    val map = mutableMapOf<String, String>()
-    for (entry in value.split(",")) {
-        val trimmed = trimJsWhitespace(entry)
-        if (trimmed.isEmpty()) continue
-        val modelId = trimJsWhitespace(trimmed.substringBefore("=", ""))
-        val deploymentName = trimJsWhitespace(trimmed.substringAfter("=", ""))
-        if (modelId.isEmpty() || deploymentName.isEmpty()) continue
-        map[modelId] = deploymentName
-    }
-    return map
-}
-
-internal fun resolveDeploymentName(model: Model, options: AzureOpenAiResponsesOptions?): String {
-    options?.azureDeploymentName?.let { return it }
-    val mapped = parseDeploymentNameMap(
-        options?.env?.get("AZURE_OPENAI_DEPLOYMENT_NAME_MAP")
-    )[model.id]
-    return mapped ?: model.id
-}
 
 data class AzureOpenAiResponsesOptions(
     val apiKey: String? = null,
@@ -87,15 +61,15 @@ data class AzureOpenAiResponsesOptions(
      * String? because pi forwards the value verbatim. [mapResponsesToolChoice]
      * maps the sealed [works.resolve.pathfinder.ai.ToolChoice] onto this wire value. */
     val toolChoice: String? = null,
-    val azureApiVersion: String? = null,
-    val azureResourceName: String? = null,
-    val azureBaseUrl: String? = null,
-    val azureDeploymentName: String? = null,
+    override val azureApiVersion: String? = null,
+    override val azureResourceName: String? = null,
+    override val azureBaseUrl: String? = null,
+    override val azureDeploymentName: String? = null,
+    override val env: Map<String, String> = emptyMap(),
     val timeoutMs: Long? = null,
     val maxRetries: Int = 0,
     val maxRetryDelayMs: Long =
         works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
-    val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
     /** How the request identifies the calling app. */
     val identity: ClientIdentity? = null,
@@ -117,7 +91,7 @@ data class AzureOpenAiResponsesOptions(
      * port — carried for shape fidelity.
      */
     val telemetryContext: TelemetryContext? = null
-) {
+) : AzureEndpointOptions {
     override fun toString(): String = optionsToString(
         "AzureOpenAiResponsesOptions",
         "apiKey" to redactedSecret(apiKey),
@@ -289,73 +263,6 @@ class AzureOpenAiResponsesApi(
             )
         }
     }
-}
-
-/** Query and fragment are preserved verbatim; only the Azure-host path
- * rewrite clears the query (pi clears url.search inside that branch only). */
-internal fun normalizeAzureBaseUrl(raw: String): String {
-    val trimmed = trimJsWhitespace(raw).trimEnd('/')
-    val url = try {
-        java.net.URI(trimmed)
-    } catch (_: Exception) {
-        throw IllegalArgumentException("Invalid Azure OpenAI base URL: $raw")
-    }
-    val host = url.host ?: throw IllegalArgumentException("Invalid Azure OpenAI base URL: $raw")
-    val isAzureHost = host.endsWith(".openai.azure.com") ||
-        host.endsWith(".cognitiveservices.azure.com") ||
-        host.endsWith(".ai.azure.com")
-    var effectivePath = (url.path ?: "").trimEnd('/')
-    var stripQuery = false
-    if (isAzureHost &&
-        (
-            effectivePath.isEmpty() || effectivePath == "/openai" ||
-                effectivePath == "/openai/v1/responses"
-            )
-    ) {
-        effectivePath = "/openai/v1"
-        stripQuery = true
-    }
-    val port = if (url.port != -1) ":${url.port}" else ""
-    val userInfo = url.userInfo?.takeIf { it.isNotEmpty() }?.let { "$it@" } ?: ""
-    val query = if (stripQuery) {
-        ""
-    } else {
-        url.rawQuery?.takeIf { it.isNotEmpty() }?.let { "?$it" }
-            ?: ""
-    }
-    val fragment = url.rawFragment?.takeIf { it.isNotEmpty() }?.let { "#$it" } ?: ""
-    return "${url.scheme}://$userInfo$host$port$effectivePath$query$fragment"
-}
-
-internal data class AzureConfig(val baseUrl: String, val apiVersion: String)
-
-internal fun resolveAzureConfig(model: Model, options: AzureOpenAiResponsesOptions?): AzureConfig {
-    val apiVersion = options?.azureApiVersion
-        ?: options?.env?.get("AZURE_OPENAI_API_VERSION")
-        ?: DEFAULT_AZURE_API_VERSION
-
-    val envBaseUrl = options?.env?.get("AZURE_OPENAI_BASE_URL")?.let(::trimJsWhitespace)
-    // pi's `azureBaseUrl?.trim() || env?.trim() || undefined`: an empty
-    // (post-trim) override falls through to the env value.
-    val baseUrl = options?.azureBaseUrl?.let(::trimJsWhitespace)
-        ?.takeIf { it.isNotEmpty() }
-        ?: envBaseUrl?.takeIf { it.isNotEmpty() }
-    val resourceName = options?.azureResourceName ?: options?.env?.get("AZURE_OPENAI_RESOURCE_NAME")
-
-    var resolvedBaseUrl = baseUrl
-    if (resolvedBaseUrl == null && resourceName != null) {
-        resolvedBaseUrl = "https://$resourceName.openai.azure.com/openai/v1"
-    }
-    if (resolvedBaseUrl == null && model.baseUrl.isNotEmpty()) {
-        resolvedBaseUrl = model.baseUrl
-    }
-    if (resolvedBaseUrl == null) {
-        throw IllegalStateException(
-            "Azure OpenAI base URL is required. Set AZURE_OPENAI_BASE_URL or " +
-                "AZURE_OPENAI_RESOURCE_NAME, or pass azureBaseUrl, azureResourceName, or model.baseUrl."
-        )
-    }
-    return AzureConfig(normalizeAzureBaseUrl(resolvedBaseUrl), apiVersion)
 }
 
 internal fun buildAzureParams(

@@ -428,7 +428,7 @@ class RequestHooksTest {
             id = "gpt-4o-mini",
             name = "GPT-4o mini",
             api = "azure-openai-responses",
-            provider = "azure-openai-responses",
+            provider = "azure",
             baseUrl = "https://my-resource.openai.azure.com/openai/v1",
             contextWindow = 128_000,
             maxTokens = 16_384,

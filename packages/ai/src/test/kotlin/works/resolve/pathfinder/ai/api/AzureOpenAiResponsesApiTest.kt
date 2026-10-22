@@ -39,7 +39,7 @@ class AzureOpenAiResponsesApiTest {
         id = "gpt-4o-mini",
         name = "GPT-4o mini",
         api = "azure-openai-responses",
-        provider = "azure-openai-responses",
+        provider = "azure",
         baseUrl = "https://my-resource.openai.azure.com/openai/v1",
         cost = ModelCost(input = 0.15, output = 0.6, cacheRead = 0.075, cacheWrite = 0.0),
         contextWindow = 128_000,
@@ -199,7 +199,7 @@ class AzureOpenAiResponsesApiTest {
         val transport = FakeTransport()
         val events = api(transport).stream(model, context, AzureOpenAiResponsesOptions()).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.single())
-        assertEquals("No API key for provider: azure-openai-responses", error.error.errorMessage)
+        assertEquals("No API key for provider: azure", error.error.errorMessage)
     }
 
     @Test
@@ -213,7 +213,7 @@ class AzureOpenAiResponsesApiTest {
             works.resolve.pathfinder.ai.SimpleStreamOptions()
         ).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.single())
-        assertEquals("No API key for provider: azure-openai-responses", error.error.errorMessage)
+        assertEquals("No API key for provider: azure", error.error.errorMessage)
         assertTrue(transport.requests.isEmpty())
     }
 
@@ -460,7 +460,7 @@ class AzureOpenAiResponsesApiTest {
     fun `catalog azure models are strict-capable and send strict false`() = runTest {
         // The asset omits supportsStrictMode for azure models; pi's azure
         // default is true, so ordinary tools carry an explicit strict:false.
-        val model = realAsset().getProvider("azure-openai-responses")!!.models.first()
+        val model = realAsset().getProvider("azure")!!.models.first()
         assertNull(model.responsesCompat?.supportsStrictMode)
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completed().toTypedArray()))

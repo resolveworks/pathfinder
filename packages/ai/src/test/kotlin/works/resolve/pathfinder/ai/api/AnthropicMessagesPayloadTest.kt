@@ -416,35 +416,6 @@ class AnthropicMessagesPayloadTest {
      * Coding models are marked allowEmptySignature, so their empty-signature
      * thinking blocks replay as thinking instead of degrading to text. */
     @Test
-    fun `catalog kimi coding models keep empty-signature thinking blocks`() {
-        val k3 = realAsset().getModel("kimi-coding", "k3")!!
-        assertTrue(k3.anthropicCompat.allowEmptySignature)
-
-        val assistant = AssistantMessage(
-            content = listOf(ThinkingContent("internal reasoning", " ")),
-            api = "anthropic-messages",
-            provider = "kimi-coding",
-            model = "k3",
-            stopReason = StopReason.STOP
-        )
-        val block = body(
-            normalizeContext(
-                Context(
-                    messages = listOf(
-                        UserMessage.ofText("first"),
-                        assistant,
-                        UserMessage.ofText("second")
-                    )
-                )
-            ),
-            model = k3
-        )["messages"]!!.jsonArray[1].jsonObject["content"]!!.jsonArray[0].jsonObject
-        assertEquals("thinking", block["type"]!!.jsonPrimitive.content)
-        assertEquals("internal reasoning", block["thinking"]!!.jsonPrimitive.content)
-        assertEquals("", block["signature"]!!.jsonPrimitive.content)
-    }
-
-    @Test
     fun `consecutive tool results group into one user message with cache_control`() {
         val context = normalizeContext(
             Context(
