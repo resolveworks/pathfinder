@@ -43,6 +43,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mikepenz.markdown.annotator.annotatorSettings
+import com.mikepenz.markdown.compose.components.MarkdownComponent
+import com.mikepenz.markdown.compose.components.markdownComponents
+import com.mikepenz.markdown.compose.elements.MarkdownTable
+import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
+import com.mikepenz.markdown.compose.elements.MarkdownTableRow
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.model.DefaultMarkdownAnimation
@@ -274,8 +280,49 @@ private fun UserMessageItem(message: UserMessage, modifier: Modifier = Modifier)
 private val noTextSizeAnimation = DefaultMarkdownAnimation(animateTextSize = { this })
 
 /**
+ * Table cells wrap instead of the renderer's default single ellipsized
+ * line. Its columns are a fixed 160.dp wide, so on a phone screen long cell
+ * text stays cut off even when the table pans horizontally — scrolling
+ * reveals more columns, never the truncated text. Only the cell text
+ * layout changes; column widths, scrolling, styling, and table semantics
+ * stay the renderer's.
+ */
+private val wrappingTableCells: MarkdownComponent = { model ->
+    val annotator = annotatorSettings()
+    MarkdownTable(
+        content = model.content,
+        node = model.node,
+        style = model.typography.table,
+        annotatorSettings = annotator,
+        headerBlock = { content, header, tableWidth, style ->
+            MarkdownTableHeader(
+                content = content,
+                header = header,
+                tableWidth = tableWidth,
+                style = style,
+                maxLines = Int.MAX_VALUE,
+                annotatorSettings = annotator
+            )
+        },
+        rowBlock = { content, row, tableWidth, style ->
+            MarkdownTableRow(
+                content = content,
+                header = row,
+                tableWidth = tableWidth,
+                style = style,
+                maxLines = Int.MAX_VALUE,
+                annotatorSettings = annotator
+            )
+        }
+    )
+}
+
+private val transcriptMarkdownComponents = markdownComponents(table = wrappingTableCells)
+
+/**
  * The transcript's markdown rendering policy in one place: full width, no
- * text-size animation ([noTextSizeAnimation]), and default colors unless
+ * text-size animation ([noTextSizeAnimation]), wrapping table cells
+ * ([transcriptMarkdownComponents]), and default colors unless
  * [text] overrides the text color — thinking blocks pass the outline tone
  * (pi's shown-thinking look, dimmer than the answer text). The overloads
  * follow the renderer's entry points: pre-parsed [State] for committed
@@ -288,6 +335,7 @@ private fun TranscriptMarkdown(state: State, text: Color? = null) {
         state = state,
         colors = if (text == null) markdownColor() else markdownColor(text = text),
         animations = noTextSizeAnimation,
+        components = transcriptMarkdownComponents,
         modifier = Modifier.fillMaxWidth()
     )
 }
@@ -298,6 +346,7 @@ private fun TranscriptMarkdown(state: MarkdownState, text: Color) {
         markdownState = state,
         colors = markdownColor(text = text),
         animations = noTextSizeAnimation,
+        components = transcriptMarkdownComponents,
         modifier = Modifier.fillMaxWidth()
     )
 }
@@ -311,6 +360,7 @@ private fun TranscriptMarkdown(
         streamingMarkdownState = streamingMarkdownState,
         colors = if (text == null) markdownColor() else markdownColor(text = text),
         animations = noTextSizeAnimation,
+        components = transcriptMarkdownComponents,
         modifier = Modifier.fillMaxWidth()
     )
 }
