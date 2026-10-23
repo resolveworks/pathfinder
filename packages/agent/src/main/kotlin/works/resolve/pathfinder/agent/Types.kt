@@ -219,6 +219,19 @@ data class AgentLoopTurnUpdate(
     val thinkingLevel: ModelThinkingLevel? = null
 )
 
+/**
+ * Structural view of a session entry carried by [AgentEvent.EntryAppended].
+ * The concrete entry type belongs to the session layer, which the agent
+ * module cannot depend on.
+ */
+interface AppendedSessionEntry {
+    val id: String
+    val parentId: String?
+
+    /** Epoch millis. */
+    val timestamp: Long
+}
+
 /** Lifecycle events emitted by the agent loop. */
 sealed class AgentEvent {
     object AgentStart : AgentEvent()
@@ -250,6 +263,9 @@ sealed class AgentEvent {
     data class MessageUpdate(val assistantMessageEvent: AssistantMessageEvent) : AgentEvent()
 
     data class MessageEnd(val message: Message) : AgentEvent()
+
+    /** A session entry was appended to the conversation tree. */
+    data class EntryAppended(val entry: AppendedSessionEntry) : AgentEvent()
 
     /**
      * [arguments] is the raw parsed JSON of the assistant call; validated

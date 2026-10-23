@@ -35,6 +35,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
+import works.resolve.pathfinder.agent.AppendedSessionEntry
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
 import works.resolve.pathfinder.ai.Content
@@ -75,12 +76,12 @@ fun assertValidSessionId(id: String) {
 }
 
 /** A node in a session's conversation tree; [parentId] is null for roots. */
-sealed class SessionEntry {
-    abstract val id: String
-    abstract val parentId: String?
+sealed class SessionEntry : AppendedSessionEntry {
+    abstract override val id: String
+    abstract override val parentId: String?
 
     /** Epoch millis. */
-    abstract val timestamp: Long
+    abstract override val timestamp: Long
 }
 
 /** An entry carrying a chat [message]. */
@@ -1243,10 +1244,11 @@ class SessionManager private constructor(
     }
 
     /** Append a message as a child of the current leaf, then advance the leaf. */
-    suspend fun appendMessage(message: Message) {
-        appendEntry { id, parentId, timestamp ->
+    suspend fun appendMessage(message: Message): String {
+        val entry = appendEntry { id, parentId, timestamp ->
             MessageEntry(id, parentId, timestamp, message)
         }
+        return entry.id
     }
 
     suspend fun appendModelChange(provider: String, modelId: String) {

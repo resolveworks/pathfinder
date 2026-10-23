@@ -138,13 +138,13 @@ class AgentAutoRetryTest {
                 events.filterIsInstance<AgentEvent.AutoRetryEnd>()
         )
 
-        // pi drops the errored assistant message from agent state before the
-        // retry, so both runs see the same seeded-prompt + patch + user context.
+        // The omission rebuilds agent state from the persisted projection, so
+        // the non-persisted constructor prompt drops out along with the error.
         assertEquals(3, streams.seenContexts[0].size)
-        assertEquals(streams.seenContexts[0], streams.seenContexts[1])
+        assertEquals(streams.seenContexts[0].drop(1), streams.seenContexts[1])
 
         val state = agent.state.value
-        assertEquals(4, state.messages.size)
+        assertEquals(3, state.messages.size)
         val reply = state.messages.last() as AssistantMessage
         assertEquals("recovered", (reply.content.single() as TextContent).text)
         assertNull(state.errorMessage)
@@ -222,9 +222,9 @@ class AgentAutoRetryTest {
     @Test
     fun `retry after tool results continues from the toolResult without replaying the partial tool turn`() =
         runTest {
-            // pi drops only the trailing assistant error from agent state and
-            // continues from the trailing toolResult: the partial tool turn is
-            // neither replayed nor duplicated, and the session tree keeps
+            // pi omits only the trailing assistant error from projected context
+            // and continues from the trailing toolResult: the partial tool turn
+            // is neither replayed nor duplicated, and the session tree keeps
             // everything (append-only).
             val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
                 content = listOf(ToolCall("call-1", "get_weather", JsonObject(emptyMap())))
@@ -277,24 +277,24 @@ class AgentAutoRetryTest {
             )
 
             assertEquals(3, streams.seenContexts.size)
-            assertEquals(streams.seenContexts[1], streams.seenContexts[2])
+            // The omission rebuild drops the non-persisted constructor prompt.
+            assertEquals(streams.seenContexts[1].drop(1), streams.seenContexts[2])
             assertTrue(
-                streams.seenContexts[1].last() is works.resolve.pathfinder.ai.ToolResultMessage
+                streams.seenContexts[2].last() is works.resolve.pathfinder.ai.ToolResultMessage
             )
 
             val state = agent.state.value.messages
-            // seeded prompt baseline, section patch, user, tool call, tool result, recovery
-            assertEquals(6, state.size)
-            assertTrue(state[3] is AssistantMessage)
-            assertTrue(state[4] is works.resolve.pathfinder.ai.ToolResultMessage)
-            val recovered = state[5] as AssistantMessage
+            // section patch, user, tool call, tool result, recovery
+            assertEquals(5, state.size)
+            assertTrue(state[2] is AssistantMessage)
+            assertTrue(state[3] is works.resolve.pathfinder.ai.ToolResultMessage)
+            val recovered = state[4] as AssistantMessage
             assertEquals("recovered", (recovered.content.single() as TextContent).text)
             assertNull(agent.state.value.errorMessage)
 
             val tree = agent.sessionManager.buildSessionContext().messages
-            assertEquals(6, tree.size)
-            val errored = tree[4] as AssistantMessage
-            assertEquals(StopReason.ERROR, errored.stopReason)
+            assertEquals(5, tree.size)
+            assertFalse(tree.any { it is AssistantMessage && it.stopReason == StopReason.ERROR })
         }
 
     @Test
@@ -307,22 +307,23 @@ class AgentAutoRetryTest {
         agent.prompt("hi")
 
         // Every message_end lands in the session tree, including the error
-        // removed from agent state by the retry. The prompt patch leads the
-        // user message (the seeded prompt baseline lives only in agent state).
+        // omitted from projected context by the retry. The context edit follows
+        // the failed attempt on the branch.
         val entries = agent.sessionManager.getBranch()
-        assertEquals(4, entries.size)
+        assertEquals(5, entries.size)
         val user = entries[1] as MessageEntry
         val text = ((user.message as UserMessage).content.single() as TextContent).text
         assertEquals("hi", text)
         val failed = (entries[2] as MessageEntry).message as AssistantMessage
         assertEquals(StopReason.ERROR, failed.stopReason)
+        assertEquals(entries[2].id, (entries[3] as ContextEditEntry).targetId)
         assertEquals(
             StopReason.STOP,
-            (entries[3] as MessageEntry).message.let {
+            (entries[4] as MessageEntry).message.let {
                 (it as AssistantMessage).stopReason
             }
         )
-        assertEquals(4, agent.state.value.messages.size)
+        assertEquals(3, agent.state.value.messages.size)
     }
 
     @Test
@@ -366,10 +367,10 @@ class AgentAutoRetryTest {
             events.filterIsInstance<AgentEvent.AutoRetryStart>() +
                 events.filterIsInstance<AgentEvent.AutoRetryEnd>()
         )
-        // The error message was removed from agent state before the backoff;
-        // it stays in the session layer.
+        // The error message was omitted from projected context before the
+        // backoff; it stays in the session layer.
         assertEquals(1, streams.seenContexts.size)
-        assertEquals(3, agent.state.value.messages.size)
+        assertEquals(2, agent.state.value.messages.size)
         assertFalse(agent.state.value.isStreaming)
     }
 }
