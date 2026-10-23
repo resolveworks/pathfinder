@@ -41,6 +41,7 @@ import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.codingagent.core.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.CompactionSettings
+import works.resolve.pathfinder.codingagent.core.ContextEditEntry
 import works.resolve.pathfinder.codingagent.core.RetrySettings
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.createCompactionSummaryMessage
@@ -483,6 +484,119 @@ class AgentCompactionTest {
             requestMessages.any {
                 it is AssistantMessage && it.stopReason == StopReason.LENGTH
             }
+        )
+    }
+
+    @Test
+    fun `recovery omission persists as context edits and stays out after a reload`() = runTest {
+        val dir = createTempDirectory("recovery-reload-test").toFile()
+        val manager = SessionManager.create(
+            dir,
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        manager.appendMessage(UserMessage.ofText(longPrompt))
+        manager.appendMessage(assistant("prior turn"))
+        manager.appendMessage(UserMessage.ofText("check status"))
+        val truncated = AssistantMessage(
+            content = listOf(ToolCall("call_truncated", "bash", JsonObject(emptyMap()))),
+            api = model.api,
+            provider = model.provider,
+            model = model.id,
+            stopReason = StopReason.LENGTH,
+            usage = Usage(input = 100, output = 16),
+            timestamp = System.currentTimeMillis()
+        )
+        val truncatedId = manager.appendMessage(truncated)
+        val resultId = manager.appendMessage(
+            ToolResultMessage(
+                toolCallId = "call_truncated",
+                toolName = "bash",
+                content = listOf(TextContent("Not executed: output token limit reached.")),
+                isError = true,
+                timestamp = System.currentTimeMillis()
+            )
+        )
+        val (api, models) = fauxModels()
+        val streams = ScriptedStreams().apply {
+            streams.add(flowOf(AssistantMessageEvent.Done(StopReason.STOP, assistant("done"))))
+        }
+        api.responses.add(assistant("SUMMARY"))
+        val session = AgentSession(
+            agent = Agent(model = model, streamFn = streams.streamFn).apply {
+                replaceTranscript(manager.buildSessionContext().messages)
+            },
+            manager = manager,
+            settingsManager = SettingsManager.inMemory(
+                Settings(
+                    retry = RetrySettings(enabled = false),
+                    compaction = CompactionSettings(
+                        enabled = true,
+                        reserveTokens = 16_384,
+                        keepRecentTokens = 10_000
+                    )
+                )
+            ),
+            models = models
+        )
+
+        val events = collectEvents(session)
+
+        val appended = events.filterIsInstance<AgentEvent.EntryAppended>()
+            .map { it.entry }
+            .filterIsInstance<ContextEditEntry>()
+        assertEquals(setOf(truncatedId, resultId), appended.map { it.targetId }.toSet())
+        assertEquals(
+            setOf(truncatedId, resultId),
+            manager.getBranch().filterIsInstance<ContextEditEntry>()
+                .map { it.targetId }
+                .toSet()
+        )
+        val firstRequest = streams.seenContexts.single()
+        assertFalse(firstRequest.any { it is ToolResultMessage })
+        assertFalse(
+            firstRequest.any {
+                it is AssistantMessage && it.stopReason == StopReason.LENGTH
+            }
+        )
+
+        val reopened = SessionManager.open(
+            manager.getSessionFile()!!,
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        assertEquals(
+            setOf(truncatedId, resultId),
+            reopened.getBranch().filterIsInstance<ContextEditEntry>()
+                .map { it.targetId }
+                .toSet()
+        )
+        // The compaction retained both failed entries; only the persisted edits
+        // keep them out of the restored context.
+        assertTrue(reopened.buildContextEntries().any { it.id == truncatedId })
+        assertTrue(reopened.buildContextEntries().any { it.id == resultId })
+        val restored = reopened.buildSessionContext().messages
+        assertFalse(restored.any { it is ToolResultMessage })
+        assertFalse(restored.any { it is AssistantMessage && it.stopReason == StopReason.LENGTH })
+
+        val resumedStreams = ScriptedStreams().apply {
+            this.streams.add(
+                flowOf(AssistantMessageEvent.Done(StopReason.STOP, assistant("next")))
+            )
+        }
+        val resumed = AgentSession(
+            agent = Agent(model = model, streamFn = resumedStreams.streamFn).apply {
+                replaceTranscript(restored)
+            },
+            manager = reopened,
+            settingsManager = SettingsManager.inMemory(
+                Settings(retry = RetrySettings(enabled = false))
+            ),
+            models = models
+        )
+        resumed.prompt("next")
+        val reloadedRequest = resumedStreams.seenContexts.single()
+        assertFalse(reloadedRequest.any { it is ToolResultMessage })
+        assertFalse(
+            reloadedRequest.any { it is AssistantMessage && it.stopReason == StopReason.LENGTH }
         )
     }
 

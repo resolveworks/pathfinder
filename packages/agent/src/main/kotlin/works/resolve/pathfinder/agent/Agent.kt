@@ -537,6 +537,7 @@ class Agent(
             is AgentEvent.AutoRetryEnd,
             is AgentEvent.CompactionStart,
             is AgentEvent.CompactionEnd,
+            is AgentEvent.EntryAppended,
             is AgentEvent.SummarizationRetryScheduled,
             is AgentEvent.SummarizationRetryAttemptStart,
             AgentEvent.SummarizationRetryFinished,

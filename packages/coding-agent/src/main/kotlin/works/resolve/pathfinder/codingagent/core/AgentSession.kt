@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.codingagent.core
 
+import java.util.IdentityHashMap
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableJob
@@ -188,6 +189,9 @@ class AgentSession(
 
     /** Stateful classifier for transient provider errors. */
     private val retryClassifier = Retry()
+
+    /** Message object → source entry id, including projected copies. Guarded by [lock]. */
+    private val entryIdsByMessage = IdentityHashMap<Message, String>()
 
     /**
      * True once an overflow compact-and-retry has been attempted for the
@@ -1058,7 +1062,8 @@ class AgentSession(
             // messages later removed from agent state (auto-retry,
             // overflow recovery) stay in history. A storage failure here
             // fails the run (pi parity).
-            manager.appendMessage(event.message)
+            val entryId = manager.appendMessage(event.message)
+            synchronized(lock) { entryIdsByMessage[event.message] = entryId }
             val assistant = event.message as? AssistantMessage ?: return
             lastAssistantMessage = assistant
             if (assistant.stopReason != StopReason.ERROR &&
@@ -1147,28 +1152,86 @@ class AgentSession(
 
     // ---- automatic compaction ----
 
+    private fun cachedEntryId(message: Message): String? =
+        synchronized(lock) { entryIdsByMessage[message] }
+
+    /** Map a message object, including a projected copy, to its source entry id. */
+    private fun findPersistedMessageEntryId(message: Message): String? {
+        cachedEntryId(message)?.let { return it }
+        for (entry in manager.getBranch().asReversed()) {
+            if (entry is MessageEntry && entry.message === message) return entry.id
+        }
+
+        val messageIndex = agent.state.value.messages.indexOfFirst { it === message }
+        if (messageIndex < 0) return null
+        val projection = manager.buildSessionProjection()
+        var projectedIndex = 0
+        for (entry in projection.entries) {
+            for (projected in entry.messages) {
+                if (projectedIndex == messageIndex) {
+                    synchronized(lock) { entryIdsByMessage[projected] = entry.sourceEntry.id }
+                    return entry.sourceEntry.id
+                }
+                projectedIndex++
+            }
+        }
+        return null
+    }
+
     /**
-     * Remove a failed attempt and the tool results answering its calls from
-     * agent state. Results are searched in the projected context itself, so
-     * the pair stays together whether the attempt comes from the current run
-     * or a resumed session. The append-only tree keeps both entries; the
-     * omission only trims the context sent to the provider.
+     * Persistently omit a failed attempt and its tool results from model
+     * context. Results are found in the projected context, so the pair stays
+     * together whether the attempt comes from the current run or a resumed
+     * session. An unpaired result fails the next request (#11227).
      */
-    private fun omitRecoveryAttempt(message: AssistantMessage) {
+    private suspend fun omitRecoveryAttempt(message: AssistantMessage) {
         val toolCallIds = message.content
             .filterIsInstance<ToolCall>()
             .map { it.id }
             .toSet()
+        // A context edit replaces the projected copy, so match it by source
+        // entry as well.
+        val entryId = findPersistedMessageEntryId(message)
         val messages = agent.state.value.messages
-        val index = messages.indexOfFirst { it === message }
-        val targets = mutableListOf<Message>(message)
+        val index = messages.indexOfFirst { candidate ->
+            candidate === message || (entryId != null && cachedEntryId(candidate) == entryId)
+        }
+        val toolResults = mutableListOf<Message>()
         for (candidate in if (index < 0) emptyList() else messages.drop(index + 1)) {
             if (candidate is AssistantMessage) break
             if (candidate is ToolResultMessage && candidate.toolCallId in toolCallIds) {
-                targets.add(candidate)
+                toolResults.add(candidate)
             }
         }
-        agent.setMessages(messages.filter { candidate -> targets.none { it === candidate } })
+        val targets = listOf<Message>(message) + toolResults
+        val targetIds = targets.map(::findPersistedMessageEntryId)
+        val unresolvedProjectedTarget = targets.withIndex().any { (targetIndex, target) ->
+            targetIds[targetIndex] == null && messages.any { it === target }
+        }
+        if (unresolvedProjectedTarget) {
+            throw IllegalStateException(
+                "Cannot persist recovery omission because a projected message has no source entry"
+            )
+        }
+        for (targetId in targetIds) {
+            if (targetId == null) continue
+            val editId = manager.appendContextEdit(targetId, null)
+            manager.getEntry(editId)?.let { _events.emit(AgentEvent.EntryAppended(it)) }
+        }
+        refreshFinalizedContext()
+    }
+
+    /** Rebuild agent state from the canonical session projection. */
+    private fun refreshFinalizedContext() {
+        val projection = manager.buildSessionProjection()
+        synchronized(lock) {
+            for (entry in projection.entries) {
+                for (message in entry.messages) {
+                    entryIdsByMessage[message] = entry.sourceEntry.id
+                }
+            }
+        }
+        agent.setMessages(projection.messages)
     }
 
     /**
@@ -1249,11 +1312,7 @@ class AgentSession(
             // fail every later request.
             overflowRecoveryAttempted = true
             omitRecoveryAttempt(assistantMessage)
-            return runAutoCompaction(
-                AgentEvent.CompactionReason.OVERFLOW,
-                willRetry,
-                omitMessage = assistantMessage
-            )
+            return runAutoCompaction(AgentEvent.CompactionReason.OVERFLOW, willRetry)
         }
 
         // Case 3: threshold compaction without retry. For error messages or
@@ -1300,9 +1359,7 @@ class AgentSession(
      */
     private suspend fun runAutoCompaction(
         reason: AgentEvent.CompactionReason,
-        willRetry: Boolean,
-        /** The omitted attempt to remove again from the post-compaction rebuild. */
-        omitMessage: AssistantMessage? = null
+        willRetry: Boolean
     ): Boolean {
         if (models == null) return false
         val pathEntries = manager.getBranch()
@@ -1342,12 +1399,6 @@ class AgentSession(
         }
 
         if (willRetry) {
-            // The failed attempt was persisted on message_end before
-            // checkCompaction removed it from agent state; rebuilding
-            // from the new compaction can restore it and its tool results,
-            // and continueRun would send from them — omit the pair again
-            // before continuing the turn.
-            omitMessage?.let(::omitRecoveryAttempt)
             return true
         }
 
@@ -1431,9 +1482,8 @@ class AgentSession(
                 tokensBefore = compactResult.tokensBefore,
                 usage = compactResult.usage
             )
-            val sessionContext = manager.buildSessionContext()
-            agent.setMessages(sessionContext.messages)
-            val estimatedTokensAfter = sessionContext.messages.sumOf { estimateTokens(it) }
+            refreshFinalizedContext()
+            val estimatedTokensAfter = agent.state.value.messages.sumOf { estimateTokens(it) }
 
             val result = AgentEvent.CompactionResult(
                 summary = compactResult.summary,
@@ -1654,8 +1704,7 @@ class AgentSession(
      * abort is plain cancellation of the prompt coroutine, so the sleep's
      * [CancellationException] is caught to emit the terminal
      * `auto_retry_end{success:false, "Retry cancelled"}` under
-     * [NonCancellable] before rethrowing. The error message is removed from
-     * agent state only — it stays in the append-only session tree.
+     * [NonCancellable] before rethrowing.
      */
     private suspend fun prepareRetry(message: AssistantMessage): Boolean {
         val policy = retryPolicy()
@@ -1681,10 +1730,9 @@ class AgentSession(
             )
         )
 
-        val messages = agent.state.value.messages
-        if (messages.isNotEmpty() && messages.last() is AssistantMessage) {
-            agent.replaceTranscript(messages.dropLast(1))
-        }
+        // Keep the failed attempt in raw history while durably omitting it
+        // from model projection.
+        omitRecoveryAttempt(message)
 
         try {
             sleep(delayMs)
