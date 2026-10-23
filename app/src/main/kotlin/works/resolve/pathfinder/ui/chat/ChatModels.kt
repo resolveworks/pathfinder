@@ -140,6 +140,12 @@ data class ProviderAuthFlow(
     val pendingPrompt: AuthPrompt? = null
 )
 
+internal val AuthEvent.DeviceCode.offersBrowser: Boolean
+    get() = openBrowserOnConfirm ?: true
+
+internal val AuthEvent.DeviceCode.offersCodeCopy: Boolean
+    get() = copyCodeOnConfirm ?: true
+
 /**
  * Immutable projection of the chat screen state — the ViewModel publishes a
  * fresh snapshot per change and never mutates one in place. Contains no

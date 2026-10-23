@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import android.content.ClipData
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,10 +40,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
@@ -50,6 +54,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
@@ -539,6 +544,8 @@ private fun AuthEventItem(event: AuthEvent, onOpenUri: (url: String) -> Unit) {
         }
 
         is AuthEvent.DeviceCode -> {
+            val clipboard = LocalClipboard.current
+            val scope = rememberCoroutineScope()
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     text = stringResource(R.string.auth_continue_browser),
@@ -548,8 +555,26 @@ private fun AuthEventItem(event: AuthEvent, onOpenUri: (url: String) -> Unit) {
                     text = stringResource(R.string.auth_user_code, event.userCode),
                     style = MaterialTheme.typography.titleMedium
                 )
-                Button(onClick = { onOpenUri(event.verificationUri) }) {
-                    Text(stringResource(R.string.auth_open_browser))
+                if (!event.offersBrowser) {
+                    Text(event.verificationUri, style = MaterialTheme.typography.bodySmall)
+                }
+                if (event.offersBrowser) {
+                    Button(onClick = { onOpenUri(event.verificationUri) }) {
+                        Text(stringResource(R.string.auth_open_browser))
+                    }
+                }
+                if (event.offersCodeCopy) {
+                    FilledTonalButton(
+                        onClick = {
+                            scope.launch {
+                                clipboard.setClipEntry(
+                                    ClipEntry(ClipData.newPlainText(null, event.userCode))
+                                )
+                            }
+                        }
+                    ) {
+                        Text(stringResource(R.string.auth_copy_code))
+                    }
                 }
             }
         }

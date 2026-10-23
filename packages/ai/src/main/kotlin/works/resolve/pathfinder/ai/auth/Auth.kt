@@ -130,6 +130,10 @@ sealed interface AuthEvent {
     data class DeviceCode(
         val userCode: String,
         val verificationUri: String,
+        /** Offer browser opening on the user's confirmation; defaults to true. */
+        val openBrowserOnConfirm: Boolean? = null,
+        /** Offer copying [userCode] on the user's confirmation; defaults to true. */
+        val copyCodeOnConfirm: Boolean? = null,
         val intervalSeconds: Int? = null,
         val expiresInSeconds: Int? = null
     ) : AuthEvent
