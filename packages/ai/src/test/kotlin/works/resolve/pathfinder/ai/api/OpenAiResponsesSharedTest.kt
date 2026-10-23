@@ -971,14 +971,11 @@ class OpenAiResponsesSharedTest {
     }
 
     @Test
-    fun `parallel tool calls without output_index are dropped instead of mixed up`() {
-        // pi #9974: llama.cpp omits output_index and sends both done events last;
-        // treating them positionally would pair call a's output with call b.
-        // Divergence: pi rejects the stream. This port keys every block by
-        // output_index, so index-less events never become slots and no call is
-        // delivered or executed — the mixed-up pairing cannot occur.
+    fun `parallel tool calls without output_index are rejected instead of mixed up`() {
+        // https://github.com/earendil-works/pi/issues/9974
+        // llama.cpp omits output_index from every event and sends both done
+        // events after all deltas.
         val s = state()
-        val emitted = mutableListOf<AssistantMessageEvent>()
         for (jsonText in listOf(
             """{"type":"response.output_item.added",
                 "item":{"type":"function_call","id":"fc_a","call_id":"call_a","name":"bash","arguments":""}}""",
@@ -992,13 +989,13 @@ class OpenAiResponsesSharedTest {
                 "item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"bash","arguments":"{\"command\":\"echo b\"}"}}""",
             """{"type":"response.completed","response":{"id":"resp_no_output_index","status":"completed"}}"""
         )) {
-            emitted += s.onEvent(event(jsonText))
+            s.onEvent(event(jsonText))
         }
-        s.assertTerminalEvent()
-        assertEquals(StopReason.STOP, s.stopReason)
-        assertTrue(s.partialSnapshot().content.isEmpty())
-        assertTrue(emitted.none { it is AssistantMessageEvent.ToolCallStart })
-        assertTrue(emitted.none { it is AssistantMessageEvent.ToolCallEnd })
+        val failure = assertFailsWith<ProviderStreamException> { s.assertTerminalEvent() }
+        assertEquals(
+            "OpenAI Responses stream completed with an unfinished tool call: bash (call_a|fc_a)",
+            failure.message
+        )
     }
 
     @Test

@@ -701,7 +701,10 @@ object OpenAiResponsesShared {
         private val providerThinkingLevel: String? = null
     ) {
         private val blocks = mutableListOf<Block>()
-        private val slots = mutableMapOf<Int, Block>() // output_index -> live block
+
+        // output_index -> live block. JS Map accepts undefined, so index-less
+        // events all share the null key instead of being dropped.
+        private val slots = mutableMapOf<Int?, Block>()
         private val reasoningBlocksById = mutableMapOf<String, Block.Thinking>()
 
         var responseId: String? = null
@@ -758,9 +761,8 @@ object OpenAiResponsesShared {
             }
 
             "response.output_item.added" -> {
-                val outputIndex = event.int("output_index") ?: return emptyList()
                 val item = event.obj("item") ?: return emptyList()
-                createSlot(outputIndex, item)
+                createSlot(event.int("output_index"), item)
             }
 
             "response.reasoning_summary_text.delta", "response.reasoning_text.delta" -> {
@@ -865,9 +867,9 @@ object OpenAiResponsesShared {
         }
 
         private inline fun <reified T : Block> getSlot(event: JsonObject): T? =
-            slots[event.int("output_index") ?: return null] as? T
+            slots[event.int("output_index")] as? T
 
-        private fun createSlot(outputIndex: Int, item: JsonObject): List<AssistantMessageEvent> {
+        private fun createSlot(outputIndex: Int?, item: JsonObject): List<AssistantMessageEvent> {
             val block: Block = when (item.string("type")) {
                 "reasoning" -> Block.Thinking(blocks.size)
 
@@ -916,7 +918,7 @@ object OpenAiResponsesShared {
 
         private fun onOutputItemDone(event: JsonObject): List<AssistantMessageEvent> {
             val item = event.obj("item") ?: return emptyList()
-            val outputIndex = event.int("output_index") ?: return emptyList()
+            val outputIndex = event.int("output_index")
             applyMessagePhaseStopReason(item)
             // Azure and others may send output_item.done without a preceding
             // output_item.added for the same output_index.
