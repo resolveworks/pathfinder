@@ -20,7 +20,9 @@ data class PageContent(
     /** Final URL after redirects. */
     val url: String,
     val title: String?,
-    val markdown: String
+    val markdown: String,
+    /** Main-frame HTTP status; 200 unless WebView reported an error status (success statuses are not observable). */
+    val httpStatus: Int
 )
 
 /** Loads a URL and returns its rendered, readable content. */
@@ -83,12 +85,12 @@ class WebFetchTool(private val fetcher: PageFetcher) : AgentTool {
         if (page.markdown.isBlank()) {
             return AgentToolResult(
                 content = listOf(TextContent("No readable content found at $url.")),
-                details = EMPTY_DETAILS
+                details = buildJsonObject { put("status", page.httpStatus) }
             )
         }
         return AgentToolResult(
             content = listOf(TextContent(formatContent(page))),
-            details = EMPTY_DETAILS
+            details = buildJsonObject { put("status", page.httpStatus) }
         )
     }
 
@@ -113,7 +115,5 @@ class WebFetchTool(private val fetcher: PageFetcher) : AgentTool {
         } else {
             text.take(MAX_CONTENT_CHARS) + "\n\n[Content truncated]"
         }
-
-        private val EMPTY_DETAILS: JsonObject = JsonObject(emptyMap())
     }
 }

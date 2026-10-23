@@ -939,25 +939,6 @@ class ChatViewModel(
             is AgentEvent.SummarizationRetryFinished
             -> Unit
 
-            // Streaming tool output: retained until the
-            // execution ends; the committed result takes over the row.
-            is AgentEvent.ToolExecutionUpdate -> {
-                val partial = event.partialResult.content.textContent()
-                if (partial.isNotEmpty()) {
-                    _streamingState.update {
-                        it.copy(toolPartials = it.toolPartials + (event.toolCallId to partial))
-                    }
-                }
-            }
-
-            is AgentEvent.ToolExecutionEnd -> _streamingState.update {
-                if (event.toolCallId in it.toolPartials) {
-                    it.copy(toolPartials = it.toolPartials - event.toolCallId)
-                } else {
-                    it
-                }
-            }
-
             // The streaming fold is driven by the assistant message
             // lifecycle: the start's boundary partial seeds it, MessageUpdate
             // feeds boundaries and deltas into it.

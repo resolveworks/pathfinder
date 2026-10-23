@@ -3,6 +3,7 @@ package works.resolve.pathfinder.tools.webfetch
 import android.content.Context
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewCompat
@@ -62,6 +63,11 @@ class WebViewPageFetcher(private val context: Context) : PageFetcher {
                 webView.settings.domStorageEnabled = true
 
                 val loaded = CompletableDeferred<String>()
+                // WebView surfaces only error statuses, and per resource: a
+                // main-frame load that never hit onReceivedHttpError is a
+                // success, and 200 is the only status a rendered document
+                // load can have without one.
+                var httpStatus = 200
                 webView.webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, url: String) {
                         loaded.complete(url)
@@ -80,6 +86,18 @@ class WebViewPageFetcher(private val context: Context) : PageFetcher {
                             )
                         }
                     }
+
+                    override fun onReceivedHttpError(
+                        view: WebView,
+                        request: WebResourceRequest,
+                        errorResponse: WebResourceResponse
+                    ) {
+                        // Fires for every resource with a status >= 400; only
+                        // the main frame's response speaks for the fetch.
+                        if (request.isForMainFrame) {
+                            httpStatus = errorResponse.statusCode
+                        }
+                    }
                 }
 
                 webView.loadUrl(url)
@@ -88,7 +106,7 @@ class WebViewPageFetcher(private val context: Context) : PageFetcher {
                 delay(PAGE_SETTLE_DELAY_MS)
 
                 val encoded = webView.evaluateSuspending(defuddleBundle + "\n" + EXTRACTION_WRAPPER)
-                parseExtraction(url, webView.url ?: url, encoded)
+                parseExtraction(url, webView.url ?: url, encoded, httpStatus)
             } finally {
                 withContext(NonCancellable) {
                     runCatching { webView.stopLoading() }
@@ -113,7 +131,8 @@ class WebViewPageFetcher(private val context: Context) : PageFetcher {
         internal fun parseExtraction(
             requestedUrl: String,
             finalUrl: String,
-            encoded: String?
+            encoded: String?,
+            httpStatus: Int
         ): PageContent {
             if (encoded == null || encoded == "null") {
                 throw WebFetchException("No content extracted from $requestedUrl")
@@ -130,7 +149,12 @@ class WebViewPageFetcher(private val context: Context) : PageFetcher {
                 ?.takeIf { it.isString }
                 ?: throw WebFetchException("Unexpected extraction result from $requestedUrl")
             val title = (page["title"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-            return PageContent(url = finalUrl, title = title, markdown = markdown.content)
+            return PageContent(
+                url = finalUrl,
+                title = title,
+                markdown = markdown.content,
+                httpStatus = httpStatus
+            )
         }
 
         private const val PROFILE_NAME = "web_fetch"

@@ -129,7 +129,7 @@ class BraveWebSearchTool(
         if (results == null || results.isEmpty()) {
             return AgentToolResult(
                 content = listOf(TextContent("No results found for \"$query\".")),
-                details = EMPTY_DETAILS
+                details = buildJsonObject { put("resultCount", 0) }
             )
         }
 
@@ -143,7 +143,7 @@ class BraveWebSearchTool(
 
         return AgentToolResult(
             content = listOf(TextContent(lines.joinToString("\n"))),
-            details = EMPTY_DETAILS
+            details = buildJsonObject { put("resultCount", results.size) }
         )
     }
 

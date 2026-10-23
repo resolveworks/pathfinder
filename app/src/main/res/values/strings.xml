@@ -83,7 +83,14 @@
     <string name="auth_user_code">Code: %1$s</string>
 
     <string name="tool_status_failed">Failed</string>
-    <string name="tool_output_view">View tool output</string>
+    <string name="tool_output_expand">Expand tool output</string>
+    <string name="tool_output_collapse">Collapse tool output</string>
+    <string name="tool_output_more_lines">… (%1$d more lines, tap to expand)</string>
+    <string name="tool_summary_http_status">HTTP %1$d</string>
+    <plurals name="tool_summary_results">
+        <item quantity="one">%d result</item>
+        <item quantity="other">%d results</item>
+    </plurals>
     <string name="tool_title_searched_for">Searched for %1$s</string>
     <string name="tool_title_fetched">Fetched %1$s</string>
 

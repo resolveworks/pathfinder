@@ -260,9 +260,7 @@ data class ChatUiState(
 @Immutable
 data class StreamingUiState(
     /** Delta fold of the streaming assistant message (see ChatViewModel); null while nothing streams. */
-    val streaming: StreamingMessageUi? = null,
-    /** Live partial output by tool call id; cleared when the result commits. */
-    val toolPartials: Map<String, String> = emptyMap()
+    val streaming: StreamingMessageUi? = null
 )
 
 /**

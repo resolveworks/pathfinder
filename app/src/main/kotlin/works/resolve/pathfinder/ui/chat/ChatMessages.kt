@@ -9,18 +9,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -37,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -62,6 +60,7 @@ import com.mikepenz.markdown.model.rememberMarkdownState
 import com.mikepenz.markdown.model.rememberStreamingMarkdownState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.R
@@ -73,6 +72,7 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.truthyString
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
@@ -80,8 +80,8 @@ import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 private const val STREAMING_PLACEHOLDER = "…"
 
-/** Cap on the in-row partial-output preview; the full output opens in the sheet. */
-private const val PARTIAL_OUTPUT_MAX_LINES = 4
+/** pi's fallback preview cap (FALLBACK_PREVIEW_LINES): output lines shown while collapsed. */
+private const val TOOL_OUTPUT_PREVIEW_LINES = 10
 
 @Composable
 internal fun ConversationContent(
@@ -113,24 +113,17 @@ internal fun ConversationContent(
         uiState.messages.filter(TranscriptRow::hasRenderableContent)
     }
 
-    // Opened-viewer view state, by tool call id. Ephemeral state resolved
-    // against the live rows, so a stale key (session switch, branch
-    // navigation) just closes the sheet.
-    var openToolResultId by rememberSaveable { mutableStateOf<String?>(null) }
-    val openToolRow = remember(uiState.messages, openToolResultId) {
-        val id = openToolResultId
-        if (id == null) {
-            null
-        } else {
-            uiState.messages.filterIsInstance<TranscriptRow.Tool>().firstOrNull { it.call.id == id }
-        }
-    }
+    // Expansion is per tool call — pi's Ctrl+O exposed as a tap on the row.
+    // Ephemeral state resolved against the live rows, so a stale id (session
+    // switch, branch navigation) simply matches nothing.
+    var expandedToolIds by rememberSaveable(
+        stateSaver = listSaver(save = { it.toList() }, restore = { it.toSet() })
+    ) { mutableStateOf(setOf<String>()) }
 
     // Narrowed reads so the item lambdas capture only stable primitives;
     // capturing uiState would re-invalidate every visible row per token.
     val isStreaming = uiState.isStreaming
     val showThinking = uiState.showThinking
-    val toolPartials = streaming.toolPartials
 
     Box(modifier = modifier.fillMaxSize()) {
         if (messageCount == 0 && streaming.streaming == null) {
@@ -160,17 +153,20 @@ internal fun ConversationContent(
                         when (row) {
                             is TranscriptRow.Compacted -> CompactedDivider()
 
-                            is TranscriptRow.Tool -> ToolCallItem(
-                                call = row.call,
-                                result = row.result,
-                                running = row.result == null && isStreaming,
-                                partialOutput = if (row.result == null) {
-                                    toolPartials[row.call.id]
-                                } else {
-                                    null
-                                },
-                                onOpenOutput = { openToolResultId = row.call.id }
-                            )
+                            is TranscriptRow.Tool -> {
+                                val callId = row.call.id
+                                ToolCallItem(
+                                    call = row.call,
+                                    result = row.result,
+                                    running = row.result == null && isStreaming,
+                                    expanded = callId in expandedToolIds,
+                                    onToggleExpanded = {
+                                        expandedToolIds = expandedToolIds.let {
+                                            if (callId in it) it - callId else it + callId
+                                        }
+                                    }
+                                )
+                            }
 
                             is TranscriptRow.Chat -> when (val message = row.message) {
                                 is UserMessage -> UserMessageItem(message)
@@ -197,14 +193,6 @@ internal fun ConversationContent(
                     )
                 }
             }
-        }
-
-        openToolRow?.result?.let { result ->
-            ToolOutputSheet(
-                call = openToolRow.call,
-                result = result,
-                onDismiss = { openToolResultId = null }
-            )
         }
     }
 }
@@ -560,7 +548,8 @@ internal fun toolCallTitle(call: ToolCall?, fallbackName: String?): String =
 
 /**
  * Shared tool-call header: the row title with the trailing "Failed" label
- * on errors. The title stays on one line; the sheet is about the output.
+ * on errors. The title stays on one line; the output below the header
+ * carries the content.
  */
 @Composable
 private fun ToolHeader(call: ToolCall, isError: Boolean) {
@@ -588,26 +577,43 @@ private fun ToolHeader(call: ToolCall, isError: Boolean) {
 }
 
 /**
- * One tool execution as a single fixed-height line in a tonal container,
- * distinct from conversation text: the row title (the call's key argument,
- * else the tool name) and a spinner while running
- * (the call committed but its result has not, and the run is still live —
- * pi's component spins between its start and end events). A running call
- * previews its throttled partial output under the title. Rows with output
- * open [ToolOutputSheet] instead
- * of expanding in place: the sheet owns its scroll, starts at the top of
- * the content, and leaves the transcript's layout and scroll position
- * untouched behind it. Per-row, never global (pi's Ctrl+O, exposed as a
- * tap). Error coloring is a native adaptation (pi signals errors through
- * the shell, not text color).
+ * Tool-specific summary line under the header, from the result's details —
+ * the channel pi's renderResult renderers draw from. Web search reports
+ * its result count, web fetch its HTTP status; null when the tool reports
+ * nothing.
+ */
+@Composable
+private fun toolResultSummary(result: ToolResultMessage): String? = when (result.toolName) {
+    BraveWebSearchTool.NAME -> (result.details as? JsonObject).int("resultCount")?.let { count ->
+        pluralStringResource(R.plurals.tool_summary_results, count, count)
+    }
+
+    WebFetchTool.NAME -> (result.details as? JsonObject).int("status")?.let { status ->
+        stringResource(R.string.tool_summary_http_status, status)
+    }
+
+    else -> null
+}
+
+/**
+ * One tool execution as a tonal container, distinct from conversation
+ * text: the row title (the call's key argument, else the tool name) and a
+ * spinner while running (the call committed but its result has not, and
+ * the run is still live — pi's component spins between its start and end
+ * events). A committed call previews its output below the title like pi's
+ * execution component: collapsed shows the first [TOOL_OUTPUT_PREVIEW_LINES]
+ * lines with a truncation notice, a tap toggles the full output in place
+ * (pi's Ctrl+O, exposed as the row's tap) — Markdown for the two web tools,
+ * monospace raw otherwise. Error coloring is a native adaptation (pi
+ * signals errors through the shell, not text color).
  */
 @Composable
 private fun ToolCallItem(
     call: ToolCall,
     result: ToolResultMessage?,
     running: Boolean,
-    partialOutput: String?,
-    onOpenOutput: () -> Unit,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val output = result?.content?.textContent()?.takeIf { it.isNotEmpty() }
@@ -620,10 +626,18 @@ private fun ToolCallItem(
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            // The whole row is the open action's touch target.
+            // The whole row is the expand action's touch target.
             modifier = if (output != null) {
-                Modifier.clickable(onClickLabel = stringResource(R.string.tool_output_view)) {
-                    onOpenOutput()
+                Modifier.clickable(
+                    onClickLabel = stringResource(
+                        if (expanded) {
+                            R.string.tool_output_collapse
+                        } else {
+                            R.string.tool_output_expand
+                        }
+                    )
+                ) {
+                    onToggleExpanded()
                 }
             } else {
                 Modifier
@@ -631,15 +645,22 @@ private fun ToolCallItem(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 ToolHeader(call = call, isError = isError)
-                partialOutput?.takeIf { it.isNotBlank() }?.let { partial ->
-                    Text(
-                        text = partial,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = PARTIAL_OUTPUT_MAX_LINES,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                if (result != null) {
+                    toolResultSummary(result)?.let { summary ->
+                        Text(
+                            text = summary,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    output?.let {
+                        ToolOutputBody(
+                            call = call,
+                            output = it,
+                            expanded = expanded,
+                            isError = isError
+                        )
+                    }
                 }
             }
             if (running) {
@@ -653,56 +674,53 @@ private fun ToolCallItem(
 }
 
 /**
- * Tool-result viewer: the whole output in a scrollable modal sheet. A fresh
- * scroll state per open anchors the viewport at the top of the content;
- * dismissing restores the transcript's scroll position because it never moved.
+ * The committed output under the call: collapsed, pi's fallback preview —
+ * the first [TOOL_OUTPUT_PREVIEW_LINES] lines plus a remaining-lines
+ * notice; expanded, the whole output in the row (Markdown for the two web
+ * tools, monospace raw otherwise). The parse is hoisted like the sheet's
+ * was: Markdown(content) re-parses on every recomposition, so the state
+ * parses once per output.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ToolOutputSheet(call: ToolCall, result: ToolResultMessage, onDismiss: () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        val format = ToolResultRenderers.formatFor(call.name)
-        val output = remember(result) { result.content.textContent() }
-        val contentColor = if (result.isError) {
-            MaterialTheme.colorScheme.error
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        }
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .navigationBarsPadding()
-        ) {
-            ToolHeader(call = call, isError = result.isError)
-            Column(
-                modifier = Modifier
-                    .weight(1f, fill = false)
-                    .heightIn(max = 640.dp)
-                    .verticalScroll(rememberScrollState())
-                    .padding(top = 8.dp)
-            ) {
-                when {
-                    // Hoisted parse: Markdown(content) re-parses on every
-                    // recomposition (its default flavour and parser are
-                    // fresh, never-equal instances), blanking to the loading
-                    // state each time; this parses once per open, off the
-                    // composition.
-                    format == ToolResultFormat.MARKDOWN -> TranscriptMarkdown(
-                        state = rememberMarkdownState(output),
-                        text = contentColor
-                    )
-
-                    // Raw fallback: pi's generic result renderer.
-                    else -> Text(
-                        text = output,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = contentColor
-                    )
-                }
+private fun ToolOutputBody(call: ToolCall, output: String, expanded: Boolean, isError: Boolean) {
+    val contentColor = if (isError) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    if (expanded) {
+        when (ToolResultRenderers.formatFor(call.name)) {
+            ToolResultFormat.MARKDOWN -> key(output) {
+                TranscriptMarkdown(
+                    state = rememberMarkdownState(output),
+                    text = contentColor
+                )
             }
+
+            ToolResultFormat.MONO -> Text(
+                text = output,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = contentColor
+            )
         }
+    } else {
+        val lines = remember(output) { output.split("\n") }
+        val visible = lines.take(TOOL_OUTPUT_PREVIEW_LINES)
+        val remaining = lines.size - visible.size
+        val preview = if (remaining > 0) {
+            visible.joinToString("\n") +
+                "\n" +
+                stringResource(R.string.tool_output_more_lines, remaining)
+        } else {
+            visible.joinToString("\n")
+        }
+        Text(
+            text = preview,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+            color = contentColor
+        )
     }
 }
 

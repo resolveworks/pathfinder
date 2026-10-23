@@ -17,7 +17,8 @@ import works.resolve.pathfinder.ai.utils.validateToolArguments
 
 class WebFetchToolTest {
 
-    private var page: PageContent = PageContent("https://example.com/", "Example", "Hello world")
+    private var page: PageContent =
+        PageContent("https://example.com/", "Example", "Hello world", 200)
     private var error: Exception? = null
 
     private val tool = WebFetchTool { _ ->
@@ -99,11 +100,12 @@ class WebFetchToolTest {
         assertTrue(text.startsWith("# Example\n\n"))
         assertTrue(text.contains("Source: https://example.com/\n\n"))
         assertTrue(text.endsWith("Hello world"))
+        assertEquals("{\"status\":200}", result.details.toString())
     }
 
     @Test
     fun `execute omits heading when title is blank`() = runBlocking {
-        page = PageContent("https://example.com/", null, "Body only")
+        page = PageContent("https://example.com/", null, "Body only", 200)
         val text = resultText(tool.execute("call-1", args("https://example.com/")) {})
         assertTrue(text.startsWith("Source: https://example.com/"))
         assertTrue(text.endsWith("Body only"))
@@ -111,7 +113,7 @@ class WebFetchToolTest {
 
     @Test
     fun `execute reports no readable content`() = runBlocking {
-        page = PageContent("https://example.com/", "Empty", "  ")
+        page = PageContent("https://example.com/", "Empty", "  ", 200)
         val text = resultText(tool.execute("call-1", args("https://example.com/")) {})
         assertEquals("No readable content found at https://example.com/.", text)
     }
@@ -119,7 +121,7 @@ class WebFetchToolTest {
     @Test
     fun `execute truncates oversized text`() = runBlocking {
         val maxChars = 50_000
-        page = PageContent("https://example.com/", null, "x".repeat(maxChars + 5000))
+        page = PageContent("https://example.com/", null, "x".repeat(maxChars + 5000), 200)
         val text = resultText(tool.execute("call-1", args("https://example.com/")) {})
         assertEquals(
             "Source: https://example.com/\n\n" + "x".repeat(maxChars) +
@@ -135,9 +137,11 @@ class WebFetchToolTest {
         val page = WebViewPageFetcher.parseExtraction(
             "https://example.com/",
             "https://example.com/final",
-            encoded
+            encoded,
+            404
         )
         assertEquals("https://example.com/final", page.url)
+        assertEquals(404, page.httpStatus)
         assertEquals("Título — “quoted”\nline", page.title)
         assertEquals("# Heading\n\nSome *markdown* with é and \"quotes\"", page.markdown)
     }
@@ -147,7 +151,8 @@ class WebFetchToolTest {
         val page = WebViewPageFetcher.parseExtraction(
             "https://example.com/",
             "https://example.com/",
-            "{\"markdown\":\"Body\"}"
+            "{\"markdown\":\"Body\"}",
+            200
         )
         assertNull(page.title)
         assertEquals("Body", page.markdown)
@@ -159,7 +164,8 @@ class WebFetchToolTest {
             WebViewPageFetcher.parseExtraction(
                 "https://example.com/",
                 "https://example.com/",
-                "{\"error\":\"boom\"}"
+                "{\"error\":\"boom\"}",
+                200
             )
         }
         assertEquals("https://example.com/: boom", e.message)
@@ -172,7 +178,8 @@ class WebFetchToolTest {
                 WebViewPageFetcher.parseExtraction(
                     "https://example.com/",
                     "https://example.com/",
-                    encoded
+                    encoded,
+                    200
                 )
             }
         }
@@ -184,7 +191,8 @@ class WebFetchToolTest {
             WebViewPageFetcher.parseExtraction(
                 "https://example.com/",
                 "https://example.com/",
-                "\"just a string\""
+                "\"just a string\"",
+                200
             )
         }
     }
@@ -201,7 +209,8 @@ class WebFetchToolTest {
                 WebViewPageFetcher.parseExtraction(
                     "https://example.com/",
                     "https://example.com/",
-                    encoded
+                    encoded,
+                    200
                 )
             }
         }

@@ -145,7 +145,7 @@ class BraveWebSearchToolTest {
                     "- [Third](https://c.example)",
                 resultText(result)
             )
-            assertEquals("{}", result.details.toString())
+            assertEquals("{\"resultCount\":3}", result.details.toString())
         }
 
     @Test
@@ -157,7 +157,7 @@ class BraveWebSearchToolTest {
         server.enqueue(MockResponse().setBody("{}"))
         result = tool().execute("t2", tool().prepare(args(query = "nothing")), {})
         assertEquals("No results found for \"nothing\".", resultText(result))
-        assertEquals("{}", result.details.toString())
+        assertEquals("{\"resultCount\":0}", result.details.toString())
     }
 
     @Test
