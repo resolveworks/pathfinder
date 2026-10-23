@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -327,6 +328,10 @@ fun ChatScreen(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
+        // The IME resizes the whole shell — drawer included — rather than
+        // individual surfaces, so nothing (the drawer's new-chat button,
+        // forms, snackbars) hides behind the keyboard.
+        modifier = modifier.imePadding(),
         // Session navigation is meaningless before the app is configured.
         gesturesEnabled = uiState.status == ChatStatus.Ready,
         drawerContent = {
@@ -352,8 +357,7 @@ fun ChatScreen(
                     pushSettings()
                 }
             )
-        },
-        modifier = modifier
+        }
     ) {
         Scaffold(
             topBar = {

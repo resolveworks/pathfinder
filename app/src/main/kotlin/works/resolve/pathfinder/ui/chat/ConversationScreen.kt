@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -48,8 +47,8 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 /**
  * The conversation transcript surface: messages plus the composer column.
  * The composer column is content, not scaffold chrome — it belongs to the
- * transcript view; the scaffold owns navigation-bar padding, the column only
- * lifts itself above the IME.
+ * transcript view; the scaffold owns navigation-bar padding and the app
+ * shell owns IME avoidance.
  */
 @Composable
 internal fun ChatSurface(
@@ -69,7 +68,7 @@ internal fun ChatSurface(
             scrollState = scrollState,
             modifier = Modifier.weight(1f)
         )
-        Column(modifier = Modifier.imePadding()) {
+        Column {
             uiState.retryStatus?.let { retry ->
                 RetryStatusRow(
                     attempt = retry.attempt,
