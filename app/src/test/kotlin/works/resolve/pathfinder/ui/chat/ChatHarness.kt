@@ -255,6 +255,8 @@ internal class ChatHarness(
     // the first flush).
     val sessionsDir = File(tmpFolder.root, "sessions_${System.nanoTime()}").apply { mkdirs() }
 
+    val shareCacheDir = File(tmpFolder.root, "exports_${System.nanoTime()}")
+
     private val nextSessionId = AtomicInteger()
 
     val sessionIdFactory: () -> String = { "sess-" + nextSessionId.getAndIncrement() }
@@ -368,6 +370,7 @@ internal class ChatHarness(
         catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
         authService = authService,
         sessionsDir = sessionsDir,
+        shareCacheDir = shareCacheDir,
         sessionIdFactory = sessionIdFactory,
         sessionIoDispatcher = sessionIoDispatcher,
         agentFactory = factory,

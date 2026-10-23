@@ -9,9 +9,12 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -47,6 +50,7 @@ import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.codingagent.core.StreamingBehavior
+import works.resolve.pathfinder.codingagent.core.exportSessionToJsonl
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
@@ -81,6 +85,8 @@ class ChatViewModel(
     private val catalog: ProviderCatalog,
     private val authService: ProviderAuthService,
     private val sessionsDir: File,
+    /** Disposable cache where pi-style exports are staged before sharing. */
+    private val shareCacheDir: File,
     /** New session ids; pi's uuidv7 (SessionManager.create's default). */
     private val sessionIdFactory: () -> String = ::uuidv7,
     /** Where session manager IO runs; the test harness keeps it on virtual time. */
@@ -112,6 +118,11 @@ class ChatViewModel(
     private val _streamingState = MutableStateFlow(StreamingUiState())
 
     val streamingState: StateFlow<StreamingUiState> = _streamingState.asStateFlow()
+
+    /** Staged export files awaiting the system share sheet (one-shot view effect). */
+    private val _shareRequests = MutableSharedFlow<File>()
+
+    val shareRequests: SharedFlow<File> = _shareRequests.asSharedFlow()
 
     private val loginController = ProviderLoginController(
         scope = viewModelScope,
@@ -501,6 +512,28 @@ class ChatViewModel(
     fun setTreeFilter(filter: TreeFilter) {
         _uiState.update {
             it.copy(treeFilter = filter, treeRows = treeRows(filter))
+        }
+    }
+
+    /**
+     * pi's /export: [exportSessionToJsonl] stages the active branch as a
+     * fresh single-branch session (new header, no abandoned branches) in
+     * the share cache and publishes it on [shareRequests]. Snapshot-based,
+     * so it works while a response streams.
+     */
+    fun shareSession() {
+        val session = activeSession ?: return
+        viewModelScope.launch {
+            try {
+                val file = withContext(sessionIoDispatcher) {
+                    exportSessionToJsonl(session, shareCacheDir)
+                }
+                _shareRequests.emit(file)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(UiString(R.string.error_session_share), e)
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -61,12 +63,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
@@ -76,6 +80,7 @@ import com.mikepenz.markdown.model.parseMarkdown
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import works.resolve.pathfinder.BuildConfig
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.ModelThinkingLevel
@@ -91,6 +96,24 @@ import works.resolve.pathfinder.ui.theme.PathfinderTheme
 @Composable
 fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    // The share sheet launch is the one step of the export flow that needs
+    // the Activity context, so it stays here at the route.
+    val context = LocalContext.current
+    LaunchedEffect(viewModel) {
+        viewModel.shareRequests.collect { file ->
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${BuildConfig.APPLICATION_ID}.fileprovider",
+                file
+            )
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "application/jsonl"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(send, null))
+        }
+    }
     // Keep the screen awake while a response streams; cleared on dispose so
     // the flag never outlives the composable.
     val view = LocalView.current
@@ -111,6 +134,7 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         backStack = backStack,
         conversationView = conversationView,
         onConversationViewChange = { conversationView = it },
+        onShareSession = viewModel::shareSession,
         onDraftChange = viewModel::onDraftChange,
         onSend = viewModel::send,
         onStop = viewModel::stop,
@@ -157,6 +181,7 @@ fun ChatScreen(
     backStack: MutableList<NavKey>,
     conversationView: ConversationView,
     onConversationViewChange: (ConversationView) -> Unit,
+    onShareSession: () -> Unit,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -344,6 +369,14 @@ fun ChatScreen(
                                     view = conversationView,
                                     onViewChange = onConversationViewChange
                                 )
+                                IconButton(onClick = onShareSession) {
+                                    Icon(
+                                        Icons.Outlined.Share,
+                                        contentDescription = stringResource(
+                                            R.string.action_share_session
+                                        )
+                                    )
+                                }
                             }
                         } else if (topProviderOption?.configured == true) {
                             {
@@ -932,6 +965,7 @@ private fun PreviewChatScreen(
             backStack = rememberNavBackStack(startKey).apply { addAll(extraKeys) },
             conversationView = conversationView,
             onConversationViewChange = {},
+            onShareSession = {},
             onDraftChange = {},
             onSend = {},
             onStop = {},

@@ -157,6 +157,7 @@ class PathfinderApplication : Application() {
                 catalog = modelCatalog,
                 authService = authService,
                 sessionsDir = File(filesDir, SESSIONS_DIRECTORY),
+                shareCacheDir = File(cacheDir, EXPORTS_DIRECTORY),
                 agentFactory = agentFactory,
                 searchProviderService = searchProviderService,
                 modelResolver = agentFactory::resolveModel,
@@ -168,6 +169,7 @@ class PathfinderApplication : Application() {
 
     private companion object {
         const val SESSIONS_DIRECTORY = "sessions"
+        const val EXPORTS_DIRECTORY = "exports"
         const val CONNECT_TIMEOUT_SECONDS = 30L
 
         /**

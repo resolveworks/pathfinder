@@ -13,6 +13,7 @@
     <string name="chat_compacted">Compacted</string>
 
     <string name="action_new_chat">New chat</string>
+    <string name="action_share_session">Share session</string>
     <string name="settings_title">Settings</string>
     <string name="settings_default_model">Default model</string>
     <string name="settings_default_thinking">Default thinking level</string>
@@ -103,6 +104,7 @@
     <string name="error_session_load">Could not open the chat</string>
     <string name="error_session_missing">That chat no longer exists</string>
     <string name="error_session_save">Could not save the chat</string>
+    <string name="error_session_share">Could not share the chat</string>
     <string name="error_busy">Wait for the response to finish first</string>
     <string name="error_auth_in_progress">A sign-in is already in progress</string>
     <string name="error_auth_login">Could not complete sign-in</string>

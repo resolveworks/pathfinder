@@ -154,6 +154,8 @@ dependencies {
     implementation(project(":packages:telemetry"))
 
     implementation(libs.androidx.activity.compose)
+    // FileProvider for sharing exported session files.
+    implementation(libs.androidx.core)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel)
 
