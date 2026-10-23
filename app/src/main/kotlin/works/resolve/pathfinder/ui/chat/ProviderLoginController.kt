@@ -8,10 +8,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import works.resolve.pathfinder.LoginProcessGuard
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt as AuthInteractionPrompt
+import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.ai.auth.LoginOptions
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
 
@@ -30,6 +32,8 @@ internal class ProviderLoginController(
     private val authService: ProviderAuthService,
     /** Supplies the stable per-install device ID; materialized before the login starts. */
     private val getDeviceId: suspend () -> String,
+    /** Keeps the process in the foreground-service state while an OAuth login has its browser leg. */
+    private val loginProcessGuard: LoginProcessGuard,
     /** Runs in [scope] with the flow state already cleared. */
     private val onLoginSucceeded: suspend () -> Unit,
     /**
@@ -53,27 +57,33 @@ internal class ProviderLoginController(
     /** Starts the login flow; the caller validates the provider/method pair and rejects concurrent logins ([busy]). */
     fun begin(providerId: String, method: AuthMethodInfo) {
         authJob = scope.launch {
-            _flow.value = ProviderAuthFlow(providerId, method)
+            val needsExternalLeg = method.type == AuthType.OAUTH
+            if (needsExternalLeg) loginProcessGuard.setActive(true)
             try {
-                val deviceId = getDeviceId()
-                authService.login(
-                    providerId,
-                    method.type,
-                    UiAuthInteraction(),
-                    LoginOptions(getDeviceId = { deviceId })
-                )
-            } catch (e: CancellationException) {
-                // User cancel or scope teardown aborts the login — not a
-                // failure: clear and stop without the failure path.
+                _flow.value = ProviderAuthFlow(providerId, method)
+                try {
+                    val deviceId = getDeviceId()
+                    authService.login(
+                        providerId,
+                        method.type,
+                        UiAuthInteraction(),
+                        LoginOptions(getDeviceId = { deviceId })
+                    )
+                } catch (e: CancellationException) {
+                    // User cancel or scope teardown aborts the login — not a
+                    // failure: clear and stop without the failure path.
+                    _flow.value = null
+                    return@launch
+                } catch (e: Exception) {
+                    _flow.value = null
+                    onLoginFailed(e)
+                    return@launch
+                }
                 _flow.value = null
-                return@launch
-            } catch (e: Exception) {
-                _flow.value = null
-                onLoginFailed(e)
-                return@launch
+                onLoginSucceeded()
+            } finally {
+                if (needsExternalLeg) loginProcessGuard.setActive(false)
             }
-            _flow.value = null
-            onLoginSucceeded()
         }
     }
 

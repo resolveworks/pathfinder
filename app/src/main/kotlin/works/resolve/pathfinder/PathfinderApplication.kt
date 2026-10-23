@@ -81,6 +81,13 @@ class PathfinderApplication : Application() {
      */
     val appForegroundGate: AppForegroundGate by lazy { AppForegroundGate() }
 
+    /** Keeps the process in the foreground-service state while an OAuth login has its browser leg. */
+    val loginProcessGuard: LoginProcessGuard by lazy {
+        LoginProcessGuard { active ->
+            if (active) LoginForegroundService.start(this) else LoginForegroundService.stop(this)
+        }
+    }
+
     /** OAuth flows shared by the login UI and runtime auth resolution. */
     val authRegistry: CatalogAuthRegistry by lazy {
         ProductionCatalogAuthRegistry(appForegroundGate)
@@ -162,6 +169,7 @@ class PathfinderApplication : Application() {
                 searchProviderService = searchProviderService,
                 modelResolver = agentFactory::resolveModel,
                 appForegroundGate = appForegroundGate,
+                loginProcessGuard = loginProcessGuard,
                 defaultSystemPrompt = DEFAULT_PREAMBLE
             )
         }

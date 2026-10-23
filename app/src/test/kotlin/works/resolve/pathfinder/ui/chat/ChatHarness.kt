@@ -40,6 +40,7 @@ import org.junit.After
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.Description
+import works.resolve.pathfinder.LoginProcessGuard
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.AgentToolResult
@@ -377,6 +378,7 @@ internal class ChatHarness(
         modelResolver = modelResolver,
         searchProviderService = searchProviders,
         appForegroundGate = AppForegroundGate(),
+        loginProcessGuard = LoginProcessGuard {},
         defaultSystemPrompt = DEFAULT_PREAMBLE,
         defaultDispatcher = testDispatcher
     ).also { viewModels += it }

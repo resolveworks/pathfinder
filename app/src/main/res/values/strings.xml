@@ -82,6 +82,9 @@
     <string name="auth_more_info">Learn more</string>
     <string name="auth_user_code">Code: %1$s</string>
 
+    <string name="login_notification_channel">Sign-in</string>
+    <string name="login_notification_text">Signing in…</string>
+
     <string name="tool_status_failed">Failed</string>
     <string name="tool_output_expand">Expand tool output</string>
     <string name="tool_output_collapse">Collapse tool output</string>

@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
+import works.resolve.pathfinder.LoginProcessGuard
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.AgentState
@@ -100,6 +101,8 @@ class ChatViewModel(
      * flows gate loopback waits and network work on it.
      */
     private val appForegroundGate: AppForegroundGate,
+    /** Keeps the process in the foreground-service state for an OAuth login's browser leg. */
+    private val loginProcessGuard: LoginProcessGuard,
     private val searchProviderService: SearchProviderService,
     /** The built-in persona; shown by the editor while no custom prompt is stored. */
     private val defaultSystemPrompt: String,
@@ -128,6 +131,7 @@ class ChatViewModel(
         scope = viewModelScope,
         authService = authService,
         getDeviceId = settingsStore::deviceId,
+        loginProcessGuard = loginProcessGuard,
         onLoginSucceeded = { onCredentialStored() },
         onLoginFailed = { cause -> setError(UiString(R.string.error_auth_login), cause) }
     )
