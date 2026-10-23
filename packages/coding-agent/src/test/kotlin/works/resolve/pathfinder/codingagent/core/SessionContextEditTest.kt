@@ -17,6 +17,10 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.codingagent.core.compaction.CompactionPreparation
+import works.resolve.pathfinder.codingagent.core.compaction.CompactionResult
+import works.resolve.pathfinder.codingagent.core.compaction.DEFAULT_COMPACTION_SETTINGS
+import works.resolve.pathfinder.codingagent.core.compaction.prepareCompaction
 
 /** Port of pi's session-context-edit.test.ts cases for the persistent mechanism. */
 class SessionContextEditTest {
@@ -183,6 +187,117 @@ class SessionContextEditTest {
 
         session.branch(targetId)
         assertEquals("original", text(session.buildSessionProjection().messages.single()))
+    }
+
+    private fun preparationValue(
+        result: CompactionResult<CompactionPreparation?>
+    ): CompactionPreparation? = when (result) {
+        is CompactionResult.Ok -> result.value
+        is CompactionResult.Err -> error(result.error.message ?: "compaction failed")
+    }
+
+    private fun compactionSummaryText(message: Message): String? {
+        val content = text(message)
+        if (!content.startsWith(COMPACTION_SUMMARY_PREFIX)) return null
+        return content.removePrefix(
+            COMPACTION_SUMMARY_PREFIX
+        ).removeSuffix(COMPACTION_SUMMARY_SUFFIX)
+    }
+
+    @Test
+    fun `uses a self-referencing compaction to retain no preceding entries`() {
+        val discarded = MessageEntry("u0", null, 1L, user("discarded"))
+        val compaction = CompactionEntry(
+            id = "c0",
+            parentId = discarded.id,
+            timestamp = 2L,
+            summary = "exact handoff",
+            firstKeptEntryId = "c0",
+            tokensBefore = 100
+        )
+        val after = MessageEntry("u1", compaction.id, 3L, user("after"))
+
+        val messages = buildSessionProjection(
+            listOf<SessionEntry>(discarded, compaction, after),
+            after.id
+        ).messages
+
+        assertEquals("c0", compaction.firstKeptEntryId)
+        assertEquals(2, messages.size)
+        assertEquals("exact handoff", compactionSummaryText(messages[0]))
+        assertEquals("after", text(messages[1]))
+    }
+
+    @Test
+    fun `applies post-compaction edits to retained pre-compaction entries`() = runTest {
+        val session = manager(createTempDirectory())
+        session.appendMessage(user("summarized"))
+        session.appendMessage(user("original retained"))
+        val retainedId = session.getLeafId()!!
+        session.appendCompaction("summary", retainedId, 100, null)
+        session.appendContextEdit(
+            retainedId,
+            ContextEditReplacement(ContextEditableContent.Text("edited retained"))
+        )
+
+        val messages = session.buildSessionProjection().messages
+        assertEquals("summary", compactionSummaryText(messages[0]))
+        assertEquals("edited retained", text(messages[1]))
+    }
+
+    @Test
+    fun `uses only the newest summary when a repeated compaction retains entries before the older compaction`() =
+        runTest {
+            val session = manager(createTempDirectory())
+            session.appendMessage(user("summarized first"))
+            session.appendMessage(user("retained"))
+            val retainedId = session.getLeafId()!!
+            session.appendCompaction("first summary", retainedId, 100, null)
+            session.appendMessage(assistant("after first compaction"))
+            session.appendCompaction("second summary", retainedId, 80, null)
+            session.appendMessage(user("new tail ".repeat(100)))
+
+            val summaries = session.buildSessionProjection().messages
+                .mapNotNull(::compactionSummaryText)
+            assertEquals(listOf("second summary"), summaries)
+
+            val preparation = preparationValue(
+                prepareCompaction(
+                    session.getBranch(),
+                    DEFAULT_COMPACTION_SETTINGS.copy(keepRecentTokens = 1)
+                )
+            )
+            assertEquals("second summary", preparation?.previousSummary)
+        }
+
+    @Test
+    fun `supports repeated retain-none compactions`() {
+        val discarded = MessageEntry("u0", null, 1L, user("discarded"))
+        val first = CompactionEntry(
+            id = "c1",
+            parentId = discarded.id,
+            timestamp = 2L,
+            summary = "first handoff",
+            firstKeptEntryId = "c1",
+            tokensBefore = 100
+        )
+        val alsoDiscarded = MessageEntry("u1", first.id, 3L, user("also discarded"))
+        val second = CompactionEntry(
+            id = "c2",
+            parentId = alsoDiscarded.id,
+            timestamp = 4L,
+            summary = "second handoff",
+            firstKeptEntryId = "c2",
+            tokensBefore = 50
+        )
+
+        val summaries = buildSessionProjection(
+            listOf<SessionEntry>(discarded, first, alsoDiscarded, second),
+            second.id
+        ).messages.mapNotNull(::compactionSummaryText)
+
+        assertEquals("c2", second.firstKeptEntryId)
+        assertEquals(listOf("second handoff"), summaries)
     }
 
     @Test
