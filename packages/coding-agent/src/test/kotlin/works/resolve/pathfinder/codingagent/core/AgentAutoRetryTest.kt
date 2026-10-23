@@ -15,8 +15,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -24,9 +22,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentEvent
-import works.resolve.pathfinder.agent.AgentTool
-import works.resolve.pathfinder.agent.AgentToolResult
-import works.resolve.pathfinder.agent.AgentToolUpdateCallback
 import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
@@ -34,7 +29,6 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.codingagent.core.MessageEntry
@@ -90,7 +84,6 @@ class AgentAutoRetryTest {
     ) = AgentSession(
         agent = Agent(
             model = model,
-            systemPrompt = "be brief",
             streamOptions = SimpleStreamOptions(),
             streamFn = streams.streamFn
         ),
@@ -138,10 +131,10 @@ class AgentAutoRetryTest {
                 events.filterIsInstance<AgentEvent.AutoRetryEnd>()
         )
 
-        // The omission rebuilds agent state from the persisted projection, so
-        // the non-persisted constructor prompt drops out along with the error.
-        assertEquals(3, streams.seenContexts[0].size)
-        assertEquals(streams.seenContexts[0].drop(1), streams.seenContexts[1])
+        // The error never entered either request context, and the omission
+        // rebuild leaves the persisted prompt patch and user message intact.
+        assertEquals(2, streams.seenContexts[0].size)
+        assertEquals(streams.seenContexts[0], streams.seenContexts[1])
 
         val state = agent.state.value
         assertEquals(3, state.messages.size)
@@ -229,16 +222,6 @@ class AgentAutoRetryTest {
             val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
                 content = listOf(ToolCall("call-1", "get_weather", JsonObject(emptyMap())))
             )
-            val fakeTool = object : AgentTool {
-                override val definition =
-                    Tool("get_weather", "fake weather", buildJsonObject { put("type", "object") })
-                override val label = "get_weather"
-                override suspend fun execute(
-                    toolCallId: String,
-                    arguments: JsonObject,
-                    onUpdate: AgentToolUpdateCallback
-                ) = AgentToolResult(content = listOf(TextContent("sunny")))
-            }
             val streams = ScriptedStreams().apply {
                 streams.add(flowOf(AssistantMessageEvent.Done(StopReason.TOOL_USE, toolUse)))
                 streams.add(errorStream("terminated"))
@@ -247,9 +230,7 @@ class AgentAutoRetryTest {
             val agent = AgentSession(
                 agent = Agent(
                     model = model,
-                    systemPrompt = "be brief",
                     streamOptions = SimpleStreamOptions(),
-                    tools = listOf(fakeTool),
                     streamFn = streams.streamFn
                 ),
                 manager = SessionManager.create(
@@ -277,8 +258,9 @@ class AgentAutoRetryTest {
             )
 
             assertEquals(3, streams.seenContexts.size)
-            // The omission rebuild drops the non-persisted constructor prompt.
-            assertEquals(streams.seenContexts[1].drop(1), streams.seenContexts[2])
+            // The retry request keeps the persisted prompt patch and complete
+            // tool turn; the omitted error never entered either request.
+            assertEquals(streams.seenContexts[1], streams.seenContexts[2])
             assertTrue(
                 streams.seenContexts[2].last() is works.resolve.pathfinder.ai.ToolResultMessage
             )
