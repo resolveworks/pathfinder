@@ -38,9 +38,11 @@ import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
 import works.resolve.pathfinder.codingagent.core.ReadonlySessionManager
 import works.resolve.pathfinder.codingagent.core.SessionContext
 import works.resolve.pathfinder.codingagent.core.SessionEntry
+import works.resolve.pathfinder.codingagent.core.SessionProjection
 import works.resolve.pathfinder.codingagent.core.SessionTreeNode
 import works.resolve.pathfinder.codingagent.core.buildContextEntries
 import works.resolve.pathfinder.codingagent.core.buildSessionContext
+import works.resolve.pathfinder.codingagent.core.buildSessionProjection
 
 class BranchSummarizationTest {
 
@@ -496,6 +498,9 @@ class BranchSummarizationTest {
 
             override fun buildSessionContext(): SessionContext =
                 buildSessionContext(entries, leafId)
+
+            override fun buildSessionProjection(): SessionProjection =
+                buildSessionProjection(entries, leafId)
 
             override fun getTree(): List<SessionTreeNode> = buildTree(entries)
         }
