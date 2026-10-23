@@ -31,9 +31,10 @@ the Android application stays thin.
 - The classic `packages/coding-agent` `AgentSession` behavior used by the app:
   retry, compaction, conversation trees, JSONL persistence, and recovery, plus
   selected interaction semantics adapted into native Android UX. The system
-  prompt follows pi's sectioned construction with its `customPrompt` and
-  `appendSystemPrompt` channels, exposed as app settings; pi's `cwd` section
-  has no producer here (Android has no working directory).
+  prompt follows pi's sectioned construction, with the persona
+  (`customPrompt`) as its app setting; a persona replaces the `preamble`,
+  not pi's whole default prefix. pi's `cwd` section has no producer here
+  (Android has no working directory).
 - The minimum telemetry contract required by those runtime pieces.
 
 Do not port:

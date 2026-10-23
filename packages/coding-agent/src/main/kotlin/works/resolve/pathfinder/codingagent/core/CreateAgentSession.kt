@@ -66,7 +66,7 @@ suspend fun createAgentSession(
     hasConfiguredAuth: suspend (providerId: String) -> Boolean,
     streamFn: StreamFn,
     tools: List<AgentTool> = emptyList(),
-    /** Custom system prompt replacing the default prefix. */
+    /** Custom persona replacing the built-in preamble. */
     customPrompt: String? = null,
     /** Text appended as the addendum section. */
     appendSystemPrompt: String = "",

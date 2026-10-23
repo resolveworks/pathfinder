@@ -17,6 +17,7 @@ import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
 import works.resolve.pathfinder.ai.transport.OkHttpWebSocketTransport
+import works.resolve.pathfinder.codingagent.core.DEFAULT_PREAMBLE
 import works.resolve.pathfinder.codingagent.core.PromptConfig
 import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
@@ -143,10 +144,7 @@ class PathfinderApplication : Application() {
             tools = listOf(webSearchTool, webFetchTool),
             promptConfig = {
                 val settings = settingsRepository.currentSettings()
-                PromptConfig(
-                    customPrompt = settings.customPrompt,
-                    appendSystemPrompt = settings.appendSystemPrompt
-                )
+                PromptConfig(customPrompt = settings.customPrompt)
             }
         )
     }
@@ -162,7 +160,8 @@ class PathfinderApplication : Application() {
                 agentFactory = agentFactory,
                 searchProviderService = searchProviderService,
                 modelResolver = agentFactory::resolveModel,
-                appForegroundGate = appForegroundGate
+                appForegroundGate = appForegroundGate,
+                defaultSystemPrompt = DEFAULT_PREAMBLE
             )
         }
     }

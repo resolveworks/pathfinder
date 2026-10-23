@@ -39,14 +39,12 @@ internal fun SettingsContent(
     showDefaultThinkingRow: Boolean,
     showThinking: Boolean,
     customPrompt: String,
-    appendSystemPrompt: String,
     onOpenDefaultModel: () -> Unit,
     onOpenDefaultThinking: () -> Unit,
     onOpenProviders: () -> Unit,
     onOpenSearchProviders: () -> Unit,
-    onToggleShowThinking: (Boolean) -> Unit,
-    onCustomPromptChange: (String) -> Unit,
-    onAppendSystemPromptChange: (String) -> Unit
+    onOpenSystemPrompt: () -> Unit,
+    onToggleShowThinking: (Boolean) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -107,30 +105,51 @@ internal fun SettingsContent(
             },
             modifier = Modifier.clickable { onToggleShowThinking(!showThinking) }
         )
-        Text(
-            text = stringResource(R.string.settings_system_prompt),
-            style = MaterialTheme.typography.titleSmall,
-            modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)
-        )
-        OutlinedTextField(
-            value = customPrompt,
-            onValueChange = onCustomPromptChange,
-            label = { Text(stringResource(R.string.settings_custom_prompt)) },
-            supportingText = { Text(stringResource(R.string.settings_custom_prompt_hint)) },
-            minLines = 3,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = appendSystemPrompt,
-            onValueChange = onAppendSystemPromptChange,
-            label = { Text(stringResource(R.string.settings_append_system_prompt)) },
-            supportingText = {
-                Text(stringResource(R.string.settings_append_system_prompt_hint))
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.settings_system_prompt)) },
+            supportingContent = {
+                Text(
+                    stringResource(
+                        if (customPrompt.isEmpty()) {
+                            R.string.settings_system_prompt_default
+                        } else {
+                            R.string.settings_system_prompt_custom
+                        }
+                    )
+                )
             },
-            minLines = 3,
+            trailingContent = {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+            },
+            modifier = Modifier.clickable(onClick = onOpenSystemPrompt)
+        )
+    }
+}
+
+/**
+ * System prompt editor for the persona — the only user-editable part of
+ * the prompt (tools and rules are generated and never stored). The field
+ * is seeded with the built-in persona while no custom prompt is stored;
+ * clearing it restores the built-in one.
+ */
+@Composable
+internal fun SystemPromptContent(
+    customPrompt: String,
+    defaultSystemPrompt: String,
+    onCustomPromptChange: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        OutlinedTextField(
+            value = customPrompt.ifEmpty { defaultSystemPrompt },
+            onValueChange = onCustomPromptChange,
+            label = { Text(stringResource(R.string.settings_system_prompt)) },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 8.dp)
+                .weight(1f)
         )
     }
 }

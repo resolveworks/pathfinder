@@ -205,12 +205,23 @@ class SystemPromptTest {
     }
 
     @Test
-    fun `custom prompt replaces the default prefix and omits tools and rules`() {
+    fun `custom prompt replaces only the preamble`() {
         val prompt = buildSystemPrompt(
             listOf(FakeTool("web_search", promptSnippet = "Search the web")),
             PromptConfig(customPrompt = "You are a custom research assistant.")
         )
-        assertEquals("You are a custom research assistant.", prompt)
+        assertEquals(
+            "You are a custom research assistant.\n\n" +
+                "<tools>\n" +
+                "- web_search: Search the web\n" +
+                "</tools>\n" +
+                "\n" +
+                "<rules>\n" +
+                "- Be concise in your responses\n" +
+                "- Show file paths clearly when working with files\n" +
+                "</rules>",
+            prompt
+        )
     }
 
     @Test

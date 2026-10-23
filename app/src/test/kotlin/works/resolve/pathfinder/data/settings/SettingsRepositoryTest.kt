@@ -59,7 +59,6 @@ class SettingsRepositoryTest {
         assertNull(settings.activeSessionId)
         assertFalse(settings.showThinking)
         assertEquals("", settings.customPrompt)
-        assertEquals("", settings.appendSystemPrompt)
         assertNull(repository.currentSettings().activeSessionId)
     }
 
@@ -92,12 +91,10 @@ class SettingsRepositoryTest {
         repository.setActiveSessionId("session-1")
         repository.setShowThinking(true)
         repository.setCustomPrompt("You are a custom research assistant.")
-        repository.setAppendSystemPrompt("Prefer primary sources.")
         assertEquals(
             "You are a custom research assistant.",
             repository.currentSettings().customPrompt
         )
-        assertEquals("Prefer primary sources.", repository.currentSettings().appendSystemPrompt)
         val file = File(tmpFolder.root, "settings.preferences_pb")
         scope.coroutineContext[Job]!!.cancelAndJoin()
 
@@ -115,7 +112,6 @@ class SettingsRepositoryTest {
                 "You are a custom research assistant.",
                 second.currentSettings().customPrompt
             )
-            assertEquals("Prefer primary sources.", second.currentSettings().appendSystemPrompt)
         } finally {
             secondScope.cancel()
         }

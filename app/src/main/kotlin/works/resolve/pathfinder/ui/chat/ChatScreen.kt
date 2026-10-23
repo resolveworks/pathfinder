@@ -137,7 +137,6 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         onSessionSearchSortChange = viewModel::setSessionSearchSort,
         onToggleShowThinking = viewModel::setShowThinking,
         onCustomPromptChange = viewModel::setCustomPrompt,
-        onAppendSystemPromptChange = viewModel::setAppendSystemPrompt,
         onNavigateTreeEntry = viewModel::navigateToTreeEntry,
         onTreeFilterChange = viewModel::setTreeFilter,
         onDismissError = viewModel::dismissError,
@@ -188,7 +187,6 @@ fun ChatScreen(
     onSessionSearchSortChange: (sort: SessionSearchSort) -> Unit,
     onToggleShowThinking: (Boolean) -> Unit,
     onCustomPromptChange: (String) -> Unit,
-    onAppendSystemPromptChange: (String) -> Unit,
     onNavigateTreeEntry: (entryId: String) -> Unit,
     onTreeFilterChange: (TreeFilter) -> Unit,
     onDismissError: () -> Unit,
@@ -266,6 +264,7 @@ fun ChatScreen(
     val pushSettings: () -> Unit = { backStack.add(SettingsNavKey) }
     val pushDefaultModel: () -> Unit = { backStack.add(DefaultModelNavKey) }
     val pushDefaultThinking: () -> Unit = { backStack.add(DefaultThinkingNavKey) }
+    val pushSystemPrompt: () -> Unit = { backStack.add(SystemPromptNavKey) }
     val pushProviders: () -> Unit = { backStack.add(ProvidersNavKey) }
     val pushProviderAuth: (String) -> Unit = { backStack.add(ProviderAuthNavKey(it)) }
     val pushProviderApiKeyForm: (String) -> Unit = { backStack.add(ProviderApiKeyNavKey(it)) }
@@ -372,6 +371,8 @@ fun ChatScreen(
                                 R.string.settings_default_thinking
                             )
 
+                            SystemPromptNavKey -> stringResource(R.string.settings_system_prompt)
+
                             ProvidersNavKey -> stringResource(R.string.providers_title)
 
                             SearchProvidersNavKey -> stringResource(R.string.search_providers_title)
@@ -469,14 +470,19 @@ fun ChatScreen(
                                         uiState.availableThinkingLevels.isNotEmpty(),
                                     showThinking = uiState.showThinking,
                                     customPrompt = uiState.customPrompt,
-                                    appendSystemPrompt = uiState.appendSystemPrompt,
                                     onOpenDefaultModel = pushDefaultModel,
                                     onOpenDefaultThinking = pushDefaultThinking,
                                     onOpenProviders = pushProviders,
                                     onOpenSearchProviders = pushSearchProviders,
-                                    onToggleShowThinking = onToggleShowThinking,
-                                    onCustomPromptChange = onCustomPromptChange,
-                                    onAppendSystemPromptChange = onAppendSystemPromptChange
+                                    onOpenSystemPrompt = pushSystemPrompt,
+                                    onToggleShowThinking = onToggleShowThinking
+                                )
+                            }
+                            entry<SystemPromptNavKey> {
+                                SystemPromptContent(
+                                    customPrompt = uiState.customPrompt,
+                                    defaultSystemPrompt = uiState.defaultSystemPrompt,
+                                    onCustomPromptChange = onCustomPromptChange
                                 )
                             }
                             entry<DefaultModelNavKey> {
@@ -952,7 +958,6 @@ private fun PreviewChatScreen(
             onSessionSearchSortChange = {},
             onToggleShowThinking = {},
             onCustomPromptChange = {},
-            onAppendSystemPromptChange = {},
             onNavigateTreeEntry = {},
             onTreeFilterChange = {},
             onDismissError = {},

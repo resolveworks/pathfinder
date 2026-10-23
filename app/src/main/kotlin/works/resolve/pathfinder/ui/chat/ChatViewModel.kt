@@ -95,11 +95,13 @@ class ChatViewModel(
      */
     private val appForegroundGate: AppForegroundGate,
     private val searchProviderService: SearchProviderService,
+    /** The built-in persona; shown by the editor while no custom prompt is stored. */
+    private val defaultSystemPrompt: String,
     /** Where bulk transcript parses run; the test harness keeps them on virtual time. */
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(ChatUiState())
+    private val _uiState = MutableStateFlow(ChatUiState(defaultSystemPrompt = defaultSystemPrompt))
 
     /**
      * Per-chunk streaming projection (see [StreamingUiState]): a StateFlow
@@ -249,7 +251,7 @@ class ChatViewModel(
         // applied when the session is created.
         viewModelScope.launch {
             settingsStore.settings
-                .map { it.customPrompt to it.appendSystemPrompt }
+                .map { it.customPrompt }
                 .distinctUntilChanged()
                 .drop(1)
                 .collect { recreateAgentForPromptChange() }
@@ -424,20 +426,6 @@ class ChatViewModel(
         }
     }
 
-    /** Persists the appended system prompt; not applied mid-run (see the settings collector). */
-    fun setAppendSystemPrompt(appendSystemPrompt: String) {
-        viewModelScope.launch {
-            try {
-                settingsStore.setAppendSystemPrompt(appendSystemPrompt)
-                _uiState.update { it.copy(appendSystemPrompt = appendSystemPrompt) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                setError(UiString(R.string.error_settings_save), e)
-            }
-        }
-    }
-
     fun send() {
         viewModelScope.launch { sendInternal() }
     }
@@ -590,8 +578,7 @@ class ChatViewModel(
                         status = ChatStatus.NeedsConfiguration,
                         startKey = ProvidersNavKey,
                         showThinking = appSettings.showThinking,
-                        customPrompt = appSettings.customPrompt,
-                        appendSystemPrompt = appSettings.appendSystemPrompt
+                        customPrompt = appSettings.customPrompt
                     )
                 }
                 return
@@ -636,8 +623,7 @@ class ChatViewModel(
                 it.copy(
                     status = ChatStatus.Ready,
                     showThinking = appSettings.showThinking,
-                    customPrompt = appSettings.customPrompt,
-                    appendSystemPrompt = appSettings.appendSystemPrompt
+                    customPrompt = appSettings.customPrompt
                 )
             }
         } catch (e: CancellationException) {

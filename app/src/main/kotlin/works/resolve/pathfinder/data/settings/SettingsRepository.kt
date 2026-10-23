@@ -21,7 +21,6 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
         val ACTIVE_SESSION_ID = stringPreferencesKey("active_session_id")
         val SHOW_THINKING = booleanPreferencesKey("show_thinking")
         val CUSTOM_PROMPT = stringPreferencesKey("custom_prompt")
-        val APPEND_SYSTEM_PROMPT = stringPreferencesKey("append_system_prompt")
 
         /** Raw pi settings JSON; owned by `SettingsManager`, not typed here. */
         val SETTINGS_JSON = stringPreferencesKey("settings_json")
@@ -34,8 +33,7 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
         AppSettings(
             activeSessionId = prefs[Keys.ACTIVE_SESSION_ID]?.takeIf { it.isNotBlank() },
             showThinking = prefs[Keys.SHOW_THINKING] ?: false,
-            customPrompt = prefs[Keys.CUSTOM_PROMPT] ?: "",
-            appendSystemPrompt = prefs[Keys.APPEND_SYSTEM_PROMPT] ?: ""
+            customPrompt = prefs[Keys.CUSTOM_PROMPT] ?: ""
         )
     }
 
@@ -55,10 +53,6 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
 
     suspend fun setCustomPrompt(customPrompt: String) {
         dataStore.edit { it[Keys.CUSTOM_PROMPT] = customPrompt }
-    }
-
-    suspend fun setAppendSystemPrompt(appendSystemPrompt: String) {
-        dataStore.edit { it[Keys.APPEND_SYSTEM_PROMPT] = appendSystemPrompt }
     }
 
     /**

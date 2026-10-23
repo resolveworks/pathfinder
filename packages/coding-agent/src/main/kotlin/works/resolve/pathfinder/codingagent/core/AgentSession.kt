@@ -110,7 +110,7 @@ class AgentSession(
     scopedModels: List<ScopedModel> = emptyList(),
     /** Tools available for per-session activation. */
     private val tools: List<AgentTool> = emptyList(),
-    /** Custom system prompt replacing the default prefix (pi's customPrompt). */
+    /** Custom persona replacing the built-in preamble (pi's customPrompt). */
     private val customPrompt: String? = null,
     /** Text appended as the addendum section (pi's appendSystemPrompt). */
     private val appendSystemPrompt: String = "",

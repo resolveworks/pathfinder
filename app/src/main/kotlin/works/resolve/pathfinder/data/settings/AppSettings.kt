@@ -7,6 +7,5 @@ package works.resolve.pathfinder.data.settings
 data class AppSettings(
     val activeSessionId: String? = null,
     val showThinking: Boolean = false,
-    val customPrompt: String = "",
-    val appendSystemPrompt: String = ""
+    val customPrompt: String = ""
 )

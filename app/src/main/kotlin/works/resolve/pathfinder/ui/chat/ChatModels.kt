@@ -65,6 +65,10 @@ data object DefaultModelNavKey : NavKey
 @Serializable
 data object DefaultThinkingNavKey : NavKey
 
+/** The system prompt editor; the prompt setting's own screen. */
+@Serializable
+data object SystemPromptNavKey : NavKey
+
 @Serializable
 data object ProvidersNavKey : NavKey
 
@@ -217,10 +221,10 @@ data class ChatUiState(
     val isCompacting: Boolean = false,
     /** Display-only; never affects the agent. */
     val showThinking: Boolean = false,
-    /** Persisted custom system prompt; empty keeps the built-in prompt. */
+    /** Persisted custom system prompt; empty keeps the built-in persona. */
     val customPrompt: String = "",
-    /** Persisted text appended after the built-in prompt. */
-    val appendSystemPrompt: String = "",
+    /** The built-in persona; seeds the editor while [customPrompt] is empty. */
+    val defaultSystemPrompt: String = "",
     /** Flattened tree rows of the active session's conversation (see TreeProjection.kt). */
     val treeRows: List<TreeRow> = emptyList(),
     /** In-memory tree-panel filter (never persisted). */

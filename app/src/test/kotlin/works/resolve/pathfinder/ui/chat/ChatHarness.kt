@@ -68,6 +68,7 @@ import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.codingagent.core.AgentSession
+import works.resolve.pathfinder.codingagent.core.DEFAULT_PREAMBLE
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.codingagent.core.createAgentSession
@@ -341,7 +342,6 @@ internal class ChatHarness(
             models = switchModels,
             tools = listOf(fakeWebSearchTool),
             customPrompt = appSettings.customPrompt,
-            appendSystemPrompt = appSettings.appendSystemPrompt,
             // pi's restore presence check, wired like production.
             hasConfiguredAuth = { providerId -> authService.isConfigured(providerId) },
             // Keep the prompt loop inside runTest's virtual clock: the
@@ -374,6 +374,7 @@ internal class ChatHarness(
         modelResolver = modelResolver,
         searchProviderService = searchProviders,
         appForegroundGate = AppForegroundGate(),
+        defaultSystemPrompt = DEFAULT_PREAMBLE,
         defaultDispatcher = testDispatcher
     ).also { viewModels += it }
 

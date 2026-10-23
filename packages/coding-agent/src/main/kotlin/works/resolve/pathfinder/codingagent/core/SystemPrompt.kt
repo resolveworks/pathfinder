@@ -13,18 +13,18 @@ import works.resolve.pathfinder.ai.utils.getSystemMessageText
 typealias SystemPromptSections = Map<String, String>
 
 /**
- * User-configurable prompt inputs: a custom prompt replacing the default
- * prefix, and text appended as the `addendum` section.
+ * User-configurable prompt inputs: a custom persona replacing the built-in
+ * preamble, and text appended as the `addendum` section.
  */
 data class PromptConfig(
-    /** Custom system prompt replacing the default prefix (pi's customPrompt). */
+    /** Custom persona replacing the built-in preamble (pi's customPrompt). */
     val customPrompt: String? = null,
     /** Text appended as the `addendum` section (pi's appendSystemPrompt). */
     val appendSystemPrompt: String = ""
 )
 
 // pi's static persona header; the harness name is pathfinder's.
-private const val PREAMBLE =
+const val DEFAULT_PREAMBLE =
     "You are an expert research assistant operating inside pathfinder, a research agent harness. " +
         "You help users by searching the web, fetching pages, and synthesizing information."
 
@@ -63,8 +63,7 @@ private fun buildRules(activeTools: List<AgentTool>): String {
  * Build the ordered, independently replaceable sections of the structured
  * system prompt: `preamble`, `tools`, `rules`, and an optional `addendum`
  * from [PromptConfig.appendSystemPrompt] as the final section after
- * `rules`. A custom prompt replaces the default prefix, so the `tools` and
- * `rules` sections are not emitted.
+ * `rules`. A custom prompt replaces only the built-in `preamble`.
  *
  * Divergences from pi (reduced producers):
  * - Pi also emits `docs` (pi-docs paths), `project_context`, `skills`,
@@ -74,6 +73,10 @@ private fun buildRules(activeTools: List<AgentTool>): String {
  *   prompt-state layers (`normalizeBuildSystemPromptOptions`,
  *   `buildSystemPromptState`), which exist to hand extensions a mutable
  *   options object and to carry forced prompts.
+ * - Pi's customPrompt replaces the whole default prefix and suppresses
+ *   `tools` and `rules` — an SDK escape hatch for fully custom agents.
+ *   Here the setting is the user's persona edit, so only the `preamble`
+ *   is replaced and the generated sections always emit.
  * - Like pi, a persona prompt is always sent — an empty tool set yields
  *   the preamble with "(none)" in `tools`, never an absent prompt.
  *
@@ -97,25 +100,22 @@ fun buildSystemPromptSections(
     config: PromptConfig = PromptConfig()
 ): SystemPromptSections {
     val promptSections = LinkedHashMap<String, String>()
-    if (!config.customPrompt.isNullOrEmpty()) {
-        promptSections["preamble"] = config.customPrompt
-    } else {
-        // Inclusion rule: pi's `!!toolSnippets[name]` — only a null or empty
-        // snippet hides a tool; the snippet text is used verbatim.
-        val visibleTools = activeTools.mapNotNull { tool ->
-            tool.promptSnippet?.takeIf { it.isNotEmpty() }?.let { tool.definition.name to it }
-        }
-        val toolsList =
-            if (visibleTools.isNotEmpty()) {
-                visibleTools.joinToString("\n") { (name, snippet) -> "- $name: $snippet" }
-            } else {
-                "(none)"
-            }
-
-        promptSections["preamble"] = PREAMBLE
-        promptSections["tools"] = toolsList
-        promptSections["rules"] = buildRules(activeTools)
+    // Inclusion rule: pi's `!!toolSnippets[name]` — only a null or empty
+    // snippet hides a tool; the snippet text is used verbatim.
+    val visibleTools = activeTools.mapNotNull { tool ->
+        tool.promptSnippet?.takeIf { it.isNotEmpty() }?.let { tool.definition.name to it }
     }
+    val toolsList =
+        if (visibleTools.isNotEmpty()) {
+            visibleTools.joinToString("\n") { (name, snippet) -> "- $name: $snippet" }
+        } else {
+            "(none)"
+        }
+
+    promptSections["preamble"] =
+        config.customPrompt?.takeIf { it.isNotEmpty() } ?: DEFAULT_PREAMBLE
+    promptSections["tools"] = toolsList
+    promptSections["rules"] = buildRules(activeTools)
     if (config.appendSystemPrompt.isNotEmpty()) {
         promptSections["addendum"] = config.appendSystemPrompt
     }
