@@ -28,7 +28,11 @@ data class ClientAttribution(
     val categories: List<String>? = null
 )
 
-/** Pathfinder's attribution. */
+/**
+ * Pathfinder's attribution. OpenRouter categories stay unset: its taxonomy has
+ * no category for a native Android agent app, and `cli-agent` is specifically
+ * a terminal-based coding assistant.
+ */
 val PATHFINDER_ATTRIBUTION: ClientAttribution = ClientAttribution(
     name = "pathfinder",
     url = "https://github.com/resolveworks/pathfinder"
