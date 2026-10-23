@@ -45,12 +45,13 @@ import okhttp3.sse.EventSources
  * cleanly either: the reader throws an internal okio
  * `IllegalArgumentException("byteCount < 0: -1")`, surfaced here as a
  * mid-stream [NetworkException] failure of the event flow. When the server
- * instead keeps an idle keep-alive connection open, that same read can block
- * indefinitely (okhttp-sse cancels the call timeout before reading, so no
- * read timeout rescues it) until the collector cancels. pi's adapters flush
- * the residual buffer at EOF (Codex's #9047 fix); because framing lives
- * below this boundary here, no parity workaround is attempted. Pinned by
- * OkHttpTransportTest's unterminated-terminal-frame probe.
+ * instead keeps an idle keep-alive connection open, that same read blocks
+ * until the client's readTimeout fires (okhttp-sse cancels the per-call call
+ * timeout before reading, but body reads still observe the client-level read
+ * timeout) or the collector cancels. pi's adapters flush the residual buffer
+ * at EOF (Codex's #9047 fix); because framing lives below this boundary here,
+ * no parity workaround is attempted. Pinned by OkHttpTransportTest's
+ * unterminated-terminal-frame probe.
  *
  * Timeouts mirror pi's two layers. The per-request
  * [TransportRequest.timeoutMs] is the deadline pi's adapters hand to the
@@ -120,7 +121,10 @@ class OkHttpTransport(
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                val networkError = NetworkException(t ?: IOException("SSE stream failed"))
+                val networkError = NetworkException(
+                    t ?: IOException("SSE stream failed"),
+                    "terminated"
+                )
                 if (headers.failBeforeOpen(networkError)) {
                     events.close()
                 } else {
@@ -164,7 +168,7 @@ class OkHttpTransport(
                 }
 
                 override fun onFailure(call: Call, e: IOException) {
-                    val networkError = NetworkException(e)
+                    val networkError = NetworkException(e, "fetch failed")
                     if (headers.failBeforeOpen(networkError)) {
                         events.close()
                     } else {

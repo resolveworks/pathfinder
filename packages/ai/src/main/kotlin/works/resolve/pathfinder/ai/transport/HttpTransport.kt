@@ -78,5 +78,10 @@ class ProviderHttpException(
     fun header(name: String): String? = headers[name.lowercase()]?.firstOrNull { it.isNotBlank() }
 }
 
-/** No HTTP status; always retryable. */
-class NetworkException(cause: Throwable) : java.io.IOException("Network request failed", cause)
+/**
+ * No HTTP status; always retryable. [message] mirrors the fetch failure shape
+ * pi surfaces and its retry classifier matches: `"fetch failed"` for a
+ * pre-header fetch rejection and `"terminated"` for a failure after response
+ * headers, with the platform failure kept as [cause].
+ */
+class NetworkException(cause: Throwable, message: String) : java.io.IOException(message, cause)

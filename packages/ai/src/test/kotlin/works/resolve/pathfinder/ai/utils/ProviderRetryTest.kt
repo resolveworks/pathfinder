@@ -109,7 +109,7 @@ class ProviderRetryTest {
             maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS
         ) {
             calls++
-            if (calls == 1) throw NetworkException(java.io.IOException("boom"))
+            if (calls == 1) throw NetworkException(java.io.IOException("boom"), "fetch failed")
             "ok"
         }
         assertEquals(2, calls)

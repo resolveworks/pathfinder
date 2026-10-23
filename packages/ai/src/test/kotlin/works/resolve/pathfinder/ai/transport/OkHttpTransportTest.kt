@@ -113,6 +113,7 @@ class OkHttpTransportTest {
                 )
             }
         }
+        assertEquals("fetch failed", error.message)
         assertTrue(works.resolve.pathfinder.ai.utils.ProviderRetry().isRetryable(error))
     }
 
@@ -222,16 +223,17 @@ class OkHttpTransportTest {
      * breaks is timing- and environment-dependent: either its reader throws
      * an internal okio `IllegalArgumentException("byteCount < 0: -1")` —
      * surfaced by this transport as a mid-stream [NetworkException] failure
-     * of the event flow — or the read blocks indefinitely on an open
-     * connection (okhttp-sse cancels the call timeout before reading, so no
-     * read timeout rescues it). Both modes were verified against okhttp-sse
-     * 5.5.0: the crash via a standalone JVM reproduction, the hang via this
-     * suite itself. The test therefore pins the one stable property — the
-     * truncated terminal event is never dispatched and the flow never
-     * completes cleanly — using a bounded collection window. This is the
-     * accepted transport-boundary divergence (see the OkHttpTransport
-     * KDoc). If this test ever fails, okhttp changed
-     * truncated-frame handling and the divergence note should be revisited.
+     * of the event flow — or the read blocks on the open connection until
+     * OkHttp's client-level readTimeout fires (okhttp-sse cancels the
+     * per-call call timeout before reading, but not the read timeout). Both
+     * modes were verified against okhttp-sse 5.5.0: the crash via a
+     * standalone JVM reproduction, the stall via OkHttp's readTimeout. This
+     * test bounds collection below the default 10 s readTimeout, so it pins
+     * the one stable property — the truncated terminal event is never
+     * dispatched and the flow never completes cleanly. This is the accepted
+     * transport-boundary divergence (see the OkHttpTransport KDoc). If this
+     * test ever fails, okhttp changed truncated-frame handling and the
+     * divergence note should be revisited.
      */
     @Test
     fun `unterminated terminal sse frame never dispatches nor completes cleanly`() {

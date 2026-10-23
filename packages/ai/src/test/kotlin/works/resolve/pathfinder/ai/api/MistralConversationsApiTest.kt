@@ -471,7 +471,7 @@ class MistralConversationsApiTest {
     fun `retryable failures are not retried even with maxRetries greater than zero`() = runTest {
         val transport = FakeTransport()
         transport.outcomes.add {
-            throw NetworkException(java.io.IOException("connection reset"))
+            throw NetworkException(java.io.IOException("connection reset"), "fetch failed")
         }
         val error = api(transport)
             .stream(model, context, MistralOptions(apiKey = "test", maxRetries = 3))
@@ -1042,7 +1042,9 @@ class MistralConversationsApiTest {
     ): kotlinx.serialization.json.JsonObject {
         val transport = FakeTransport()
         // The request is allowed to fail after the payload is captured.
-        transport.outcomes.add { throw NetworkException(java.io.IOException("no route")) }
+        transport.outcomes.add {
+            throw NetworkException(java.io.IOException("no route"), "fetch failed")
+        }
         val result = kotlinx.coroutines.runBlocking {
             api(transport).streamSimple(streamModel, context, options).toList()
         }

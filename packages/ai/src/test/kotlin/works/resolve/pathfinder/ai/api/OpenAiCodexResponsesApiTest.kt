@@ -628,7 +628,9 @@ class OpenAiCodexResponsesApiTest {
     @Test
     fun `network errors are retryable`() = runTest {
         val transport = FakeTransport()
-        transport.outcomes.add { throw NetworkException(java.io.IOException("reset")) }
+        transport.outcomes.add {
+            throw NetworkException(java.io.IOException("reset"), "fetch failed")
+        }
         transport.enqueueResponse(sse(*doneEvents().toTypedArray()))
         val delays = mutableListOf<Long>()
         val events = api(transport, delays).stream(
