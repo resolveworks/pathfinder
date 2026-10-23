@@ -62,6 +62,7 @@ import works.resolve.pathfinder.codingagent.core.compaction.GenerateBranchSummar
 import works.resolve.pathfinder.codingagent.core.compaction.collectEntriesForBranchSummary
 import works.resolve.pathfinder.codingagent.core.compaction.compact
 import works.resolve.pathfinder.codingagent.core.compaction.estimateContextTokens
+import works.resolve.pathfinder.codingagent.core.compaction.estimateProjectedContextTokens
 import works.resolve.pathfinder.codingagent.core.compaction.estimateTokens
 import works.resolve.pathfinder.codingagent.core.compaction.generateBranchSummary
 import works.resolve.pathfinder.codingagent.core.compaction.prepareCompaction
@@ -319,19 +320,22 @@ class AgentSession(
      * (see [installAgentNextTurnRefresh]).
      */
     private suspend fun compactBeforeNextAssistantResponse(context: AgentContext): AgentContext {
-        val settings = settingsManager.getCompactionSettings(model)
-        if (
-            model.contextWindow <= 0 ||
-            !shouldCompact(
-                estimateContextTokens(context.messages).tokens,
-                model.contextWindow,
-                settings
-            )
-        ) {
-            return context
+        val projection = manager.buildSessionProjection()
+        if (!exceedsCompactionThreshold(projection)) {
+            return context.copy(messages = projection.messages)
         }
         runAutoCompaction(AgentEvent.CompactionReason.THRESHOLD, willRetry = false)
-        return context.copy(messages = agent.state.value.messages.toList())
+        return context.copy(messages = manager.buildSessionProjection().messages)
+    }
+
+    /** Whether [projection] exceeds the compaction threshold of the current model. */
+    private fun exceedsCompactionThreshold(projection: SessionProjection): Boolean {
+        if (model.contextWindow <= 0) return false
+        return shouldCompact(
+            estimateProjectedContextTokens(projection, manager.getBranch()).tokens,
+            model.contextWindow,
+            settingsManager.getCompactionSettings(model)
+        )
     }
 
     /** pi's _findLastAssistantMessage: last assistant on the current branch context. */
@@ -1315,13 +1319,20 @@ class AgentSession(
             return runAutoCompaction(AgentEvent.CompactionReason.OVERFLOW, willRetry)
         }
 
-        // Case 3: threshold compaction without retry. For error messages or
-        // all-zero usage, estimate from message sizes; usage-backed
+        // Case 3: threshold compaction without retry. With context edits
+        // the projection decides both content and trustworthy usage; otherwise
+        // error or all-zero usage estimates from message sizes, and usage-backed
         // estimates additionally verify the usage source is post-compaction
         // (kept pre-compaction messages carry stale, larger usage).
+        val projection = manager.buildSessionProjection()
+        val branch = manager.getBranch()
+        val hasContextEdits =
+            projection.entries.any { it.sourceEntry is ContextEditEntry }
         val directContextTokens = calculateContextTokens(assistantMessage.usage)
         val contextTokens: Int
-        if (assistantMessage.stopReason == StopReason.ERROR || directContextTokens == 0) {
+        if (hasContextEdits) {
+            contextTokens = estimateProjectedContextTokens(projection, branch).tokens
+        } else if (assistantMessage.stopReason == StopReason.ERROR || directContextTokens == 0) {
             val messages = agent.state.value.messages
             val estimate = estimateContextTokens(messages)
             if (estimate.lastUsageIndex != null) {

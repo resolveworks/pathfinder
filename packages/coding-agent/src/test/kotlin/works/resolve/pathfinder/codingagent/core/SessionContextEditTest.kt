@@ -5,8 +5,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.Message
@@ -20,6 +23,7 @@ import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionPreparation
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionResult
 import works.resolve.pathfinder.codingagent.core.compaction.DEFAULT_COMPACTION_SETTINGS
+import works.resolve.pathfinder.codingagent.core.compaction.estimateProjectedContextTokens
 import works.resolve.pathfinder.codingagent.core.compaction.prepareCompaction
 
 /** Port of pi's session-context-edit.test.ts cases for the persistent mechanism. */
@@ -342,5 +346,233 @@ class SessionContextEditTest {
             "Entry $systemId does not contribute editable model content",
             error.message
         )
+    }
+
+    @Test
+    fun `does not trust pre-edit assistant usage for projected context estimates`() = runTest {
+        val session = manager(createTempDirectory())
+        val largeUserId = session.appendMessage(user("discarded input ".repeat(2_000)))
+        val response = assistant("small answer").copy(
+            usage = Usage(
+                input = 10_000,
+                output = 1,
+                totalTokens = 10_001,
+                cost = Cost(0.0, 0.0, 0.0, 0.0, 0.0)
+            )
+        )
+        val assistantId = session.appendMessage(response)
+        session.appendContextEdit(largeUserId, null)
+
+        val editedEstimate =
+            estimateProjectedContextTokens(session.buildSessionProjection(), session.getBranch())
+        assertEquals(0, editedEstimate.usageTokens)
+        assertTrue(editedEstimate.tokens < 100)
+
+        session.appendContextEdit(assistantId, null)
+        assertEquals(
+            0,
+            estimateProjectedContextTokens(
+                session.buildSessionProjection(),
+                session.getBranch()
+            ).tokens
+        )
+    }
+
+    @Test
+    fun `uses assistant usage captured after the latest context edit`() = runTest {
+        val session = manager(createTempDirectory())
+        val userId = session.appendMessage(user("original"))
+        session.appendContextEdit(
+            userId,
+            ContextEditReplacement(ContextEditableContent.Text("edited"))
+        )
+        val response = assistant("answer").copy(
+            usage = Usage(
+                input = 4_000,
+                output = 100,
+                totalTokens = 4_100,
+                cost = Cost(0.0, 0.0, 0.0, 0.0, 0.0)
+            )
+        )
+        session.appendMessage(response)
+        session.appendMessage(user("next"))
+
+        val estimate =
+            estimateProjectedContextTokens(session.buildSessionProjection(), session.getBranch())
+        assertEquals(4_100, estimate.usageTokens)
+        // Pathfinder estimates at 3.5 chars/token: "next" is 2 tokens, not pi's 1.
+        assertEquals(2, estimate.trailingTokens)
+        assertEquals(4_102, estimate.tokens)
+    }
+
+    @Test
+    fun `does not reuse post-edit assistant usage after a later compaction`() = runTest {
+        val session = manager(createTempDirectory())
+        val userId = session.appendMessage(user("small input"))
+        session.appendContextEdit(
+            userId,
+            ContextEditReplacement(ContextEditableContent.Text("edited input"))
+        )
+        val response = assistant("answer").copy(
+            usage = Usage(
+                input = 50_000,
+                output = 1,
+                totalTokens = 50_001,
+                cost = Cost(0.0, 0.0, 0.0, 0.0, 0.0)
+            )
+        )
+        session.appendMessage(response)
+        session.appendCompaction("small summary", userId, 50_001, null)
+
+        val estimate =
+            estimateProjectedContextTokens(session.buildSessionProjection(), session.getBranch())
+        assertEquals(0, estimate.usageTokens)
+        assertTrue(estimate.tokens < 100)
+    }
+
+    @Test
+    fun `includes effective system and tool context in edited estimates`() = runTest {
+        val session = manager(createTempDirectory())
+        session.appendMessage(
+            SystemMessage(
+                content = listOf(TextContent("system prompt ".repeat(3_000))),
+                toolsAdded = listOf(
+                    works.resolve.pathfinder.ai.Tool(
+                        name = "example",
+                        description = "tool declaration ".repeat(100),
+                        parameters = buildJsonObject {
+                            put("type", "object")
+                            put("properties", buildJsonObject {})
+                        }
+                    )
+                ),
+                timestamp = clock.now().toEpochMilliseconds()
+            )
+        )
+        val userId = session.appendMessage(user("ask"))
+        session.appendMessage(assistant("done"))
+        session.appendContextEdit(
+            userId,
+            ContextEditReplacement(ContextEditableContent.Text("ask"))
+        )
+
+        assertTrue(
+            estimateProjectedContextTokens(
+                session.buildSessionProjection(),
+                session.getBranch()
+            ).tokens > 10_000
+        )
+    }
+
+    @Test
+    fun `does not advance past a boundary replacement of the candidate input`() {
+        val oldUser = MessageEntry("u0", null, 1L, user("old request"))
+        val oldAssistant = MessageEntry("a0", oldUser.id, 2L, assistant("old answer"))
+        val replacedUser = MessageEntry("u1", oldAssistant.id, 3L, user("original input"))
+        val omittedAssistant =
+            MessageEntry("a1", replacedUser.id, 4L, assistant("answered original input"))
+        val replace = ContextEditEntry(
+            id = "e1",
+            parentId = omittedAssistant.id,
+            timestamp = 5L,
+            targetId = replacedUser.id,
+            replacement = ContextEditReplacement(
+                ContextEditableContent.Blocks(
+                    listOf(TextContent("NEW-INSTRUCTION ".repeat(100)))
+                )
+            )
+        )
+        val omission = ContextEditEntry(
+            id = "e2",
+            parentId = replace.id,
+            timestamp = 6L,
+            targetId = omittedAssistant.id,
+            replacement = null
+        )
+        val metadata = RawEntry(
+            id = "r1",
+            parentId = omission.id,
+            timestamp = 7L,
+            json = buildJsonObject { put("source", "test") }
+        )
+        val entries = listOf<SessionEntry>(
+            oldUser,
+            oldAssistant,
+            replacedUser,
+            omittedAssistant,
+            replace,
+            omission,
+            metadata
+        )
+
+        val preparation = preparationValue(
+            prepareCompaction(
+                entries,
+                DEFAULT_COMPACTION_SETTINGS.copy(keepRecentTokens = 1)
+            )
+        )
+
+        assertEquals(replacedUser.id, preparation?.firstKeptEntryId)
+        val serialized =
+            (
+                preparation?.messagesToSummarize.orEmpty() +
+                    preparation?.turnPrefixMessages.orEmpty()
+                ).joinToString { text(it) }
+        assertTrue(!serialized.contains("NEW-INSTRUCTION"))
+    }
+
+    @Test
+    fun `advances past input for an omitted assistant recovery suffix with metadata`() {
+        val input = MessageEntry("u1", null, 1L, user("recovery input ".repeat(100)))
+        val attempt = MessageEntry("a1", input.id, 2L, assistant("failed attempt"))
+        val omission = ContextEditEntry(
+            id = "e1",
+            parentId = attempt.id,
+            timestamp = 3L,
+            targetId = attempt.id,
+            replacement = null
+        )
+        val metadata = RawEntry(
+            id = "r1",
+            parentId = omission.id,
+            timestamp = 4L,
+            json = buildJsonObject { put("source", "test") }
+        )
+
+        val preparation = preparationValue(
+            prepareCompaction(
+                listOf<SessionEntry>(input, attempt, omission, metadata),
+                DEFAULT_COMPACTION_SETTINGS.copy(keepRecentTokens = 1)
+            )
+        )
+
+        assertEquals(attempt.id, preparation?.firstKeptEntryId)
+        assertEquals(1, preparation?.turnPrefixMessages?.size)
+        assertTrue(text(preparation!!.turnPrefixMessages.single()).contains("recovery input"))
+        assertTrue(preparation.messagesToSummarize.none { text(it).contains("recovery input") })
+    }
+
+    @Test
+    fun `prepares compaction from edited model content`() = runTest {
+        val session = manager(createTempDirectory())
+        val omittedId =
+            session.appendMessage(user("OMIT-ME ".repeat(100)))
+        session.appendMessage(assistant("old answer ".repeat(100)))
+        session.appendContextEdit(omittedId, null)
+        session.appendMessage(user("keep"))
+        session.appendMessage(assistant("suffix"))
+
+        val preparation = preparationValue(
+            prepareCompaction(
+                session.getBranch(),
+                DEFAULT_COMPACTION_SETTINGS.copy(keepRecentTokens = 1)
+            )
+        )
+
+        val compact = assertIs<CompactionPreparation>(preparation)
+        val serialized =
+            (compact.messagesToSummarize + compact.turnPrefixMessages)
+                .joinToString { text(it) }
+        assertTrue(!serialized.contains("OMIT-ME"))
     }
 }

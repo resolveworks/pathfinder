@@ -26,18 +26,22 @@ import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.ai.utils.contentText
 import works.resolve.pathfinder.ai.utils.estimateMessageTokens
 import works.resolve.pathfinder.ai.utils.estimateTextTokens
+import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
 import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.codingagent.core.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.ContextEditEntry
 import works.resolve.pathfinder.codingagent.core.MessageEntry
 import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.ProjectedSessionEntry
 import works.resolve.pathfinder.codingagent.core.RawEntry
 import works.resolve.pathfinder.codingagent.core.SessionEntry
+import works.resolve.pathfinder.codingagent.core.SessionProjection
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
-import works.resolve.pathfinder.codingagent.core.buildContextEntries
+import works.resolve.pathfinder.codingagent.core.buildSessionProjection
 import works.resolve.pathfinder.codingagent.core.createBranchSummaryMessage
 import works.resolve.pathfinder.codingagent.core.createCompactionSummaryMessage
+import works.resolve.pathfinder.codingagent.core.sessionEntryToContextMessages
 import works.resolve.pathfinder.codingagent.core.utils.addUsage
 
 data class CompactionSettings(
@@ -138,24 +142,58 @@ fun estimateContextTokens(messages: List<Message>): ContextUsageEstimate {
 }
 
 /**
- * pi's `estimateContextTokens(buildSessionContext(pathEntries).messages).tokens`
- * over the compaction-aware context entries: the backward usage scan runs
- * over entries (only message entries project assistant messages), and
- * trailing entries estimate via [estimateEntryTokens] so summary entries count
- * their summary text and system entries 0.
+ * Estimate projected context without trusting usage captured before a later
+ * edit or compaction. [estimateContextTokens]'s usage anchor is valid only if
+ * its source entry lies after the latest invalidating entry on the branch;
+ * otherwise the whole projection is estimated, with the effective system
+ * message counted once in place of the per-message system entries.
  */
-private fun estimateContextTokensFromEntries(entries: List<SessionEntry>): Int {
-    for (i in entries.indices.reversed()) {
-        val entry = entries[i]
-        if (entry is MessageEntry) {
-            val usage = getAssistantUsage(entry.message)
-            if (usage != null) {
-                return calculateContextTokens(usage) +
-                    entries.subList(i + 1, entries.size).sumOf(::estimateEntryTokens)
+fun estimateProjectedContextTokens(
+    projection: SessionProjection,
+    branchEntries: List<SessionEntry>
+): ContextUsageEstimate {
+    val estimate = estimateContextTokens(projection.messages)
+    val lastUsageIndex = estimate.lastUsageIndex
+    if (lastUsageIndex != null) {
+        var projectedMessageIndex = 0
+        var usageEntryId: String? = null
+        for (entry in projection.entries) {
+            val nextMessageIndex = projectedMessageIndex + entry.messages.size
+            if (lastUsageIndex < nextMessageIndex) {
+                usageEntryId = entry.sourceEntry.id
+                break
+            }
+            projectedMessageIndex = nextMessageIndex
+        }
+
+        val usageEntryIndex =
+            if (usageEntryId != null) {
+                branchEntries.indexOfFirst { it.id == usageEntryId }
+            } else {
+                -1
+            }
+        var latestInvalidatingEntryIndex = -1
+        for (i in branchEntries.indices.reversed()) {
+            val entry = branchEntries[i]
+            if (entry is ContextEditEntry || entry is CompactionEntry) {
+                latestInvalidatingEntryIndex = i
+                break
             }
         }
+        if (usageEntryIndex > latestInvalidatingEntryIndex) return estimate
     }
-    return entries.sumOf(::estimateEntryTokens)
+
+    val currentSystem = getCurrentSystemMessage(projection.messages)
+    var tokens = if (currentSystem != null) estimateMessageTokens(currentSystem) else 0
+    for (message in projection.messages) {
+        if (message.role != MessageRole.SYSTEM) tokens += estimateTokens(message)
+    }
+    return ContextUsageEstimate(
+        tokens = tokens,
+        usageTokens = 0,
+        trailingTokens = tokens,
+        lastUsageIndex = null
+    )
 }
 
 fun shouldCompact(contextTokens: Int, contextWindow: Int, settings: CompactionSettings): Boolean {
@@ -188,8 +226,10 @@ private fun isCutPointMessage(message: Message): Boolean = when (message.role) {
     MessageRole.TOOL_RESULT, MessageRole.SYSTEM -> false
 }
 
+private fun isTurnStartMessage(message: Message): Boolean = message.role == MessageRole.USER
+
 private fun isTurnStartEntry(entry: SessionEntry): Boolean =
-    entry !is CompactionEntry && entryContextMessages(entry).any { it.role == MessageRole.USER }
+    entry !is CompactionEntry && entryContextMessages(entry).any(::isTurnStartMessage)
 
 private fun findValidCutPoints(
     entries: List<SessionEntry>,
@@ -263,6 +303,95 @@ fun findCutPoint(
     )
 }
 
+private fun isProjectedTurnStart(entry: ProjectedSessionEntry): Boolean =
+    entry.sourceEntry !is CompactionEntry && entry.messages.any(::isTurnStartMessage)
+
+private fun findProjectedTurnStartIndex(
+    entries: List<ProjectedSessionEntry>,
+    entryIndex: Int,
+    startIndex: Int
+): Int {
+    for (i in entryIndex downTo startIndex) {
+        if (isProjectedTurnStart(entries[i])) return i
+    }
+    return -1
+}
+
+fun findProjectedCutPoint(
+    entries: List<ProjectedSessionEntry>,
+    startIndex: Int,
+    endIndex: Int,
+    keepRecentTokens: Int
+): CutPointResult {
+    val cutPoints = mutableListOf<Int>()
+    for (i in startIndex until endIndex) {
+        val entry = entries[i]
+        if (entry.sourceEntry !is CompactionEntry && entry.messages.any(::isCutPointMessage)) {
+            cutPoints.add(i)
+        }
+    }
+    if (cutPoints.isEmpty()) {
+        return CutPointResult(startIndex, -1, false)
+    }
+
+    var accumulatedTokens = 0
+    var exceededBudget = false
+    var cutIndex = cutPoints[0]
+    for (i in endIndex - 1 downTo startIndex) {
+        val messageTokens = entries[i].messages.sumOf { estimateTokens(it) }
+        if (messageTokens == 0) continue
+        accumulatedTokens += messageTokens
+        if (accumulatedTokens >= keepRecentTokens) {
+            exceededBudget = true
+            cutIndex = cutPoints.firstOrNull { it >= i } ?: cutPoints.last()
+            break
+        }
+    }
+
+    // A recovery attempt and its omission edits are context-invisible after the last
+    // visible input. Advance only for a closed suffix containing an omitted assistant
+    // attempt; arbitrary metadata must not move the cut past unsent input.
+    val suffix = entries.subList(cutIndex + 1, endIndex)
+    fun isIntrinsicallyVisible(entry: ProjectedSessionEntry): Boolean =
+        entry.sourceEntry !is ContextEditEntry &&
+            sessionEntryToContextMessages(entry.sourceEntry).isNotEmpty()
+
+    fun isOmitted(entry: ProjectedSessionEntry): Boolean =
+        isIntrinsicallyVisible(entry) && entry.messages.isEmpty()
+
+    val omittedSuffixIds = suffix.filter(::isOmitted).mapTo(mutableSetOf()) { it.sourceEntry.id }
+    val hasExternalReplacement = suffix.any { entry ->
+        val source = entry.sourceEntry
+        source is ContextEditEntry && source.replacement != null &&
+            source.targetId !in omittedSuffixIds
+    }
+    val isRecoveryOmissionSuffix = exceededBudget &&
+        !hasExternalReplacement &&
+        suffix.any { entry ->
+            val source = entry.sourceEntry
+            source is MessageEntry && source.message is AssistantMessage && isOmitted(entry)
+        } &&
+        suffix.all { entry ->
+            entry.sourceEntry !is CompactionEntry &&
+                (!isIntrinsicallyVisible(entry) || isOmitted(entry))
+        }
+    if (isRecoveryOmissionSuffix) cutIndex++
+
+    while (cutIndex > startIndex) {
+        val previous = entries[cutIndex - 1]
+        if (previous.sourceEntry is CompactionEntry || previous.messages.isNotEmpty()) break
+        cutIndex--
+    }
+    val startsTurn = isProjectedTurnStart(entries[cutIndex])
+    val turnStartIndex =
+        if (startsTurn) -1 else findProjectedTurnStartIndex(entries, cutIndex, startIndex)
+    return CutPointResult(
+        firstKeptEntryIndex = cutIndex,
+        turnStartIndex = turnStartIndex,
+        isSplitTurn = !startsTurn && turnStartIndex != -1
+    )
+}
+
 const val SUMMARIZATION_SYSTEM_PROMPT =
     "You are a context summarization assistant. Your task is to read a conversation " +
         "between a user and an AI assistant, then produce a structured summary " +
@@ -298,10 +427,11 @@ private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
  * prompt state, not conversation — the compaction entry carries their
  * replay.
  */
-internal fun getMessageFromEntryForCompaction(entry: SessionEntry): Message? = when {
-    entry is CompactionEntry -> null
-    entry is MessageEntry && entry.message is SystemMessage -> null
-    else -> getMessageFromEntry(entry)
+private fun getMessagesFromProjectedEntryForCompaction(
+    entry: ProjectedSessionEntry
+): List<Message> {
+    if (entry.sourceEntry is CompactionEntry) return emptyList()
+    return entry.messages.filter { it.role != MessageRole.SYSTEM }
 }
 
 enum class CompactionErrorCode { ABORTED, SUMMARIZATION_FAILED }
@@ -596,51 +726,55 @@ fun prepareCompaction(
     pathEntries: List<SessionEntry>,
     settings: CompactionSettings
 ): CompactionResult<CompactionPreparation?> {
-    if (pathEntries.isEmpty() || pathEntries.last() is CompactionEntry) {
+    if (pathEntries.isNotEmpty() && pathEntries.last() is CompactionEntry) {
         return ok(null)
     }
 
-    var prevCompactionIndex = -1
-    for (i in pathEntries.indices.reversed()) {
-        if (pathEntries[i] is CompactionEntry) {
-            prevCompactionIndex = i
-            break
-        }
+    val projection = buildSessionProjection(pathEntries)
+    val projectedEntries = projection.entries
+    // The newest compaction is projected first. Older compaction entries can still
+    // occur in its retained raw range, but their projected contribution is empty.
+    val prevCompactionIndex = projectedEntries.indexOfFirst {
+        it.sourceEntry is CompactionEntry && it.messages.isNotEmpty()
     }
 
     var previousSummary: String? = null
     var boundaryStart = 0
     if (prevCompactionIndex >= 0) {
-        val prevCompaction = pathEntries[prevCompactionIndex] as CompactionEntry
-        previousSummary = prevCompaction.summary
-        val firstKeptEntryIndex =
-            pathEntries.indexOfFirst { it.id == prevCompaction.firstKeptEntryId }
-        boundaryStart =
-            if (firstKeptEntryIndex >= 0) firstKeptEntryIndex else prevCompactionIndex + 1
+        previousSummary =
+            (projectedEntries[prevCompactionIndex].sourceEntry as CompactionEntry).summary
+        // The canonical projection has already selected the previous compaction's retained tail.
+        boundaryStart = prevCompactionIndex + 1
     }
-    val boundaryEnd = pathEntries.size
+    val boundaryEnd = projectedEntries.size
+    val tokensBefore = estimateProjectedContextTokens(projection, pathEntries).tokens
+    val cutPoint = findProjectedCutPoint(
+        projectedEntries,
+        boundaryStart,
+        boundaryEnd,
+        settings.keepRecentTokens
+    )
 
-    val tokensBefore = estimateContextTokensFromEntries(buildContextEntries(pathEntries))
-
-    val cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens)
-    val firstKeptEntryId = pathEntries[cutPoint.firstKeptEntryIndex].id
+    val firstKeptEntry =
+        projectedEntries.getOrNull(cutPoint.firstKeptEntryIndex)?.sourceEntry ?: return ok(null)
+    val firstKeptEntryId = firstKeptEntry.id
     val historyEnd = if (cutPoint.isSplitTurn) {
         cutPoint.turnStartIndex
     } else {
         cutPoint.firstKeptEntryIndex
     }
-    val messagesToSummarize = mutableListOf<Message>()
-    for (i in boundaryStart until historyEnd) {
-        getMessageFromEntryForCompaction(pathEntries[i])?.let { messagesToSummarize.add(it) }
+
+    val messagesToSummarize = projectedEntries
+        .subList(boundaryStart, historyEnd)
+        .flatMap(::getMessagesFromProjectedEntryForCompaction)
+    val turnPrefixMessages = if (cutPoint.isSplitTurn) {
+        projectedEntries
+            .subList(cutPoint.turnStartIndex, cutPoint.firstKeptEntryIndex)
+            .flatMap(::getMessagesFromProjectedEntryForCompaction)
+    } else {
+        emptyList()
     }
-    val turnPrefixMessages = mutableListOf<Message>()
-    if (cutPoint.isSplitTurn) {
-        for (i in cutPoint.turnStartIndex until cutPoint.firstKeptEntryIndex) {
-            getMessageFromEntryForCompaction(pathEntries[i])?.let {
-                turnPrefixMessages.add(it)
-            }
-        }
-    }
+
     if (messagesToSummarize.isEmpty() && turnPrefixMessages.isEmpty()) {
         return ok(null)
     }

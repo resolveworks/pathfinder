@@ -340,7 +340,10 @@ class AgentCompactionTest {
                     }
                 )
             }
+            // Recovery advances past the omitted attempt, splitting the turn:
+            // history and turn-prefix summaries are separate requests.
             api.responses.add(assistant("SUMMARY"))
+            api.responses.add(assistant("PREFIX"))
             val agent = session(streams, models)
 
             val events = collectEvents(agent)
@@ -381,6 +384,7 @@ class AgentCompactionTest {
             )
         }
         api.responses.add(assistant("SUMMARY"))
+        api.responses.add(assistant("PREFIX"))
         val agent = session(streams, models)
 
         val events = collectEvents(agent)
@@ -415,6 +419,7 @@ class AgentCompactionTest {
             streams.add(flowOf(AssistantMessageEvent.Done(StopReason.STOP, assistant("full"))))
         }
         api.responses.add(assistant("SUMMARY"))
+        api.responses.add(assistant("PREFIX"))
         val agent = session(streams, models)
 
         val events = collectEvents(agent)
