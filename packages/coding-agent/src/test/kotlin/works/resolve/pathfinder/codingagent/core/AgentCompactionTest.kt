@@ -178,6 +178,39 @@ class AgentCompactionTest {
             events
         }
 
+    private suspend fun eventsWhile(
+        agent: AgentSession,
+        block: suspend () -> Unit
+    ): MutableList<AgentEvent> = kotlinx.coroutines.coroutineScope {
+        val events = mutableListOf<AgentEvent>()
+        val collector = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            agent.events.toList(events)
+        }
+        block()
+        yield()
+        collector.cancelAndJoin()
+        events
+    }
+
+    private suspend fun sessionWithManager(
+        manager: SessionManager,
+        models: Models,
+        streams: ScriptedStreams,
+        compactionSettings: CompactionSettings
+    ): AgentSession = AgentSession(
+        agent = Agent(model = model, streamFn = streams.streamFn).apply {
+            replaceTranscript(manager.buildSessionContext().messages)
+        },
+        manager = manager,
+        settingsManager = SettingsManager.inMemory(
+            Settings(
+                retry = RetrySettings(enabled = false),
+                compaction = compactionSettings
+            )
+        ),
+        models = models
+    )
+
     @Test
     fun `threshold usage triggers compaction, rebuild, and a full end event`() = runTest {
         val (api, models) = fauxModels()
@@ -428,6 +461,139 @@ class AgentCompactionTest {
         assertEquals(AgentEvent.CompactionReason.OVERFLOW, end.reason)
         assertTrue(end.willRetry)
         assertEquals(2, streams.seenContexts.size)
+    }
+
+    @Test
+    fun `does not compact from usage belonging to a boundary-omitted assistant`() = runTest {
+        val (api, models) = fauxModels()
+        val manager = SessionManager.create(
+            createTempDirectory("omitted-usage-test").toFile(),
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        manager.appendMessage(UserMessage.ofText("small prompt"))
+        val response = assistant(
+            "short response",
+            usage = Usage(input = 195_000, output = 1, totalTokens = 195_001)
+        )
+        val responseId = manager.appendMessage(response)
+        manager.appendContextEdit(responseId, null)
+        val session = sessionWithManager(
+            manager,
+            models,
+            ScriptedStreams(),
+            CompactionSettings(enabled = true, reserveTokens = 10_000, keepRecentTokens = 1)
+        )
+
+        val events = eventsWhile(session) { session.checkCompaction(response) }
+
+        assertTrue(events.filterIsInstance<AgentEvent.CompactionStart>().isEmpty())
+        assertEquals(0, api.responses.size)
+    }
+
+    @Test
+    fun `does not trigger successful-response overflow from usage captured before a boundary edit`() =
+        runTest {
+            val (api, models) = fauxModels()
+            val manager = SessionManager.create(
+                createTempDirectory("post-edit-overflow-test").toFile(),
+                ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+            )
+            val userId = manager.appendMessage(
+                UserMessage.ofText("large input that is later omitted")
+            )
+            val response = assistant(
+                "done",
+                usage = Usage(input = 250_000, output = 1, totalTokens = 250_001)
+            )
+            manager.appendMessage(response)
+            manager.appendContextEdit(userId, null)
+            val session = sessionWithManager(
+                manager,
+                models,
+                ScriptedStreams(),
+                CompactionSettings(enabled = true, reserveTokens = 0, keepRecentTokens = 1)
+            )
+
+            val events = eventsWhile(session) { session.checkCompaction(response) }
+
+            assertTrue(events.filterIsInstance<AgentEvent.CompactionStart>().isEmpty())
+            assertEquals(0, api.responses.size)
+        }
+
+    @Test
+    fun `omits a recoverable projected replacement by its source entry ID`() = runTest {
+        val (api, models) = fauxModels()
+        val manager = SessionManager.create(
+            createTempDirectory("projected-replacement-test").toFile(),
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        manager.appendMessage(UserMessage.ofText("x".repeat(5_000)))
+        val partial = assistant(
+            "original partial",
+            stopReason = StopReason.LENGTH,
+            usage = Usage(input = 100, output = 16)
+        )
+        val partialId = manager.appendMessage(partial)
+        manager.appendContextEdit(
+            partialId,
+            ContextEditReplacement(ContextEditableContent.Text("edited partial"))
+        )
+        api.responses.add(assistant("SUMMARY"))
+        val session = sessionWithManager(
+            manager,
+            models,
+            ScriptedStreams(),
+            CompactionSettings(enabled = true, reserveTokens = 0, keepRecentTokens = 1)
+        )
+
+        val events = eventsWhile(session) { session.checkCompaction(partial) }
+
+        assertEquals(
+            AgentEvent.CompactionReason.OVERFLOW,
+            events.filterIsInstance<AgentEvent.CompactionStart>().single().reason
+        )
+        val latestEdit = manager.getBranch()
+            .filterIsInstance<ContextEditEntry>()
+            .last { it.targetId == partialId }
+        assertNull(latestEdit.replacement)
+    }
+
+    @Test
+    fun `recovers an explicit overflow error after a retained boundary replacement`() = runTest {
+        val (api, models) = fauxModels()
+        val manager = SessionManager.create(
+            createTempDirectory("retained-overflow-test").toFile(),
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        manager.appendMessage(UserMessage.ofText("x".repeat(5_000)))
+        val overflow = assistant(
+            "",
+            stopReason = StopReason.ERROR,
+            errorMessage = "prompt is too long",
+            usage = Usage(input = 100, output = 0)
+        )
+        val overflowId = manager.appendMessage(overflow)
+        manager.appendContextEdit(
+            overflowId,
+            ContextEditReplacement(ContextEditableContent.Text("retained error"))
+        )
+        api.responses.add(assistant("SUMMARY"))
+        val session = sessionWithManager(
+            manager,
+            models,
+            ScriptedStreams(),
+            CompactionSettings(enabled = true, reserveTokens = 0, keepRecentTokens = 1)
+        )
+
+        val events = eventsWhile(session) { session.checkCompaction(overflow) }
+
+        val start = events.filterIsInstance<AgentEvent.CompactionStart>().single()
+        assertEquals(AgentEvent.CompactionReason.OVERFLOW, start.reason)
+        assertTrue(events.filterIsInstance<AgentEvent.CompactionEnd>().single().willRetry)
+        val latestEdit = manager.getBranch()
+            .filterIsInstance<ContextEditEntry>()
+            .last { it.targetId == overflowId }
+        assertNull(latestEdit.replacement)
     }
 
     @Test
