@@ -39,6 +39,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -51,6 +52,7 @@ import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
 import com.mikepenz.markdown.compose.elements.MarkdownTableRow
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
+import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.DefaultMarkdownAnimation
 import com.mikepenz.markdown.model.MarkdownState
 import com.mikepenz.markdown.model.State
@@ -317,12 +319,33 @@ private val wrappingTableCells: MarkdownComponent = { model ->
     )
 }
 
+/**
+ * The renderer's `markdownTypography()` defaults map h1–h3 to the display
+ * styles (57/45/36sp) — sized for full-screen surfaces, dwarfing the 16sp
+ * transcript body. Headings here compress onto the title/body sizes, close
+ * enough to the body that hierarchy comes as much from weight as size
+ * (pi's transcript does the same in the terminal, where all text is one
+ * size). No two levels share both size and weight: h1 22 bold, h2 16 bold,
+ * h3 16 medium, h4 14 bold, h5 14 medium, h6 14 regular. Everything but
+ * the headings keeps the library defaults.
+ */
+@Composable
+private fun transcriptMarkdownTypography() = markdownTypography(
+    h1 = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+    h2 = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+    h3 = MaterialTheme.typography.titleMedium,
+    h4 = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+    h5 = MaterialTheme.typography.titleSmall,
+    h6 = MaterialTheme.typography.bodyMedium
+)
+
 private val transcriptMarkdownComponents = markdownComponents(table = wrappingTableCells)
 
 /**
  * The transcript's markdown rendering policy in one place: full width, no
  * text-size animation ([noTextSizeAnimation]), wrapping table cells
- * ([transcriptMarkdownComponents]), and default colors unless
+ * ([transcriptMarkdownComponents]), the compressed heading ladder
+ * ([transcriptMarkdownTypography]), and default colors unless
  * [text] overrides the text color — thinking blocks pass the outline tone
  * (pi's shown-thinking look, dimmer than the answer text). The overloads
  * follow the renderer's entry points: pre-parsed [State] for committed
@@ -334,6 +357,7 @@ private fun TranscriptMarkdown(state: State, text: Color? = null) {
     Markdown(
         state = state,
         colors = if (text == null) markdownColor() else markdownColor(text = text),
+        typography = transcriptMarkdownTypography(),
         animations = noTextSizeAnimation,
         components = transcriptMarkdownComponents,
         modifier = Modifier.fillMaxWidth()
@@ -345,6 +369,7 @@ private fun TranscriptMarkdown(state: MarkdownState, text: Color) {
     Markdown(
         markdownState = state,
         colors = markdownColor(text = text),
+        typography = transcriptMarkdownTypography(),
         animations = noTextSizeAnimation,
         components = transcriptMarkdownComponents,
         modifier = Modifier.fillMaxWidth()
@@ -359,6 +384,7 @@ private fun TranscriptMarkdown(
     Markdown(
         streamingMarkdownState = streamingMarkdownState,
         colors = if (text == null) markdownColor() else markdownColor(text = text),
+        typography = transcriptMarkdownTypography(),
         animations = noTextSizeAnimation,
         components = transcriptMarkdownComponents,
         modifier = Modifier.fillMaxWidth()
