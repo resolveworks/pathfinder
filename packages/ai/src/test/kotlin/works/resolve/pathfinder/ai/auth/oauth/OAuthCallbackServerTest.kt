@@ -14,6 +14,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthPrompt
@@ -192,10 +193,6 @@ class OAuthCallbackServerTest {
 
     @Test
     fun `completes only the first callback`() = runBlocking {
-        // pi serves callbacks concurrently and rejects the second with 409 while
-        // the first exchange is in flight. This port's accept loop is sequential
-        // (one connection at a time), so the second is queued until the first
-        // completes; it still gets the same 409 and never settles the result.
         val started = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val server = start(
@@ -213,11 +210,15 @@ class OAuthCallbackServerTest {
             val first = async(Dispatchers.IO) { page(url) }
             started.await()
             val second = async(Dispatchers.IO) { page(url) }
+            // pi answers the second callback while the first exchange is in flight.
+            assertEquals(409, withTimeout(5_000) { second.await() }.status)
+            // A claimed callback keeps completing even when the caller switches to manual input.
+            server.cancel()
             release.complete(Unit)
             assertEquals(200, first.await().status)
-            assertEquals(409, second.await().status)
             assertEquals("completed:c", server.wait())
         } finally {
+            release.complete(Unit)
             server.close()
         }
     }

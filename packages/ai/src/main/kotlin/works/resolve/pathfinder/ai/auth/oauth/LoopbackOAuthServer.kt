@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
@@ -45,7 +46,7 @@ internal interface LoopbackCallbackHandle<R> {
     /** Hands the login to the manual path without failing. */
     fun cancelWait()
 
-    /** Idempotent; releases the socket and the accept coroutine. */
+    /** Idempotent; stops accepting and lets in-flight requests drain. */
     fun close()
 }
 
@@ -108,65 +109,80 @@ internal class LoopbackOAuthServer<R>(
      * Bind and listen. Returns `null` when the port cannot be bound; flows
      * degrade to manual-code login.
      */
-    suspend fun start(): LoopbackCallbackHandle<R>? = withContext(Dispatchers.IO) {
-        val serverSocket = try {
-            ServerSocket().apply {
-                // Node sets SO_REUSEADDR by default; back-to-back logins must
-                // be able to rebind the fixed ports.
-                reuseAddress = true
-                bind(InetSocketAddress(host, port))
-            }
-        } catch (_: IOException) {
-            return@withContext null
-        }
-
-        val settled = AtomicBoolean(false)
-        val result = CompletableDeferred<R?>()
-
-        fun settle(value: R?) {
-            if (settled.compareAndSet(false, true)) {
-                result.complete(value)
-            }
-        }
-
-        val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        scope.launch {
-            while (true) {
-                val socket = try {
-                    serverSocket.accept()
-                } catch (_: SocketException) {
-                    break // close() released the socket
-                } catch (_: IOException) {
-                    continue
+    suspend fun start(): LoopbackCallbackHandle<R>? {
+        val callerJob = currentCoroutineContext()[Job]
+        requireNotNull(callerJob) { "start must be called from a coroutine scope" }
+        return withContext(Dispatchers.IO) {
+            val serverSocket = try {
+                ServerSocket().apply {
+                    // Node sets SO_REUSEADDR by default; back-to-back logins must
+                    // be able to rebind the fixed ports.
+                    reuseAddress = true
+                    bind(InetSocketAddress(host, port))
                 }
-                // One connection must never kill the accept loop, but
-                // cancellation must propagate (runCatching would swallow it).
-                try {
-                    serveConnection(socket, ::settle)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
+            } catch (_: IOException) {
+                return@withContext null
+            }
+
+            val settled = AtomicBoolean(false)
+            val result = CompletableDeferred<R?>()
+
+            fun settle(value: R?) {
+                if (settled.compareAndSet(false, true)) {
+                    result.complete(value)
                 }
-                runCatching { socket.close() }
             }
+
+            val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            // pi aborts the flow's `complete` through the same AbortSignal it
+            // gives this server; coroutine cancellation is the analog, while
+            // close() only stops accepting.
+            callerJob.invokeOnCompletion { cause ->
+                if (cause is CancellationException) scope.cancel()
+            }
+            scope.launch {
+                while (true) {
+                    val socket = try {
+                        serverSocket.accept()
+                    } catch (_: SocketException) {
+                        break // close() released the socket
+                    } catch (_: IOException) {
+                        continue
+                    }
+                    // pi's node:http server dispatches each request concurrently;
+                    // a second callback must be answered while the first is in flight.
+                    scope.launch {
+                        // One connection must never kill the accept loop, but
+                        // cancellation must propagate (runCatching would swallow it).
+                        try {
+                            serveConnection(socket, ::settle)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                        }
+                        runCatching { socket.close() }
+                    }
+                }
+            }
+
+            val handle = object : LoopbackCallbackHandle<R> {
+                override val port: Int = serverSocket.localPort
+
+                override suspend fun waitForResult(): R? {
+                    gate?.awaitForeground()
+                    return result.await()
+                }
+
+                override fun cancelWait() = settle(null)
+
+                override fun close() {
+                    // node's server.close() stops accepting and lets in-flight
+                    // requests finish; soTimeout bounds a stalled read.
+                    runCatching { serverSocket.close() }
+                }
+            }
+            handle
         }
-
-        val handle = object : LoopbackCallbackHandle<R> {
-            override val port: Int = serverSocket.localPort
-
-            override suspend fun waitForResult(): R? {
-                gate?.awaitForeground()
-                return result.await()
-            }
-
-            override fun cancelWait() = settle(null)
-
-            override fun close() {
-                runCatching { serverSocket.close() }
-                scope.cancel()
-            }
-        }
-        handle
     }
 
     /** Malformed or unparseable requests get a minimal 400 page; the server keeps serving. */
@@ -337,7 +353,7 @@ internal suspend fun <T> startOAuthCallbackServer(
     val timeoutMs = options.timeoutMs
     val gate = options.gate
 
-    var claimed = false
+    val claimed = AtomicBoolean(false)
     val settled = AtomicBoolean(false)
     val result = CompletableDeferred<CallbackCompletion<T>>()
 
@@ -357,61 +373,61 @@ internal suspend fun <T> startOAuthCallbackServer(
                 state != null && request.query["state"] != state ->
                     LoopbackCallbackResponse(400, oauthErrorHtml("State mismatch."))
 
-                claimed || settled.get() ->
+                claimed.get() || settled.get() ->
+                    LoopbackCallbackResponse(
+                        409,
+                        oauthErrorHtml("This sign-in has already been handled.")
+                    )
+
+                !request.query["error"].isNullOrEmpty() -> {
+                    val error = request.query["error"]!!
+                    val description = request.query["error_description"] ?: error
+                    finish(
+                        CallbackCompletion.Failed(
+                            IllegalStateException(
+                                "$providerName authorization failed: $description"
+                            )
+                        )
+                    )
+                    LoopbackCallbackResponse(
+                        400,
+                        oauthErrorHtml("$providerName authorization failed.", description)
+                    )
+                }
+
+                request.query["code"].isNullOrEmpty() ->
+                    LoopbackCallbackResponse(
+                        400,
+                        oauthErrorHtml("Missing authorization code.")
+                    )
+
+                // pi checks and sets `claimed` in one synchronous turn before
+                // awaiting `complete`; the CAS preserves that for concurrent requests.
+                !claimed.compareAndSet(false, true) ->
                     LoopbackCallbackResponse(
                         409,
                         oauthErrorHtml("This sign-in has already been handled.")
                     )
 
                 else -> {
-                    val error = request.query["error"]
-                    val code = request.query["code"]
-                    when {
-                        !error.isNullOrEmpty() -> {
-                            val description = request.query["error_description"] ?: error
-                            finish(
-                                CallbackCompletion.Failed(
-                                    IllegalStateException(
-                                        "$providerName authorization failed: $description"
-                                    )
-                                )
+                    val code = request.query["code"]!!
+                    try {
+                        val value = options.complete(code)
+                        finish(CallbackCompletion.Value(value))
+                        LoopbackCallbackResponse(
+                            200,
+                            oauthSuccessHtml(
+                                "Signed in to $providerName. You may now close this page."
                             )
-                            LoopbackCallbackResponse(
-                                400,
-                                oauthErrorHtml(
-                                    "$providerName authorization failed.",
-                                    description
-                                )
-                            )
-                        }
-
-                        code.isNullOrEmpty() ->
-                            LoopbackCallbackResponse(
-                                400,
-                                oauthErrorHtml("Missing authorization code.")
-                            )
-
-                        else -> {
-                            claimed = true
-                            try {
-                                val value = options.complete(code)
-                                finish(CallbackCompletion.Value(value))
-                                LoopbackCallbackResponse(
-                                    200,
-                                    oauthSuccessHtml(
-                                        "Signed in to $providerName. You may now close this page."
-                                    )
-                                )
-                            } catch (error: CancellationException) {
-                                throw error
-                            } catch (error: Throwable) {
-                                finish(CallbackCompletion.Failed(error))
-                                LoopbackCallbackResponse(
-                                    502,
-                                    oauthErrorHtml("$providerName sign-in failed.", error.message)
-                                )
-                            }
-                        }
+                        )
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        finish(CallbackCompletion.Failed(error))
+                        LoopbackCallbackResponse(
+                            502,
+                            oauthErrorHtml("$providerName sign-in failed.", error.message)
+                        )
                     }
                 }
             }
@@ -448,7 +464,7 @@ internal suspend fun <T> startOAuthCallbackServer(
         }
 
         override fun cancel() {
-            if (!claimed) finish(CallbackCompletion.Cancelled)
+            if (!claimed.get()) finish(CallbackCompletion.Cancelled)
         }
 
         override fun close() {
