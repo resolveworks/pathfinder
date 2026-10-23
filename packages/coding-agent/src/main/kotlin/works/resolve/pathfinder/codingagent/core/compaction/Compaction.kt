@@ -29,6 +29,7 @@ import works.resolve.pathfinder.ai.utils.estimateTextTokens
 import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.codingagent.core.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.CompactionEntry
+import works.resolve.pathfinder.codingagent.core.ContextEditEntry
 import works.resolve.pathfinder.codingagent.core.MessageEntry
 import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
 import works.resolve.pathfinder.codingagent.core.RawEntry
@@ -288,7 +289,7 @@ private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
         entry.timestamp
     )
 
-    is ModelChangeEntry, is ThinkingLevelEntry, is RawEntry -> null
+    is ModelChangeEntry, is ThinkingLevelEntry, is RawEntry, is ContextEditEntry -> null
 }
 
 /**

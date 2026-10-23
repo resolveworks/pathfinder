@@ -144,6 +144,34 @@ data class BranchSummaryEntry(
 ) : SessionEntry()
 
 /**
+ * The content a [ContextEditEntry] substitutes. pi's wire union is a plain
+ * string or an array of content blocks; the two shapes stay distinct so an
+ * imported edit round-trips unchanged. Projected messages always carry the
+ * typed [Content] list.
+ */
+sealed class ContextEditableContent {
+    data class Text(val text: String) : ContextEditableContent()
+
+    data class Blocks(val content: List<Content>) : ContextEditableContent()
+}
+
+data class ContextEditReplacement(val content: ContextEditableContent)
+
+/**
+ * An append-only change to one earlier entry's contribution to model
+ * context. A null replacement omits the target entirely; otherwise only the
+ * target's content is replaced, leaving its metadata intact. Edits are
+ * branch-local: the latest edit for a target on the active path wins.
+ */
+data class ContextEditEntry(
+    override val id: String,
+    override val parentId: String?,
+    override val timestamp: Long,
+    val targetId: String,
+    val replacement: ContextEditReplacement?
+) : SessionEntry()
+
+/**
  * An entry whose `type` is not a ported kind (pi's usage, label,
  * session_info, custom entries). pi indexes every parsed entry of any type
  * as a raw object; the typed equivalent retains the original JSON,
@@ -180,6 +208,8 @@ interface ReadonlySessionManager {
     fun getBranch(fromId: String? = null): List<SessionEntry>
 
     fun buildContextEntries(): List<SessionEntry>
+
+    fun buildSessionProjection(): SessionProjection
 
     fun buildSessionContext(): SessionContext
 
@@ -259,6 +289,20 @@ data class SessionContext(
 )
 
 /**
+ * One append-only entry's contribution to model context after context
+ * edits. [messages] is empty for state-only entries and omissions.
+ */
+data class ProjectedSessionEntry(val sourceEntry: SessionEntry, val messages: List<Message>)
+
+/** pi's SessionProjection: provenance-preserving, compaction-aware context. */
+data class SessionProjection(
+    val entries: List<ProjectedSessionEntry>,
+    val messages: List<Message>,
+    val thinkingLevel: String,
+    val model: SessionModelSelection?
+)
+
+/**
  * pi's sessionEntryToContextMessages: project one entry into LLM messages.
  * Message entries pass through; compaction and branch-summary entries
  * project to their wrapped summary messages; configuration and raw
@@ -267,6 +311,8 @@ data class SessionContext(
  */
 fun sessionEntryToContextMessages(entry: SessionEntry): List<Message> = when (entry) {
     is MessageEntry -> listOf(entry.message)
+
+    is ContextEditEntry -> emptyList()
 
     is CompactionEntry -> buildList {
         entry.systemMessage?.let(::add)
@@ -319,14 +365,67 @@ fun buildContextEntries(
     return contextEntries
 }
 
+/**
+ * pi's projectContextEntry: apply one target's latest edit to its projected
+ * messages. pi leaves a string replacement on user/custom messages and wraps
+ * it as text for assistant/tool-result content; the typed port always
+ * projects the [Content] list.
+ */
+private fun projectContextEntry(entry: SessionEntry, edit: ContextEditEntry?): List<Message> {
+    val messages = sessionEntryToContextMessages(entry)
+    if (edit == null) return messages
+    val replacement = edit.replacement ?: return emptyList()
+    val content = when (val value = replacement.content) {
+        is ContextEditableContent.Text -> listOf(TextContent(value.text))
+        is ContextEditableContent.Blocks -> value.content
+    }
+    return messages.map { message ->
+        when (message) {
+            is UserMessage -> message.copy(content = content)
+            is AssistantMessage -> message.copy(content = content)
+            is ToolResultMessage -> message.copy(content = content)
+            else -> message
+        }
+    }
+}
+
+/** pi's buildSessionProjection: provenance-preserving, compaction-aware context. */
+fun buildSessionProjection(
+    entries: List<SessionEntry>,
+    leafId: String? = entries.lastOrNull()?.id
+): SessionProjection {
+    val settings = getSessionContextSettings(buildSessionPath(entries, leafId))
+    val contextEntries = buildContextEntries(entries, leafId)
+    val edits = HashMap<String, ContextEditEntry>()
+    for (entry in contextEntries) {
+        if (entry is ContextEditEntry) edits[entry.targetId] = entry
+    }
+    val projectedEntries = contextEntries.mapIndexed { index, sourceEntry ->
+        // A repeated compaction can retain an older compaction whose raw id
+        // lies inside the newest retained range; only the newest compaction,
+        // at index zero, contributes a checkpoint and summary.
+        val messages = if (sourceEntry is CompactionEntry && index > 0) {
+            emptyList()
+        } else {
+            projectContextEntry(sourceEntry, edits[sourceEntry.id])
+        }
+        ProjectedSessionEntry(sourceEntry, messages)
+    }
+    return SessionProjection(
+        entries = projectedEntries,
+        messages = projectedEntries.flatMap { it.messages },
+        thinkingLevel = settings.thinkingLevel,
+        model = settings.model
+    )
+}
+
 /** pi's buildSessionContext: the LLM context for a leaf of the entry tree. */
 fun buildSessionContext(
     entries: List<SessionEntry>,
     leafId: String? = entries.lastOrNull()?.id
 ): SessionContext {
-    val settings = getSessionContextSettings(buildSessionPath(entries, leafId))
-    val messages = buildContextEntries(entries, leafId).flatMap(::sessionEntryToContextMessages)
-    return SessionContext(messages, settings.thinkingLevel, settings.model)
+    val projection = buildSessionProjection(entries, leafId)
+    return SessionContext(projection.messages, projection.thinkingLevel, projection.model)
 }
 
 /**
@@ -498,6 +597,24 @@ internal object JsonlCodec {
                     put("summary", entry.summary)
                     entry.usage?.let { put("usage", encodeUsage(it)) }
                 }
+
+                is ContextEditEntry -> {
+                    put("type", "context_edit")
+                    put("targetId", entry.targetId)
+                    val replacement = entry.replacement
+                    if (replacement == null) {
+                        put("replacement", JsonNull)
+                    } else {
+                        putJsonObject("replacement") {
+                            when (val content = replacement.content) {
+                                is ContextEditableContent.Text -> put("content", content.text)
+
+                                is ContextEditableContent.Blocks ->
+                                    put("content", encodeContentList(content.content))
+                            }
+                        }
+                    }
+                }
             }
         }.toString() + "\n"
     }
@@ -519,7 +636,7 @@ internal object JsonlCodec {
                 }
 
                 "message", "compaction", "model_change", "thinking_level_change",
-                "branch_summary" -> Line.Entry(decodeEntry(obj))
+                "branch_summary", "context_edit" -> Line.Entry(decodeEntry(obj))
 
                 else -> Line.Entry(decodeRawEntry(obj))
             }
@@ -577,8 +694,34 @@ internal object JsonlCodec {
                 usage = obj["usage"]?.let(::decodeUsage)
             )
 
+            "context_edit" -> ContextEditEntry(
+                id = id,
+                parentId = parentId,
+                timestamp = timestamp,
+                targetId = obj.string("targetId") ?: invalid(),
+                replacement = decodeContextEditReplacement(obj["replacement"] ?: invalid())
+            )
+
             else -> invalid("unknown entry type $type")
         }
+    }
+
+    private fun decodeContextEditReplacement(
+        element: kotlinx.serialization.json.JsonElement
+    ): ContextEditReplacement? {
+        if (element is JsonNull) return null
+        val obj = element as? JsonObject ?: invalid()
+        val content = obj["content"] ?: invalid()
+        return ContextEditReplacement(
+            when {
+                content is JsonPrimitive && content.isString ->
+                    ContextEditableContent.Text(content.content)
+
+                content is JsonArray -> ContextEditableContent.Blocks(decodeContentList(content))
+
+                else -> invalid()
+            }
+        )
     }
 
     /**
@@ -1083,7 +1226,7 @@ class SessionManager private constructor(
     /** pi's _appendEntry: commit in memory, then persist. */
     private suspend fun appendEntry(
         build: (id: String, parentId: String?, timestamp: Long) -> SessionEntry
-    ) = withContext(ioDispatcher) {
+    ): SessionEntry = withContext(ioDispatcher) {
         mutex.withLock {
             val entry = build(generateId(), leafIdLocked, now())
             byId[entry.id] = entry
@@ -1095,6 +1238,7 @@ class SessionManager private constructor(
             leafIdLocked = entry.id
             rebuildSnapshot()
             persistLocked(entry)
+            entry
         }
     }
 
@@ -1115,6 +1259,62 @@ class SessionManager private constructor(
         appendEntry { id, parentId, timestamp ->
             ThinkingLevelEntry(id, parentId, timestamp, thinkingLevel)
         }
+    }
+
+    private fun isOnActiveBranchLocked(id: String): Boolean {
+        var current = leafIdLocked?.let(byId::get)
+        while (current != null) {
+            if (current.id == id) return true
+            current = current.parentId?.let(byId::get)
+        }
+        return false
+    }
+
+    /**
+     * Append a branch-local edit to an earlier model-visible entry. A null
+     * replacement omits the target from model context; otherwise its content
+     * is replaced and its metadata kept. pi normalizes a string replacement
+     * to a text block for assistant and tool-result targets, whose content is
+     * array-only.
+     */
+    suspend fun appendContextEdit(targetId: String, replacement: ContextEditReplacement?): String {
+        val entry = appendEntry { id, parentId, timestamp ->
+            val target = byId[targetId]
+                ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Entry $targetId not found")
+            if (!isOnActiveBranchLocked(targetId)) {
+                throw SessionError(
+                    SessionErrorCode.INVALID_ENTRY,
+                    "Entry $targetId is not on the active branch"
+                )
+            }
+            val targetMessage = (target as? MessageEntry)?.message
+            val editable = targetMessage is UserMessage ||
+                targetMessage is AssistantMessage ||
+                targetMessage is ToolResultMessage
+            if (!editable) {
+                throw SessionError(
+                    SessionErrorCode.INVALID_ENTRY,
+                    "Entry $targetId does not contribute editable model content"
+                )
+            }
+            val normalized = if (
+                replacement != null &&
+                (targetMessage is AssistantMessage || targetMessage is ToolResultMessage) &&
+                replacement.content is ContextEditableContent.Text
+            ) {
+                ContextEditReplacement(
+                    ContextEditableContent.Blocks(
+                        listOf(
+                            TextContent((replacement.content as ContextEditableContent.Text).text)
+                        )
+                    )
+                )
+            } else {
+                replacement
+            }
+            ContextEditEntry(id, parentId, timestamp, targetId, normalized)
+        }
+        return entry.id
     }
 
     suspend fun appendCompaction(
@@ -1232,6 +1432,12 @@ class SessionManager private constructor(
     override fun buildContextEntries(): List<SessionEntry> {
         val snapshot = state
         return buildContextEntries(snapshot.entries, snapshot.leafId)
+    }
+
+    /** Build the provenance-preserving session projection from the current leaf. */
+    override fun buildSessionProjection(): SessionProjection {
+        val snapshot = state
+        return buildSessionProjection(snapshot.entries, snapshot.leafId)
     }
 
     /** Build the session context (what gets sent to the LLM) from the current leaf. */

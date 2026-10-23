@@ -7,10 +7,12 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Cost
+import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
@@ -111,6 +113,58 @@ class JsonlCodecTest {
             )
         )
         assertEquals(tool, roundtripEntry(tool))
+    }
+
+    @Test
+    fun `context edit entries roundtrip`() {
+        val nullEdit = ContextEditEntry(
+            id = "e1",
+            parentId = null,
+            timestamp = 1L,
+            targetId = "m0",
+            replacement = null
+        )
+        val stringEdit = ContextEditEntry(
+            id = "e2",
+            parentId = "e1",
+            timestamp = 2L,
+            targetId = "m1",
+            replacement = ContextEditReplacement(ContextEditableContent.Text("edited"))
+        )
+        val blocksEdit = ContextEditEntry(
+            id = "e3",
+            parentId = "e2",
+            timestamp = 3L,
+            targetId = "m2",
+            replacement = ContextEditReplacement(
+                ContextEditableContent.Blocks(
+                    listOf(TextContent("blocks"), ImageContent("data", "image/png"))
+                )
+            )
+        )
+        listOf(nullEdit, stringEdit, blocksEdit).forEach {
+            assertEquals(it, roundtripEntry(it))
+        }
+
+        val nullWire = Json.parseToJsonElement(
+            JsonlCodec.encodeEntryLine(nullEdit).trimEnd()
+        ).jsonObject
+        assertEquals(JsonNull, nullWire["replacement"])
+        val stringWire = Json.parseToJsonElement(
+            JsonlCodec.encodeEntryLine(stringEdit).trimEnd()
+        ).jsonObject
+        assertEquals(
+            "edited",
+            stringWire["replacement"]!!.jsonObject["content"]!!.jsonPrimitive.content
+        )
+    }
+
+    @Test
+    fun `malformed context edit replacements are skipped`() {
+        val line = "{\"type\":\"context_edit\",\"id\":\"e1\",\"parentId\":null," +
+            "\"timestamp\":\"1970-01-01T00:00:00.001Z\",\"targetId\":\"m0\"," +
+            "\"replacement\":{\"content\":1}}"
+        assertNull(JsonlCodec.parseLine(line))
     }
 
     @Test
