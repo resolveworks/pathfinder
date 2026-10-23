@@ -302,7 +302,7 @@ class CompactionLlmTest {
     }
 
     @Test
-    fun `tokensBefore counts system entries as zero`() {
+    fun `tokensBefore counts the effective system message`() {
         val system = createMessageEntry(
             SystemMessage(content = listOf(TextContent("x".repeat(4000))))
         )
@@ -318,13 +318,13 @@ class CompactionLlmTest {
             )
         )!!
 
-        // 1 token for the user text and 1 for the assistant text; the system
-        // message estimates 0 under pi's compaction-local estimator.
-        assertEquals(2, preparation.tokensBefore)
+        // The effective system prompt is counted once, plus 1 token for the
+        // user text and 1 for the assistant text.
+        assertEquals(1145, preparation.tokensBefore)
     }
 
     @Test
-    fun `tokensBefore estimates compaction summaries at summary length`() {
+    fun `tokensBefore estimates the projected compaction summary message`() {
         val summary = "x".repeat(400) // 115 tokens at summary/3.5
         val kept = createMessageEntry(createUserMessage("old"))
         val compaction = createCompactionEntry(summary, kept.id, firstKeptEntryId = kept.id)
@@ -337,9 +337,10 @@ class CompactionLlmTest {
             )
         )!!
 
-        // Context entries are [compaction, kept, tail]: the summary counts
-        // summary.length/3.5 (115), not its wrapped user-message projection.
-        assertEquals(117, preparation.tokensBefore)
+        // Context entries are [compaction, kept, tail]: pathfinder projects
+        // the summary as a wrapped user message, so its prefix and suffix are
+        // estimated with the message rather than the bare summary length.
+        assertEquals(147, preparation.tokensBefore)
     }
 
     @Test
