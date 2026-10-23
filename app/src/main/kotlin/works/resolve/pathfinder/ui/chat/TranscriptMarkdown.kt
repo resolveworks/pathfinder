@@ -91,7 +91,7 @@ internal fun buildMarkdownBlocks(
  * renderer pre-parsed states instead makes parsing a projection concern —
  * once per content, completed before publication.
  */
-internal class TranscriptMarkdown {
+internal class TranscriptMarkdownCache {
     private val flavour = GFMFlavourDescriptor()
     private val parser = MarkdownParser(flavour)
     private val parsed = HashMap<String, State>()

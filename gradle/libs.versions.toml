@@ -15,7 +15,7 @@ junit = "4.13.2"
 coroutines = "1.11.0"
 okhttp = "5.5.0"
 okhttpSse = "5.5.0"
-markdownRenderer = "0.45.0"
+markdownRenderer = "0.46.0"
 serializationJson = "1.11.0"
 # zstd request-body compression for the Codex SSE path
 zstd = "1.5.7-19"

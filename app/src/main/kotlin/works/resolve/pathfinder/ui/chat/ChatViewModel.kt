@@ -215,8 +215,8 @@ class ChatViewModel(
     /** Agent model instance behind the latest [ChatUiState.selectedModel] projection. */
     private var observedAgentModel: Model? = null
 
-    /** Transcript parse cache (see [TranscriptMarkdown]). */
-    private val transcriptMarkdown = TranscriptMarkdown()
+    /** Transcript parse cache (see [TranscriptMarkdownCache]). */
+    private val transcriptMarkdown = TranscriptMarkdownCache()
 
     /**
      * Delta fold of the streaming assistant message (null while none

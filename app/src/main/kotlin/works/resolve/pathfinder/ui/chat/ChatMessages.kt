@@ -45,8 +45,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
+import com.mikepenz.markdown.model.DefaultMarkdownAnimation
+import com.mikepenz.markdown.model.MarkdownState
 import com.mikepenz.markdown.model.State
+import com.mikepenz.markdown.model.StreamingMarkdownState
 import com.mikepenz.markdown.model.parseMarkdown
+import com.mikepenz.markdown.model.rememberMarkdownState
 import com.mikepenz.markdown.model.rememberStreamingMarkdownState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -262,18 +266,67 @@ private fun UserMessageItem(message: UserMessage, modifier: Modifier = Modifier)
     }
 }
 
+/**
+ * Disables the renderer's text-size animation: it exists for image loads,
+ * none load here, and in a token stream it makes every line wrap lag and
+ * settle instead of landing with its frame.
+ */
+private val noTextSizeAnimation = DefaultMarkdownAnimation(animateTextSize = { this })
+
+/**
+ * The transcript's markdown rendering policy in one place: full width, no
+ * text-size animation ([noTextSizeAnimation]), and default colors unless
+ * [text] overrides the text color — thinking blocks pass the outline tone
+ * (pi's shown-thinking look, dimmer than the answer text). The overloads
+ * follow the renderer's entry points: pre-parsed [State] for committed
+ * blocks, [MarkdownState] for the tool sheet's per-open parse, the
+ * streaming state for the growing tail.
+ */
+@Composable
+private fun TranscriptMarkdown(state: State, text: Color? = null) {
+    Markdown(
+        state = state,
+        colors = if (text == null) markdownColor() else markdownColor(text = text),
+        animations = noTextSizeAnimation,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun TranscriptMarkdown(state: MarkdownState, text: Color) {
+    Markdown(
+        markdownState = state,
+        colors = markdownColor(text = text),
+        animations = noTextSizeAnimation,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun TranscriptMarkdown(
+    streamingMarkdownState: StreamingMarkdownState,
+    text: Color? = null
+) {
+    Markdown(
+        streamingMarkdownState = streamingMarkdownState,
+        colors = if (text == null) markdownColor() else markdownColor(text = text),
+        animations = noTextSizeAnimation,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
 /** Rendered markdown blocks shared by committed and streaming rows. */
 @Composable
 private fun MarkdownBlocks(blocks: List<MarkdownBlock>, showThinking: Boolean) {
     blocks.forEach { block ->
         when (block) {
-            is MarkdownBlock.Text -> Markdown(
-                state = block.state,
-                modifier = Modifier.fillMaxWidth()
-            )
+            is MarkdownBlock.Text -> TranscriptMarkdown(state = block.state)
 
             is MarkdownBlock.Thinking -> if (showThinking) {
-                ThinkingText(block.state)
+                TranscriptMarkdown(
+                    state = block.state,
+                    text = MaterialTheme.colorScheme.outline
+                )
             } else {
                 ThinkingLabel(active = false)
             }
@@ -284,7 +337,7 @@ private fun MarkdownBlocks(blocks: List<MarkdownBlock>, showThinking: Boolean) {
 /**
  * Committed assistant message: plain full-width markdown with no container,
  * so it reads like a reply rather than a bubble. Blocks arrive pre-parsed
- * from the projection (see [TranscriptMarkdown]) and render in order (pi's
+ * from the projection (see [TranscriptMarkdownCache]) and render in order (pi's
  * AssistantMessageComponent does the same single pass). With showThinking
  * on, thinking blocks render inline (pi's shown state); with it off they
  * collapse to [ThinkingLabel] (pi's hidden state). An error renders below
@@ -377,14 +430,9 @@ private fun StreamingMarkdownBlock(text: String, thinking: Boolean) {
             streamingState.append(text.substring(appended))
         }
     }
-    Markdown(
+    TranscriptMarkdown(
         streamingMarkdownState = streamingState,
-        colors = if (thinking) {
-            markdownColor(text = MaterialTheme.colorScheme.outline)
-        } else {
-            markdownColor()
-        },
-        modifier = Modifier.fillMaxWidth()
+        text = if (thinking) MaterialTheme.colorScheme.outline else null
     )
 }
 
@@ -559,10 +607,14 @@ private fun ToolOutputSheet(call: ToolCall, result: ToolResultMessage, onDismiss
                     .padding(top = 8.dp)
             ) {
                 when {
-                    format == ToolResultFormat.MARKDOWN -> Markdown(
-                        content = output,
-                        colors = markdownColor(text = contentColor),
-                        modifier = Modifier.fillMaxWidth()
+                    // Hoisted parse: Markdown(content) re-parses on every
+                    // recomposition (its default flavour and parser are
+                    // fresh, never-equal instances), blanking to the loading
+                    // state each time; this parses once per open, off the
+                    // composition.
+                    format == ToolResultFormat.MARKDOWN -> TranscriptMarkdown(
+                        state = rememberMarkdownState(output),
+                        text = contentColor
                     )
 
                     // Raw fallback: pi's generic result renderer.
@@ -608,19 +660,6 @@ private fun ThinkingLabel(active: Boolean) {
             color = MaterialTheme.colorScheme.outline
         )
     }
-}
-
-/**
- * pi's shown thinking state's look: markdown dimmer than the onSurface
- * answer text in both theme variants.
- */
-@Composable
-private fun ThinkingText(state: State) {
-    Markdown(
-        state = state,
-        colors = markdownColor(text = MaterialTheme.colorScheme.outline),
-        modifier = Modifier.fillMaxWidth()
-    )
 }
 
 /**
