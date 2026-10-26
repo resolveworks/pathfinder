@@ -93,8 +93,8 @@ android {
         applicationId = "works.resolve.pathfinder"
         minSdk = 34
         targetSdk = 37
-        versionCode = 14
-        versionName = "0.13.1"
+        versionCode = 15
+        versionName = "0.14.0"
     }
 
     signingConfigs {
