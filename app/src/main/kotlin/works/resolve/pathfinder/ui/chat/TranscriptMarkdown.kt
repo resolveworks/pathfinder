@@ -82,6 +82,17 @@ internal fun buildMarkdownBlocks(
 }
 
 /**
+ * One shared flavour/parser pair behind every synchronous parse: the
+ * renderer's `parseMarkdown` defaults construct fresh instances per call,
+ * and both are stateless and reusable.
+ */
+private val transcriptFlavour = GFMFlavourDescriptor()
+private val transcriptParser = MarkdownParser(transcriptFlavour)
+
+internal fun parseTranscriptMarkdown(content: String): State =
+    parseMarkdown(content, flavour = transcriptFlavour, parser = transcriptParser)
+
+/**
  * Content-keyed parse cache for transcript markdown.
  *
  * The renderer's `Markdown(content)` entry point parses asynchronously per
@@ -92,8 +103,6 @@ internal fun buildMarkdownBlocks(
  * once per content, completed before publication.
  */
 internal class TranscriptMarkdownCache {
-    private val flavour = GFMFlavourDescriptor()
-    private val parser = MarkdownParser(flavour)
     private val parsed = HashMap<String, State>()
 
     /**
@@ -103,7 +112,7 @@ internal class TranscriptMarkdownCache {
      * interleave.
      */
     fun parse(content: String): State = parsed.getOrPut(content) {
-        parseMarkdown(content, flavour = flavour, parser = parser)
+        parseTranscriptMarkdown(content)
     }
 
     /** Bounded by the active session's text: dropped on session switch. */

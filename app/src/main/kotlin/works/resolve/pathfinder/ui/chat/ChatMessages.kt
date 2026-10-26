@@ -52,11 +52,8 @@ import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.DefaultMarkdownAnimation
-import com.mikepenz.markdown.model.MarkdownState
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.StreamingMarkdownState
-import com.mikepenz.markdown.model.parseMarkdown
-import com.mikepenz.markdown.model.rememberMarkdownState
 import com.mikepenz.markdown.model.rememberStreamingMarkdownState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -80,8 +77,13 @@ import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 private const val STREAMING_PLACEHOLDER = "…"
 
-/** pi's fallback preview cap (FALLBACK_PREVIEW_LINES): output lines shown while collapsed. */
-private const val TOOL_OUTPUT_PREVIEW_LINES = 10
+/**
+ * Collapsed preview cap. pi's terminal fallback (FALLBACK_PREVIEW_LINES)
+ * shows 10 rows; preview lines here render as markdown or monospace body
+ * in a narrow column, which reads far taller than a terminal row, so the
+ * cap halves.
+ */
+private const val TOOL_OUTPUT_PREVIEW_LINES = 5
 
 @Composable
 internal fun ConversationContent(
@@ -334,29 +336,17 @@ private val transcriptMarkdownComponents = markdownComponents(table = wrappingTa
  * text-size animation ([noTextSizeAnimation]), wrapping table cells
  * ([transcriptMarkdownComponents]), the compressed heading ladder
  * ([transcriptMarkdownTypography]), and default colors unless
- * [text] overrides the text color — thinking blocks pass the outline tone
- * (pi's shown-thinking look, dimmer than the answer text). The overloads
- * follow the renderer's entry points: pre-parsed [State] for committed
- * blocks, [MarkdownState] for the tool sheet's per-open parse, the
- * streaming state for the growing tail.
+ * [text] overrides the text color — thinking blocks and tool output pass
+ * the outline/onSurfaceVariant tone (pi's shown-thinking look, dimmer than
+ * the answer text). The overloads follow the renderer's entry points:
+ * pre-parsed [State] for committed blocks and tool output, the streaming
+ * state for the growing tail.
  */
 @Composable
 private fun TranscriptMarkdown(state: State, text: Color? = null) {
     Markdown(
         state = state,
         colors = if (text == null) markdownColor() else markdownColor(text = text),
-        typography = transcriptMarkdownTypography(),
-        animations = noTextSizeAnimation,
-        components = transcriptMarkdownComponents,
-        modifier = Modifier.fillMaxWidth()
-    )
-}
-
-@Composable
-private fun TranscriptMarkdown(state: MarkdownState, text: Color) {
-    Markdown(
-        markdownState = state,
-        colors = markdownColor(text = text),
         typography = transcriptMarkdownTypography(),
         animations = noTextSizeAnimation,
         components = transcriptMarkdownComponents,
@@ -600,12 +590,10 @@ private fun toolResultSummary(result: ToolResultMessage): String? = when (result
  * text: the row title (the call's key argument, else the tool name) and a
  * spinner while running (the call committed but its result has not, and
  * the run is still live — pi's component spins between its start and end
- * events). A committed call previews its output below the title like pi's
- * execution component: collapsed shows the first [TOOL_OUTPUT_PREVIEW_LINES]
- * lines with a truncation notice, a tap toggles the full output in place
- * (pi's Ctrl+O, exposed as the row's tap) — Markdown for the two web tools,
- * monospace raw otherwise. Error coloring is a native adaptation (pi
- * signals errors through the shell, not text color).
+ * events). A committed call renders its output below the title
+ * ([ToolOutputBody]); the row's tap toggles expansion (pi's Ctrl+O).
+ * Error coloring is a native adaptation (pi signals errors through the
+ * shell, not text color).
  */
 @Composable
 private fun ToolCallItem(
@@ -655,7 +643,7 @@ private fun ToolCallItem(
                     }
                     output?.let {
                         ToolOutputBody(
-                            call = call,
+                            format = ToolResultRenderers.formatFor(call.name),
                             output = it,
                             expanded = expanded,
                             isError = isError
@@ -675,52 +663,55 @@ private fun ToolCallItem(
 
 /**
  * The committed output under the call: collapsed, pi's fallback preview —
- * the first [TOOL_OUTPUT_PREVIEW_LINES] lines plus a remaining-lines
- * notice; expanded, the whole output in the row (Markdown for the two web
- * tools, monospace raw otherwise). The parse is hoisted like the sheet's
- * was: Markdown(content) re-parses on every recomposition, so the state
- * parses once per output.
+ * the first [TOOL_OUTPUT_PREVIEW_LINES] source lines — expanded, the whole
+ * output in place. Both states render in the output's own format (Markdown
+ * for the two web tools, monospace raw otherwise), so expanding only
+ * reveals more of the same rendering, never a different one; the
+ * remaining-lines notice is its own muted line (pi tones its notice down
+ * separately from the output). Parsing is synchronous and content-keyed
+ * like the committed blocks': the renderer's MarkdownState renders a blank
+ * Loading frame first, which would flash the row on every expand.
  */
 @Composable
-private fun ToolOutputBody(call: ToolCall, output: String, expanded: Boolean, isError: Boolean) {
+private fun ToolOutputBody(
+    format: ToolResultFormat,
+    output: String,
+    expanded: Boolean,
+    isError: Boolean
+) {
     val contentColor = if (isError) {
         MaterialTheme.colorScheme.error
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
-    if (expanded) {
-        when (ToolResultRenderers.formatFor(call.name)) {
-            ToolResultFormat.MARKDOWN -> key(output) {
-                TranscriptMarkdown(
-                    state = rememberMarkdownState(output),
-                    text = contentColor
-                )
-            }
+    val lines = remember(output) { output.split("\n") }
+    val visible = if (expanded) lines.size else minOf(lines.size, TOOL_OUTPUT_PREVIEW_LINES)
+    val remaining = lines.size - visible
+    val text = remember(output, visible) { lines.take(visible).joinToString("\n") }
+    Column(
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        when (format) {
+            ToolResultFormat.MARKDOWN -> TranscriptMarkdown(
+                state = remember(text) { parseTranscriptMarkdown(text) },
+                text = contentColor
+            )
 
             ToolResultFormat.MONO -> Text(
-                text = output,
+                text = text,
                 style = MaterialTheme.typography.bodySmall,
                 fontFamily = FontFamily.Monospace,
                 color = contentColor
             )
         }
-    } else {
-        val lines = remember(output) { output.split("\n") }
-        val visible = lines.take(TOOL_OUTPUT_PREVIEW_LINES)
-        val remaining = lines.size - visible.size
-        val preview = if (remaining > 0) {
-            visible.joinToString("\n") +
-                "\n" +
-                stringResource(R.string.tool_output_more_lines, remaining)
-        } else {
-            visible.joinToString("\n")
+        if (remaining > 0) {
+            Text(
+                text = stringResource(R.string.tool_output_more_lines, remaining),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
-        Text(
-            text = preview,
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
-            color = contentColor
-        )
     }
 }
 
@@ -795,9 +786,10 @@ private fun ConversationContentThinkingPreview() {
                     TranscriptRow.Chat(
                         "m2",
                         message,
-                        // Previews parse inline: inspection-mode rendering,
-                        // like the renderer's own preview defaults.
-                        buildMarkdownBlocks(message.content, ::parseMarkdown)
+                        // Previews parse inline through the shared parser:
+                        // inspection-mode rendering without per-call
+                        // flavour/parser construction.
+                        buildMarkdownBlocks(message.content, ::parseTranscriptMarkdown)
                     )
                 },
                 TranscriptRow.Tool(
