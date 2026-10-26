@@ -162,7 +162,9 @@ internal fun filterTreeRows(
 private fun TreeRow.searchText(): String = when (val rowBody = body) {
     is TreeRowBody.Text -> rowBody.preview
 
-    is TreeRowBody.NoContent -> ""
+    is TreeRowBody.Muted -> rowBody.preview
+
+    is TreeRowBody.Error -> rowBody.preview
 
     is TreeRowBody.Tool ->
         rowBody.name + " " + (rowBody.call?.arguments?.toString() ?: "")
@@ -298,12 +300,16 @@ private fun TreeRowItem(
             }
         }
 
+        val muted = MaterialTheme.colorScheme.onSurfaceVariant
+        val (text, color) = when (val rowBody = row.body) {
+            is TreeRowBody.Text -> rowBody.preview to MaterialTheme.colorScheme.onSurface
+            is TreeRowBody.Muted -> rowBody.preview to muted
+            is TreeRowBody.Error -> rowBody.preview to MaterialTheme.colorScheme.error
+            is TreeRowBody.Tool -> toolCallTitle(rowBody.call, rowBody.name) to muted
+        }
         Text(
-            text = when (val rowBody = row.body) {
-                is TreeRowBody.Text -> rowBody.preview
-                is TreeRowBody.Tool -> toolCallTitle(rowBody.call, rowBody.name)
-                TreeRowBody.NoContent -> stringResource(R.string.tree_no_content)
-            },
+            text = text,
+            color = color,
             style = MaterialTheme.typography.bodyMedium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

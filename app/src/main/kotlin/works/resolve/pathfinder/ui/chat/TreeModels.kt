@@ -27,8 +27,14 @@ sealed class TreeRowBody {
     /** Whitespace-normalized, bounded, role-prefixed single-line preview. */
     data class Text(val preview: String) : TreeRowBody()
 
-    /** Bookkeeping entry or empty message text; resolved to text at render. */
-    data object NoContent : TreeRowBody()
+    /**
+     * pi's dimmed rows: the empty-text assistant fallbacks — "(aborted)"
+     * after an abort, else "(no content)" — and the "[system]" role label.
+     */
+    data class Muted(val preview: String) : TreeRowBody()
+
+    /** pi's assistant error preview: normalized, bounded to 80 chars. */
+    data class Error(val preview: String) : TreeRowBody()
 
     data class Tool(
         val name: String,

@@ -9,6 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
@@ -22,12 +23,19 @@ class TreeProjectionTest {
     private var clock = 0L
 
     private fun user(text: String) = UserMessage.ofText(text, clock++)
-    private fun assistant(text: String, error: String? = null) = AssistantMessage(
+
+    private fun systemMessage() =
+        SystemMessage(content = listOf(TextContent("You are terse")), timestamp = clock++)
+    private fun assistant(
+        text: String,
+        error: String? = null,
+        stopReason: StopReason = StopReason.STOP
+    ) = AssistantMessage(
         content = if (text.isEmpty()) emptyList() else listOf(TextContent(text)),
         api = "openai-completions",
         provider = "zai",
         model = "glm-4.7",
-        stopReason = StopReason.STOP,
+        stopReason = stopReason,
         errorMessage = error,
         timestamp = clock++
     )
@@ -180,19 +188,51 @@ class TreeProjectionTest {
     }
 
     @Test
-    fun `previews - role prefix, normalization, bounding, empty and error`() {
+    fun `previews - role prefix, normalization, bounding, empty, aborted and error`() {
         val multiline = entry("m", null, user("  line one\n   line two  \n\nline three  "))
-        val long = entry("l", "m", user("x".repeat(300)))
-        val empty = entry("e", "l", assistant(""))
-        val failed = entry("f", "e", assistant("ignored", error = "boom happened"))
-        val conversation = buildTree(listOf(multiline, long, empty, failed)) to "f"
+        val blocks = entry(
+            "b",
+            "m",
+            UserMessage(listOf(TextContent("alpha"), TextContent("beta")), clock++)
+        )
+        val long = entry("l", "b", user("x".repeat(300)))
+        val emptyUser = entry("eu", "l", user(""))
+        val system = entry("sys", "eu", systemMessage())
+        val empty = entry("e", "sys", assistant(""))
+        val aborted = entry("ab", "e", assistant("", stopReason = StopReason.ABORTED))
+        val failed = entry("f", "ab", assistant("", error = "boom happened"))
+        val erroredWithText = entry("t", "f", assistant("ignored", error = "boom happened"))
+        val conversation =
+            buildTree(
+                listOf(
+                    multiline,
+                    blocks,
+                    long,
+                    emptyUser,
+                    system,
+                    empty,
+                    aborted,
+                    failed,
+                    erroredWithText
+                )
+            ) to "t"
 
         val result = rows(conversation.first, conversation.second)
         fun previewAt(i: Int) = (result[i].body as TreeRowBody.Text).preview
-        assertEquals("You: line one line two line three", previewAt(0))
-        assertEquals("You: " + "x".repeat(120), previewAt(1))
-        assertEquals(TreeRowBody.NoContent, result[2].body)
-        assertEquals("Assistant: boom happened", previewAt(3))
+        // pi's normalize only replaces newlines/tabs and trims: internal
+        // whitespace runs survive.
+        assertEquals("You: line one    line two    line three", previewAt(0))
+        // pi's extractContent concatenates text blocks with no separator.
+        assertEquals("You: alphabeta", previewAt(1))
+        assertEquals("You: " + "x".repeat(200), previewAt(2))
+        // pi keeps the bare prefix for an empty user message.
+        assertEquals("You: ", previewAt(3))
+        assertEquals(TreeRowBody.Muted("[system]"), result[4].body)
+        assertEquals(TreeRowBody.Muted("Assistant: (no content)"), result[5].body)
+        assertEquals(TreeRowBody.Muted("Assistant: (aborted)"), result[6].body)
+        assertEquals(TreeRowBody.Error("Assistant: boom happened"), result[7].body)
+        // pi's order: text content wins over the error message.
+        assertEquals("Assistant: ignored", previewAt(8))
     }
 
     @Test
@@ -214,8 +254,13 @@ class TreeProjectionTest {
             result.first { it.id == "t1" }.body
         )
         // a1 carries only a tool call: no text preview exists, so its body
-        // is the no-content variant rather than an empty Text preview.
-        assertEquals(TreeRowBody.NoContent, result.first { it.id == "a1" }.body)
+        // is pi's prefixed no-content fallback.
+        assertEquals(
+            TreeRowBody.Muted("Assistant: (no content)"),
+            result.first {
+                it.id == "a1"
+            }.body
+        )
         result
             .filter { it.id != "t1" && it.id != "a1" }
             .forEach { assertTrue(it.body is TreeRowBody.Text) }

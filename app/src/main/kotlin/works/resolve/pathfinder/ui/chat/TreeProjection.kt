@@ -1,7 +1,10 @@
 package works.resolve.pathfinder.ui.chat
 
 import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.Content
+import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
+import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
@@ -197,8 +200,13 @@ internal fun buildTreeRows(
     return rows
 }
 
+/**
+ * pi's getEntryDisplayText, reduced to the roles the port knows: user and
+ * assistant previews with pi's ordering and fallbacks, tool results titled
+ * from their originating call, and "[system]" for the system role.
+ */
 private fun SessionEntry.rowBody(toolCalls: Map<String, ToolCall>): TreeRowBody {
-    if (this !is MessageEntry) return TreeRowBody.NoContent
+    if (this !is MessageEntry) error("non-message entries are never visible in the tree")
     return when (val entryMessage = message) {
         is ToolResultMessage -> TreeRowBody.Tool(
             name = entryMessage.toolName,
@@ -208,29 +216,39 @@ private fun SessionEntry.rowBody(toolCalls: Map<String, ToolCall>): TreeRowBody 
             call = toolCalls[entryMessage.toolCallId]
         )
 
-        is UserMessage -> preview("You", entryMessage.content.textContent())
-
-        is AssistantMessage -> preview(
-            "Assistant",
-            entryMessage.errorMessage ?: entryMessage.content.textContent()
+        is UserMessage -> TreeRowBody.Text(
+            "You: " + normalize(extractContent(entryMessage.content))
         )
 
-        is SystemMessage -> TreeRowBody.NoContent
+        // pi's tree selector: text first, then aborted, then error, then the
+        // no-content fallback — all keep the role prefix.
+        is AssistantMessage -> {
+            val text = normalize(extractContent(entryMessage.content))
+            when {
+                text.isNotEmpty() -> TreeRowBody.Text("Assistant: $text")
+
+                entryMessage.stopReason == StopReason.ABORTED ->
+                    TreeRowBody.Muted("Assistant: (aborted)")
+
+                entryMessage.errorMessage != null -> TreeRowBody.Error(
+                    "Assistant: " +
+                        normalize(entryMessage.errorMessage!!).take(ERROR_PREVIEW_MAX_LENGTH)
+                )
+
+                else -> TreeRowBody.Muted("Assistant: (no content)")
+            }
+        }
+
+        is SystemMessage -> TreeRowBody.Muted("[system]")
     }
 }
 
-private fun preview(prefix: String, body: String): TreeRowBody {
-    val normalized = body
-        .lineSequence()
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
-        .joinToString(" ")
-        .take(PREVIEW_MAX_LENGTH)
-    return if (normalized.isEmpty()) {
-        TreeRowBody.NoContent
-    } else {
-        TreeRowBody.Text("$prefix: $normalized")
-    }
-}
+/** pi's extractContent: text blocks concatenated, bounded to 200 chars. */
+private fun extractContent(content: List<Content>): String =
+    content.filterIsInstance<TextContent>().joinToString("") { it.text }.take(EXTRACT_MAX_LENGTH)
 
-private const val PREVIEW_MAX_LENGTH = 120
+/** pi's normalize: newlines and tabs become spaces; ends trimmed. */
+private fun normalize(text: String): String = text.replace('\n', ' ').replace('\t', ' ').trim()
+
+private const val EXTRACT_MAX_LENGTH = 200
+private const val ERROR_PREVIEW_MAX_LENGTH = 80
