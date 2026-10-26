@@ -51,7 +51,7 @@ class BraveWebSearchToolTest {
         assertEquals("web_search", BraveWebSearchTool.NAME)
         assertEquals("web_search", tool.definition.name)
         assertEquals(
-            "Search the web with Brave and return the top results as a markdown list.",
+            "Search the web with Brave and return the top results as markdown.",
             tool.definition.description
         )
         val params = tool.definition.parameters as JsonObject
@@ -125,7 +125,7 @@ class BraveWebSearchToolTest {
     }
 
     @Test
-    fun `formats results as a one-line markdown list ignoring extra snippets`() =
+    fun `formats results as web_fetch-shaped markdown blocks ignoring extra snippets`() =
         runBlocking<Unit> {
             server.enqueue(
                 MockResponse().setBody(
@@ -140,9 +140,9 @@ class BraveWebSearchToolTest {
             )
             val result = tool().execute("t1", tool().prepare(args(query = "q")), {})
             assertEquals(
-                "- [First](https://a.example): Desc one\n" +
-                    "- [Second](https://b.example)\n" +
-                    "- [Third](https://c.example)",
+                "## First\n\nSource: https://a.example\n\nDesc one\n\n" +
+                    "## Second\n\nSource: https://b.example\n\n" +
+                    "## Third\n\nSource: https://c.example",
                 resultText(result)
             )
             assertEquals("{\"resultCount\":3}", result.details.toString())

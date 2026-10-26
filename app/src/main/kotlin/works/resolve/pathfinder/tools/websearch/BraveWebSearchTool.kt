@@ -42,7 +42,7 @@ class BraveWebSearchTool(
 
     override val definition: Tool = Tool(
         name = NAME,
-        description = "Search the web with Brave and return the top results as a markdown list.",
+        description = "Search the web with Brave and return the top results as markdown.",
         parameters = buildJsonObject {
             put("type", "object")
             put(
@@ -133,16 +133,28 @@ class BraveWebSearchTool(
             )
         }
 
-        val lines = results.map { element ->
+        // web_fetch's block shape — title, source, body — so a result page
+        // spans many lines and the transcript's generic preview cap collapses
+        // and expands search rows exactly like fetch rows.
+        val blocks = results.map { element ->
             val r = element as? JsonObject ?: JsonObject(emptyMap())
             val title = r.str("title") ?: ""
             val url = r.str("url") ?: ""
             val description = r.truthyString("description")
-            if (description == null) "- [$title]($url)" else "- [$title]($url): $description"
+            buildString {
+                append("## ").appendLine(title)
+                appendLine()
+                append("Source: ").append(url)
+                description?.let {
+                    appendLine()
+                    appendLine()
+                    append(it)
+                }
+            }
         }
 
         return AgentToolResult(
-            content = listOf(TextContent(lines.joinToString("\n"))),
+            content = listOf(TextContent(blocks.joinToString("\n\n"))),
             details = buildJsonObject { put("resultCount", results.size) }
         )
     }
