@@ -3,16 +3,12 @@ package works.resolve.pathfinder.tools.websearch
 import kotlinx.serialization.json.JsonObject
 
 /**
- * One optional web_search tool parameter, in the declaring provider's
- * native vocabulary: names, values, and semantics are the provider's own
- * and are never translated across providers.
+ * One optional web_search tool parameter: its name plus its raw
+ * JSON-schema property object (`type`, `enum`, `description`, …) exactly as
+ * the provider's API defines the knob. Names, values, and semantics are the
+ * provider's own and are never translated across providers.
  */
-data class SearchParam(
-    val name: String,
-    val description: String,
-    val type: String = "string",
-    val enumValues: List<String>? = null
-)
+data class SearchParameter(val name: String, val schema: JsonObject)
 
 /**
  * A provider's answer to one search, already stripped to the fields the
@@ -45,18 +41,14 @@ interface SearchExecutor {
      * The provider's own optional parameters, declared to the model as-is;
      * the dispatcher's schema is `query` plus exactly these.
      */
-    val parameters: List<SearchParam>
+    val parameters: List<SearchParameter>
 
     /**
-     * [options] carries the values of exactly the declared [parameters]
-     * that the call included, keyed by parameter name.
+     * Reads its own declared [parameters] out of the validated tool
+     * [arguments] (which also carries `query`).
      *
      * @throws SearchRequestException on a non-2xx answer; network failures
      * propagate as OkHttp's [java.io.IOException].
      */
-    suspend fun search(
-        query: String,
-        options: Map<String, String>,
-        apiKey: String
-    ): List<SearchResult>
+    suspend fun search(query: String, arguments: JsonObject, apiKey: String): List<SearchResult>
 }
