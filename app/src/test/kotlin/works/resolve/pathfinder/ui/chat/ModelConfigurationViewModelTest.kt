@@ -98,8 +98,8 @@ import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
-import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
+import works.resolve.pathfinder.tools.websearch.WebSearchTool
 
 /** Model and thinking configuration: live switches, startup defaults, model scope, and session-configuration seeding. */
 internal class ModelConfigurationViewModelTest : ChatHarnessTest() {

@@ -94,8 +94,8 @@ import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
-import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
+import works.resolve.pathfinder.tools.websearch.WebSearchTool
 
 /** Drawer session search: filtering and sort. */
 internal class SessionSearchViewModelTest : ChatHarnessTest() {

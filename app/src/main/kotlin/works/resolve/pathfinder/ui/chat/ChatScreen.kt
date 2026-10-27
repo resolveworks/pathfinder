@@ -154,6 +154,7 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         onRefreshProviderStatus = viewModel::refreshProviderStatus,
         onSaveSearchProviderCredential = viewModel::saveSearchProviderCredential,
         onRemoveSearchProviderCredential = viewModel::removeSearchProviderCredential,
+        onSetActiveSearchProvider = viewModel::setActiveSearchProvider,
         onRefreshSearchProviderStatus = viewModel::refreshSearchProviderStatus,
         searchAuthPrompts = viewModel::searchProviderAuthPrompts,
         onNewSession = viewModel::newSession,
@@ -205,6 +206,7 @@ fun ChatScreen(
     onRefreshProviderStatus: () -> Unit,
     onSaveSearchProviderCredential: (providerId: String, apiKeyInput: String) -> Unit,
     onRemoveSearchProviderCredential: (providerId: String) -> Unit,
+    onSetActiveSearchProvider: (providerId: String) -> Unit,
     onRefreshSearchProviderStatus: () -> Unit,
     searchAuthPrompts: (providerId: String) -> List<CatalogAuthPrompt>,
     onNewSession: () -> Unit,
@@ -547,6 +549,8 @@ fun ChatScreen(
                             entry<SearchProvidersNavKey> {
                                 SearchProvidersContent(
                                     providerOptions = uiState.searchProviderOptions,
+                                    activeProviderId = uiState.activeSearchProviderId,
+                                    onSetActive = onSetActiveSearchProvider,
                                     onRefresh = onRefreshSearchProviderStatus,
                                     onOpenProvider = pushSearchProviderAuth
                                 )
@@ -988,6 +992,7 @@ private fun PreviewChatScreen(
             onRefreshProviderStatus = {},
             onSaveSearchProviderCredential = { _, _ -> },
             onRemoveSearchProviderCredential = { _ -> },
+            onSetActiveSearchProvider = { _ -> },
             onRefreshSearchProviderStatus = {},
             searchAuthPrompts = searchAuthPrompts,
             onNewSession = {},

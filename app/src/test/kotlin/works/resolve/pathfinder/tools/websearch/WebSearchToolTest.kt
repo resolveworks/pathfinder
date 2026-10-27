@@ -21,15 +21,22 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.utils.validateToolArguments
 
-class BraveWebSearchToolTest {
+class WebSearchToolTest {
 
     private val server = MockWebServer()
     private val client = OkHttpClient()
 
     private var key: String? = "test-key"
 
-    private fun tool(): BraveWebSearchTool =
-        BraveWebSearchTool(client, { key }, server.url("/").toString().removeSuffix("/"))
+    private fun braveExecutor(): BraveSearchExecutor =
+        BraveSearchExecutor(SearchTransport(client), server.url("/").toString().removeSuffix("/"))
+
+    private fun tool(): WebSearchTool = WebSearchTool(
+        executors = listOf(braveExecutor()),
+        initialProviderId = SearchProviderService.BRAVE_PROVIDER_ID,
+        activeProviderId = { SearchProviderService.BRAVE_PROVIDER_ID },
+        credentialFor = { key }
+    )
 
     private fun resultText(result: works.resolve.pathfinder.agent.AgentToolResult): String =
         (result.content.single() as TextContent).text
@@ -48,7 +55,7 @@ class BraveWebSearchToolTest {
     @Test
     fun `definition carries chosen name description and schema`() {
         val tool = tool()
-        assertEquals("web_search", BraveWebSearchTool.NAME)
+        assertEquals("web_search", WebSearchTool.NAME)
         assertEquals("web_search", tool.definition.name)
         assertEquals(
             "Search the web with Brave and return the top results as markdown.",
@@ -64,11 +71,10 @@ class BraveWebSearchToolTest {
         assertTrue(tool.promptSnippet.contains("Search the web"))
     }
 
-    private fun BraveWebSearchTool.prepare(arguments: JsonObject): JsonObject =
-        validateToolArguments(
-            definition,
-            ToolCall(id = "t1", name = definition.name, arguments = arguments)
-        )
+    private fun WebSearchTool.prepare(arguments: JsonObject): JsonObject = validateToolArguments(
+        definition,
+        ToolCall(id = "t1", name = definition.name, arguments = arguments)
+    )
 
     @Test
     fun `schema validation rejects missing query and coerces mistyped ones`() {
@@ -92,7 +98,7 @@ class BraveWebSearchToolTest {
         assertTrue(
             invalid.message!!.contains("must be equal to one of the allowed values")
         )
-        for (f in BraveWebSearchTool.FRESHNESS_VALUES) {
+        for (f in BraveSearchExecutor.FRESHNESS_VALUES) {
             tool.prepare(args(query = "q", freshness = f))
         }
         tool.prepare(args(query = "q"))
@@ -161,10 +167,21 @@ class BraveWebSearchToolTest {
     }
 
     @Test
-    fun `non-2xx response is returned as text content`() = runBlocking<Unit> {
+    fun `429 retries once then succeeds`() = runBlocking<Unit> {
+        server.enqueue(MockResponse().setResponseCode(429).setBody("rate limited"))
+        server.enqueue(MockResponse().setBody("""{"web":{"results":[]}}"""))
+        val result = tool().execute("t1", tool().prepare(args(query = "q")), {})
+        assertEquals("No results found for \"q\".", resultText(result))
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `second 429 fails normally`() = runBlocking<Unit> {
+        server.enqueue(MockResponse().setResponseCode(429).setBody("rate limited"))
         server.enqueue(MockResponse().setResponseCode(429).setBody("rate limited"))
         val result = tool().execute("t1", tool().prepare(args(query = "q")), {})
         assertEquals("Search failed (429): rate limited", resultText(result))
+        assertEquals(2, server.requestCount)
         assertEquals("{}", result.details.toString())
     }
 
@@ -186,7 +203,7 @@ class BraveWebSearchToolTest {
     fun `missing api key returns stable message without a request`() = runBlocking<Unit> {
         key = null
         val result = tool().execute("t1", tool().prepare(args(query = "q")), {})
-        assertEquals(BraveWebSearchTool.MISSING_KEY_MESSAGE, resultText(result))
+        assertEquals("Error: No Brave Search API key is configured.", resultText(result))
         assertEquals(0, server.requestCount)
     }
 
@@ -194,7 +211,13 @@ class BraveWebSearchToolTest {
     fun `network failure throws IOException`() {
         val url = server.url("/").toString().removeSuffix("/")
         server.shutdown()
-        val tool = BraveWebSearchTool(client, { key }, url)
+        val executor = BraveSearchExecutor(SearchTransport(client), url)
+        val tool = WebSearchTool(
+            executors = listOf(executor),
+            initialProviderId = SearchProviderService.BRAVE_PROVIDER_ID,
+            activeProviderId = { SearchProviderService.BRAVE_PROVIDER_ID },
+            credentialFor = { key }
+        )
         runBlocking {
             assertFailsWith<java.io.IOException> {
                 tool.execute("t1", tool.prepare(args(query = "q")), {})

@@ -96,8 +96,8 @@ import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
-import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
+import works.resolve.pathfinder.tools.websearch.WebSearchTool
 
 /** Web-search feature: Brave search-provider credentials and the web_search tool's presence on sessions. */
 internal class SearchProviderViewModelTest : ChatHarnessTest() {
@@ -132,7 +132,7 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
             vm.configure(apiKey = "k")
             vm.awaitState { it.status == ChatStatus.Ready }
             val agent = h.createdAgents.single()
-            assertFalse(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+            assertFalse(WebSearchTool.NAME in agent.getActiveToolNames())
 
             vm.closeForTest()
         }
@@ -152,8 +152,8 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
             vm.configure(apiKey = "k")
             vm.awaitState { it.status == ChatStatus.Ready }
             val names = h.createdAgents.single().getActiveToolNames()
-            assertEquals(BraveWebSearchTool.NAME, names.last())
-            assertEquals(1, names.count { it == BraveWebSearchTool.NAME })
+            assertEquals(WebSearchTool.NAME, names.last())
+            assertEquals(1, names.count { it == WebSearchTool.NAME })
 
             vm.closeForTest()
         }
@@ -182,7 +182,7 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
         vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
         vm.awaitState { it.error != null }
         assertFalse(vm.uiState.value.searchProviderOptions.single().configured)
-        assertFalse(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+        assertFalse(WebSearchTool.NAME in agent.getActiveToolNames())
         vm.dismissError()
         h.credentials.failWrites = false
 
@@ -194,7 +194,7 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
             h.searchProviders.apiKey(SearchProviderService.BRAVE_PROVIDER_ID)
         )
         assertEquals(1, h.createdAgents.size)
-        assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+        assertTrue(WebSearchTool.NAME in agent.getActiveToolNames())
         assertFalse(vm.uiState.value.toString().contains("brave-key"))
 
         vm.saveSearchProviderCredential(
@@ -219,12 +219,12 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
 
         vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
         vm.awaitState { it.searchProviderOptions.single().configured }
-        assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+        assertTrue(WebSearchTool.NAME in agent.getActiveToolNames())
 
         vm.removeSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID)
         vm.awaitState { !it.searchProviderOptions.single().configured }
         assertNull(h.searchProviders.apiKey(SearchProviderService.BRAVE_PROVIDER_ID))
-        assertFalse(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+        assertFalse(WebSearchTool.NAME in agent.getActiveToolNames())
         assertEquals(1, h.createdAgents.size)
 
         vm.closeForTest()
@@ -241,7 +241,7 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
             val agent = h.createdAgents.single()
             vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
             vm.awaitState { it.searchProviderOptions.single().configured }
-            assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+            assertTrue(WebSearchTool.NAME in agent.getActiveToolNames())
 
             // A credential read failure degrades search with a safe error; chat
             // stays Ready.
@@ -249,7 +249,7 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
             vm.refreshSearchProviderStatus()
             vm.awaitState { it.error != null }
             assertFalse(vm.uiState.value.searchProviderOptions.single().configured)
-            assertFalse(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+            assertFalse(WebSearchTool.NAME in agent.getActiveToolNames())
             assertEquals(ChatStatus.Ready, vm.uiState.value.status)
             assertFalse(vm.uiState.value.toString().contains("brave-key"))
             vm.dismissError()
@@ -262,7 +262,7 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
 
             vm.refreshSearchProviderStatus()
             vm.awaitState { it.searchProviderOptions.single().configured }
-            assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+            assertTrue(WebSearchTool.NAME in agent.getActiveToolNames())
 
             vm.closeForTest()
         }
@@ -278,14 +278,14 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
             val firstId = vm.uiState.value.activeSessionId!!
             vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
             vm.awaitState { it.searchProviderOptions.single().configured }
-            assertTrue(BraveWebSearchTool.NAME in h.createdAgents.single().getActiveToolNames())
+            assertTrue(WebSearchTool.NAME in h.createdAgents.single().getActiveToolNames())
 
             // Every tryCreateAgent path synchronizes web_search.
             vm.newSession()
             vm.awaitState { it.activeSessionId != firstId }
             val newAgent = h.createdAgents.single { it !== h.createdAgents.first() }
-            assertEquals(1, newAgent.getActiveToolNames().count { it == BraveWebSearchTool.NAME })
-            assertEquals(BraveWebSearchTool.NAME, newAgent.getActiveToolNames().last())
+            assertEquals(1, newAgent.getActiveToolNames().count { it == WebSearchTool.NAME })
+            assertEquals(WebSearchTool.NAME, newAgent.getActiveToolNames().last())
 
             vm.closeForTest()
         }

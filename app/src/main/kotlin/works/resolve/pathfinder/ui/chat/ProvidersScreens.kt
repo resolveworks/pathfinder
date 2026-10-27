@@ -31,6 +31,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -48,6 +49,8 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -81,6 +84,8 @@ internal fun ProvidersContent(
 @Composable
 internal fun SearchProvidersContent(
     providerOptions: List<ProviderOption>,
+    activeProviderId: String,
+    onSetActive: (providerId: String) -> Unit,
     onRefresh: () -> Unit,
     onOpenProvider: (providerId: String) -> Unit
 ) {
@@ -88,6 +93,8 @@ internal fun SearchProvidersContent(
     ProviderListContent(
         providerOptions = providerOptions,
         searchHint = stringResource(R.string.search_provider_search_hint),
+        activeProviderId = activeProviderId,
+        onSetActive = onSetActive,
         onOpenProvider = onOpenProvider
     )
 }
@@ -96,9 +103,12 @@ internal fun SearchProvidersContent(
 private fun ProviderListContent(
     providerOptions: List<ProviderOption>,
     searchHint: String,
-    onOpenProvider: (providerId: String) -> Unit
+    onOpenProvider: (providerId: String) -> Unit,
+    activeProviderId: String? = null,
+    onSetActive: (providerId: String) -> Unit = {}
 ) {
     var query by rememberSaveable { mutableStateOf("") }
+    val activeDescription = stringResource(R.string.search_provider_active)
     val filtered = providerOptions.filter { option ->
         val q = query.trim()
         q.isEmpty() || option.name.contains(q, ignoreCase = true) ||
@@ -130,6 +140,17 @@ private fun ProviderListContent(
                     ListItem(
                         headlineContent = { Text(option.name) },
                         supportingContent = { Text(option.id) },
+                        leadingContent = activeProviderId?.let {
+                            {
+                                RadioButton(
+                                    selected = option.id == activeProviderId,
+                                    onClick = { onSetActive(option.id) },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = activeDescription
+                                    }
+                                )
+                            }
+                        },
                         trailingContent = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(

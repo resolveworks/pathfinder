@@ -1,18 +1,40 @@
 package works.resolve.pathfinder.tools.websearch
 
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import java.io.File
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.InMemoryCredentialStore
+import works.resolve.pathfinder.data.settings.SettingsRepository
 
 class SearchProviderServiceTest {
 
-    private fun service() = SearchProviderService(InMemoryCredentialStore())
+    private val settingsScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private fun settings() = SettingsRepository(
+        PreferenceDataStoreFactory.create(
+            scope = settingsScope,
+            produceFile = { File.createTempFile("settings", ".preferences_pb") }
+        )
+    )
+
+    @AfterTest
+    fun tearDown() {
+        settingsScope.cancel()
+    }
+
+    private fun service() = SearchProviderService(settings(), InMemoryCredentialStore())
 
     @Test
     fun `only brave is listed as a provider`() {
@@ -26,7 +48,7 @@ class SearchProviderServiceTest {
     @Test
     fun `credential is namespaced under search_brave`() = runBlocking<Unit> {
         val store = InMemoryCredentialStore()
-        SearchProviderService(store).saveApiKey("brave", "key-1")
+        SearchProviderService(settings(), store).saveApiKey("brave", "key-1")
         val stored = store.read("search_brave")
         assertTrue(stored is ApiKeyCredential && stored.key == "key-1")
         assertNull(store.read("brave"))

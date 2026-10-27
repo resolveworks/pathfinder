@@ -32,7 +32,7 @@ fun interface PageFetcher {
 
 /**
  * web_fetch agent tool: loads a URL and returns the page's main readable
- * content as markdown. Like [works.resolve.pathfinder.tools.websearch.BraveWebSearchTool],
+ * content as markdown. Like [works.resolve.pathfinder.tools.websearch.WebSearchTool],
  * this is a pathfinder-native adaptation — pi has no upstream web_fetch to
  * port — so the contract follows the common harness-style web_fetch shape.
  * Extraction is defuddle markdown computed in the rendered page (see

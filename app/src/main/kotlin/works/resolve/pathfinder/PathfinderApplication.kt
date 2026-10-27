@@ -28,8 +28,10 @@ import works.resolve.pathfinder.tools.webfetch.PdfPageFetcher
 import works.resolve.pathfinder.tools.webfetch.RoutingPageFetcher
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.webfetch.WebViewPageFetcher
-import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
+import works.resolve.pathfinder.tools.websearch.BraveSearchExecutor
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
+import works.resolve.pathfinder.tools.websearch.SearchTransport
+import works.resolve.pathfinder.tools.websearch.WebSearchTool
 import works.resolve.pathfinder.ui.chat.ChatViewModel
 
 /**
@@ -104,16 +106,19 @@ class PathfinderApplication : Application() {
     }
 
     val searchProviderService: SearchProviderService by lazy {
-        SearchProviderService(credentials)
+        SearchProviderService(settingsRepository, credentials)
     }
 
-    /** Resolves the key per call, so a key stored later in the app's lifetime is picked up. */
-    val webSearchTool: BraveWebSearchTool by lazy {
-        BraveWebSearchTool(
-            client = okHttpClient,
-            apiKeyResolver = {
-                searchProviderService.apiKey(SearchProviderService.BRAVE_PROVIDER_ID)
-            }
+    /**
+     * The active provider and its key are resolved per call, so a setting or
+     * credential change mid-session lands on the next tool call.
+     */
+    val webSearchTool: WebSearchTool by lazy {
+        WebSearchTool(
+            executors = listOf(BraveSearchExecutor(SearchTransport(okHttpClient))),
+            initialProviderId = runBlocking { searchProviderService.activeProviderId() },
+            activeProviderId = { searchProviderService.activeProviderId() },
+            credentialFor = { providerId -> searchProviderService.apiKey(providerId) }
         )
     }
 
@@ -174,6 +179,7 @@ class PathfinderApplication : Application() {
                 shareCacheDir = File(cacheDir, EXPORTS_DIRECTORY),
                 agentFactory = agentFactory,
                 searchProviderService = searchProviderService,
+                webSearchTool = webSearchTool,
                 modelResolver = agentFactory::resolveModel,
                 appForegroundGate = appForegroundGate,
                 loginProcessGuard = loginProcessGuard,

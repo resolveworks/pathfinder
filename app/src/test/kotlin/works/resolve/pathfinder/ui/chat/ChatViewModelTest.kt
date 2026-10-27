@@ -94,8 +94,8 @@ import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
-import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
+import works.resolve.pathfinder.tools.websearch.WebSearchTool
 
 /** Core chat behavior: initialization, send/stream, session lifecycle, tree navigation, and transcript projection. */
 internal class ChatViewModelTest : ChatHarnessTest() {
@@ -810,7 +810,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             content = listOf(
                 ToolCall(
                     id = "call-1",
-                    name = BraveWebSearchTool.NAME,
+                    name = WebSearchTool.NAME,
                     arguments = buildJsonObject { put("query", "kotlin flow") }
                 ),
                 ToolCall(
@@ -851,7 +851,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
         val searchResult = ToolResultMessage(
             toolCallId = "call-1",
-            toolName = BraveWebSearchTool.NAME,
+            toolName = WebSearchTool.NAME,
             content = listOf(TextContent("1. Kotlin flows")),
             timestamp = System.nanoTime()
         )
