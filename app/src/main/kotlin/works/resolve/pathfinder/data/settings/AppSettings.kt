@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.data.settings
 
+import works.resolve.pathfinder.tools.websearch.SearchProviderService
+
 /**
  * App-owned preference values persisted outside the runtime settings JSON
  * (owned by [works.resolve.pathfinder.codingagent.core.SettingsManager]).
@@ -7,5 +9,6 @@ package works.resolve.pathfinder.data.settings
 data class AppSettings(
     val activeSessionId: String? = null,
     val showThinking: Boolean = false,
-    val customPrompt: String = ""
+    val customPrompt: String = "",
+    val activeSearchProviderId: String = SearchProviderService.DEFAULT_PROVIDER_ID
 )

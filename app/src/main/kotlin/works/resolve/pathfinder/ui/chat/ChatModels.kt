@@ -12,6 +12,7 @@ import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.codingagent.core.SessionInfo
+import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
 /** Which conversation surface the chat root shows: the transcript or the session tree. */
 enum class ConversationView {
@@ -177,6 +178,7 @@ data class ChatUiState(
     val providerOptions: List<ProviderOption> = emptyList(),
     /** All catalog search providers with live auth status, name-sorted. */
     val searchProviderOptions: List<ProviderOption> = emptyList(),
+    val activeSearchProviderId: String = SearchProviderService.DEFAULT_PROVIDER_ID,
     /**
      * Models of configured providers only, sorted by provider then model
      * name; the scope curator's universe.

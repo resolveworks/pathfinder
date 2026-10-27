@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import works.resolve.pathfinder.codingagent.core.SettingsStorage
+import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
 /**
  * App-owned preferences plus the storage backend for the runtime settings
@@ -21,6 +22,7 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
         val ACTIVE_SESSION_ID = stringPreferencesKey("active_session_id")
         val SHOW_THINKING = booleanPreferencesKey("show_thinking")
         val CUSTOM_PROMPT = stringPreferencesKey("custom_prompt")
+        val ACTIVE_SEARCH_PROVIDER_ID = stringPreferencesKey("active_search_provider_id")
 
         /** Raw pi settings JSON; owned by `SettingsManager`, not typed here. */
         val SETTINGS_JSON = stringPreferencesKey("settings_json")
@@ -33,7 +35,9 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
         AppSettings(
             activeSessionId = prefs[Keys.ACTIVE_SESSION_ID]?.takeIf { it.isNotBlank() },
             showThinking = prefs[Keys.SHOW_THINKING] ?: false,
-            customPrompt = prefs[Keys.CUSTOM_PROMPT] ?: ""
+            customPrompt = prefs[Keys.CUSTOM_PROMPT] ?: "",
+            activeSearchProviderId =
+                prefs[Keys.ACTIVE_SEARCH_PROVIDER_ID] ?: SearchProviderService.DEFAULT_PROVIDER_ID
         )
     }
 
@@ -45,6 +49,10 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
                 prefs[Keys.ACTIVE_SESSION_ID] = sessionId
             }
         }
+    }
+
+    suspend fun setActiveSearchProviderId(providerId: String) {
+        dataStore.edit { it[Keys.ACTIVE_SEARCH_PROVIDER_ID] = providerId }
     }
 
     suspend fun setShowThinking(showThinking: Boolean) {

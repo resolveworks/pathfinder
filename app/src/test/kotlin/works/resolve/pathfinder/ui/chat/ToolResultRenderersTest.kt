@@ -3,7 +3,7 @@ package works.resolve.pathfinder.ui.chat
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
-import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
+import works.resolve.pathfinder.tools.websearch.WebSearchTool
 
 /**
  * Pins result-format resolution: the two Pathfinder-owned web tools render
@@ -14,7 +14,7 @@ class ToolResultRenderersTest {
     fun `web_search renders as markdown`() {
         assertEquals(
             ToolResultFormat.MARKDOWN,
-            ToolResultRenderers.formatFor(BraveWebSearchTool.NAME)
+            ToolResultRenderers.formatFor(WebSearchTool.NAME)
         )
     }
 

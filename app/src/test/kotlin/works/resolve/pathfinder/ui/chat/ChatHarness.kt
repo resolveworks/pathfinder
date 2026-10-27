@@ -36,6 +36,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
@@ -77,8 +78,10 @@ import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
-import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
+import works.resolve.pathfinder.tools.websearch.BraveSearchExecutor
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
+import works.resolve.pathfinder.tools.websearch.SearchTransport
+import works.resolve.pathfinder.tools.websearch.WebSearchTool
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 internal class MainDispatcherRule : org.junit.rules.TestWatcher() {
@@ -176,12 +179,10 @@ internal class ChatHarness(
 
     val credentials = FakeCredentialStore()
 
-    val searchProviders = SearchProviderService(credentials)
-
     private val fakeWebSearchTool: AgentTool = object : AgentTool {
         override val definition =
             Tool(
-                BraveWebSearchTool.NAME,
+                WebSearchTool.NAME,
                 "fake web search",
                 buildJsonObject {
                     put("type", "object")
@@ -223,6 +224,16 @@ internal class ChatHarness(
         )
     )
     val settings = SettingsRepository(failingDataStore)
+
+    val searchProviders = SearchProviderService(settings, credentials)
+
+    /** Real dispatcher wired to real service resolvers; never executed in tests. */
+    val webSearchTool = WebSearchTool(
+        executors = listOf(BraveSearchExecutor(SearchTransport(OkHttpClient()))),
+        initialProviderId = SearchProviderService.DEFAULT_PROVIDER_ID,
+        activeProviderId = { searchProviders.activeProviderId() },
+        credentialFor = { searchProviders.apiKey(it) }
+    )
 
     /** The shared manager all ViewModels and the factory write through. */
     val settingsManager: SettingsManager =
@@ -377,6 +388,7 @@ internal class ChatHarness(
         agentFactory = factory,
         modelResolver = modelResolver,
         searchProviderService = searchProviders,
+        webSearchTool = webSearchTool,
         appForegroundGate = AppForegroundGate(),
         loginProcessGuard = LoginProcessGuard {},
         defaultSystemPrompt = DEFAULT_PREAMBLE,

@@ -55,6 +55,7 @@ import works.resolve.pathfinder.codingagent.core.exportSessionToJsonl
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
+import works.resolve.pathfinder.tools.websearch.WebSearchTool
 
 /**
  * Chat screen controller. Owns configuration, sessions, and the active
@@ -104,6 +105,7 @@ class ChatViewModel(
     /** Keeps the process in the foreground-service state for an OAuth login's browser leg. */
     private val loginProcessGuard: LoginProcessGuard,
     private val searchProviderService: SearchProviderService,
+    private val webSearchTool: WebSearchTool,
     /** The built-in persona; shown by the editor while no custom prompt is stored. */
     private val defaultSystemPrompt: String,
     /** Where bulk transcript parses run; the test harness keeps them on virtual time. */
@@ -160,6 +162,7 @@ class ChatViewModel(
     private val searchProviders = SearchProviderController(
         scope = viewModelScope,
         service = searchProviderService,
+        tool = webSearchTool,
         onError = { message, cause -> setError(message, cause) }
     )
 
@@ -176,6 +179,7 @@ class ChatViewModel(
                 base.copy(
                     authFlow = authFlow,
                     searchProviderOptions = searchProviders.options,
+                    activeSearchProviderId = searchProviders.activeProviderId,
                     sessionSearchQuery = sessionSearch.query,
                     sessionSearchSort = sessionSearch.sort,
                     sessionSearchResults = sessionSearch.results
@@ -256,9 +260,12 @@ class ChatViewModel(
         // without waiting on it.
         viewModelScope.launch { buildSessionSummaries() }
         viewModelScope.launch {
-            searchProviders.state.map { it.braveConfigured }.distinctUntilChanged().collect {
-                agent?.let(searchProviders::applyTo)
-            }
+            searchProviders.state
+                .map { it.activeProviderId to it.activeConfigured }
+                .distinctUntilChanged()
+                .collect {
+                    agent?.let(searchProviders::applyTo)
+                }
         }
         // Prompt changes apply like pi's restart: rebuild the agent over the
         // same manager so the transcript replays and the next request records
@@ -389,7 +396,7 @@ class ChatViewModel(
     fun providerAuthMethods(providerId: String): List<AuthMethodInfo> =
         providerCredentials.providerAuthMethods(providerId)
 
-    /** Auth prompts for a search provider's credential form (only Brave is supported). */
+    /** Auth prompts for a search provider's credential form (empty for unknown providers). */
     fun searchProviderAuthPrompts(providerId: String): List<AuthPrompt> =
         searchProviders.authPrompts(providerId)
 
@@ -403,6 +410,9 @@ class ChatViewModel(
     /** Deletes a search provider's stored key. */
     fun removeSearchProviderCredential(providerId: String) =
         searchProviders.removeCredential(providerId)
+
+    /** Persists the active search provider; dispatch applies from the next tool call. */
+    fun setActiveSearchProvider(providerId: String) = searchProviders.setActive(providerId)
 
     /**
      * Re-reads search credentials and recomputes the derived surfaces, like
@@ -856,7 +866,7 @@ class ChatViewModel(
                 }
             )
         }
-        // Synchronize web_search against the current Brave credential
+        // Synchronize web_search against the active search provider
         // before anything binds to the session.
         return result.session.also(searchProviders::applyTo)
     }

@@ -72,7 +72,7 @@ import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.truthyString
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
-import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
+import works.resolve.pathfinder.tools.websearch.WebSearchTool
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 private const val STREAMING_PLACEHOLDER = "…"
@@ -500,7 +500,7 @@ internal enum class ToolResultFormat {
  * everything else is [ToolResultFormat.MONO] — the port of pi's generic raw
  * terminal-output fallback. */
 internal object ToolResultRenderers {
-    private val MARKDOWN_TOOLS = setOf(BraveWebSearchTool.NAME, WebFetchTool.NAME)
+    private val MARKDOWN_TOOLS = setOf(WebSearchTool.NAME, WebFetchTool.NAME)
 
     fun formatFor(toolName: String): ToolResultFormat =
         if (toolName in MARKDOWN_TOOLS) ToolResultFormat.MARKDOWN else ToolResultFormat.MONO
@@ -514,7 +514,7 @@ internal object ToolResultRenderers {
 @Composable
 internal fun toolCallTitle(call: ToolCall): String {
     return when (call.name) {
-        BraveWebSearchTool.NAME -> {
+        WebSearchTool.NAME -> {
             val query = call.arguments.truthyString("query") ?: return call.name
             stringResource(R.string.tool_title_searched_for, query)
         }
@@ -574,7 +574,7 @@ private fun ToolHeader(call: ToolCall, isError: Boolean) {
  */
 @Composable
 private fun toolResultSummary(result: ToolResultMessage): String? = when (result.toolName) {
-    BraveWebSearchTool.NAME -> (result.details as? JsonObject).int("resultCount")?.let { count ->
+    WebSearchTool.NAME -> (result.details as? JsonObject).int("resultCount")?.let { count ->
         pluralStringResource(R.plurals.tool_summary_results, count, count)
     }
 

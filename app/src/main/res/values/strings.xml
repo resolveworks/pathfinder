@@ -30,6 +30,7 @@
     <string name="search_providers_title">Search</string>
     <string name="search_providers_hint">Manage web search API keys</string>
     <string name="search_provider_search_hint">Search providers</string>
+    <string name="search_provider_active">Set as the active search provider</string>
     <string name="error_search_credential_save">Could not store the search API key</string>
     <string name="error_search_status">Could not read the search provider status</string>
     <string name="provider_search_hint">Search providers</string>
