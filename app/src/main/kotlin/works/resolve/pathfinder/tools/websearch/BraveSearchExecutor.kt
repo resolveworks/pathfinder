@@ -2,7 +2,11 @@ package works.resolve.pathfinder.tools.websearch
 
 import java.net.URLEncoder
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.Request
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.lenientJson
@@ -21,21 +25,27 @@ class BraveSearchExecutor(
     override val missingKeyMessage: String =
         "Error: No Brave Search API key is configured."
 
-    override val parameters: List<SearchParam> = listOf(
-        SearchParam(
+    override val parameters: List<SearchParameter> = listOf(
+        SearchParameter(
             name = "freshness",
-            description = "Restrict results by age: pd (past day), pw (past week), " +
-                "pm (past month), or py (past year)",
-            enumValues = FRESHNESS_VALUES
+            schema = buildJsonObject {
+                put("type", "string")
+                put("enum", JsonArray(FRESHNESS_VALUES.map { JsonPrimitive(it) }))
+                put(
+                    "description",
+                    "Restrict results by age: pd (past day), pw (past week), " +
+                        "pm (past month), or py (past year)"
+                )
+            }
         )
     )
 
     override suspend fun search(
         query: String,
-        options: Map<String, String>,
+        arguments: JsonObject,
         apiKey: String
     ): List<SearchResult> {
-        val request = buildRequest(query, options["freshness"], apiKey)
+        val request = buildRequest(query, arguments.str("freshness"), apiKey)
 
         var response = transport.send(request)
         if (response.code == RATE_LIMIT_CODE) {

@@ -78,20 +78,18 @@ class WebSearchTool(
             )
         }
 
-        // Values for exactly the provider's declared optional parameters,
-        // in that provider's native naming; anything else is invalid state.
+        // The model never sees parameters the active provider has not
+        // declared; an argument beyond query and those names is invalid
+        // state and is never silently dropped.
         val declared = executor.parameters.mapTo(HashSet()) { it.name }
         arguments.keys.firstOrNull { it != "query" && it !in declared }?.let {
             throw IllegalArgumentException(
                 "web_search: unexpected argument '$it' for provider '${executor.providerId}'"
             )
         }
-        val options = executor.parameters.mapNotNull { param ->
-            arguments.str(param.name)?.let { param.name to it }
-        }
 
         val results = try {
-            executor.search(query, options.toMap(), apiKey)
+            executor.search(query, arguments, apiKey)
         } catch (e: SearchRequestException) {
             val reason =
                 truncateErrorText(trimJsWhitespace(e.body), MAX_PROVIDER_ERROR_BODY_CHARS)
@@ -150,18 +148,7 @@ class WebSearchTool(
                             put("description", "Search query")
                         }
                     )
-                    executor.parameters.forEach { param ->
-                        put(
-                            param.name,
-                            buildJsonObject {
-                                put("type", param.type)
-                                param.enumValues?.let { values ->
-                                    put("enum", JsonArray(values.map { JsonPrimitive(it) }))
-                                }
-                                put("description", param.description)
-                            }
-                        )
-                    }
+                    executor.parameters.forEach { param -> put(param.name, param.schema) }
                 }
             )
             put("required", JsonArray(listOf(JsonPrimitive("query"))))
