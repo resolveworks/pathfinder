@@ -1,0 +1,1 @@
+web_search results now render like web_fetch pages: each result is a titled markdown block with its source URL, so search rows collapse and expand in the transcript exactly like fetch rows.

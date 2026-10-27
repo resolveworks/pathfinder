@@ -1,0 +1,11 @@
+Pathfinder is a simple research agent: a chat app in which a language model searches the web and reads pages to answer your questions. It connects directly to the model providers you configure — no Pathfinder server in between.
+
+Bring your own accounts and API keys. Pathfinder supports a wide range of inference providers, like DeepSeek, Qwen, Kimi, Mistral, and Z.AI, OpenRouter, Groq, Together, and Hugging Face; Anthropic, OpenAI, and GitHub Copilot subscriptions also work. Models can be switched mid-conversation.
+
+The agent's tools are web_search (Brave Search API, your key) and web_fetch (renders the page and returns its readable content as markdown).
+
+Conversations are stored on-device as plain JSONL. Any turn can branch into a new line of conversation; sessions can be searched and exported.
+
+The chat runtime, a selective Kotlin port of pi's agent runtime, handles retries, compaction when a conversation outgrows the model's context window, and reasoning display with per-model thinking-level control.
+
+No analytics, crash reporting, or telemetry. Traffic goes only to the providers you configure, to Brave when search is set up, and to pages the agent fetches. Credentials are stored encrypted behind the Android Keystore and never leave the device except to authenticate with their provider.

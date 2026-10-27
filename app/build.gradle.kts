@@ -114,7 +114,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            // CI provides the keystore via env; without it (e.g. on the F-Droid
+            // build server) the APK is built unsigned.
+            if (System.getenv("PATHFINDER_KEYSTORE") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
