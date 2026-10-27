@@ -30,6 +30,7 @@ import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.webfetch.WebViewPageFetcher
 import works.resolve.pathfinder.tools.websearch.BraveSearchExecutor
 import works.resolve.pathfinder.tools.websearch.ExaSearchExecutor
+import works.resolve.pathfinder.tools.websearch.SearXNGSearchExecutor
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 import works.resolve.pathfinder.tools.websearch.SearchTransport
 import works.resolve.pathfinder.tools.websearch.SerperSearchExecutor
@@ -122,7 +123,8 @@ class PathfinderApplication : Application() {
                 BraveSearchExecutor(SearchTransport(okHttpClient)),
                 TavilySearchExecutor(SearchTransport(okHttpClient)),
                 SerperSearchExecutor(SearchTransport(okHttpClient)),
-                ExaSearchExecutor(SearchTransport(okHttpClient))
+                ExaSearchExecutor(SearchTransport(okHttpClient)),
+                SearXNGSearchExecutor(SearchTransport(okHttpClient))
             ),
             initialProviderId = runBlocking { searchProviderService.activeProviderId() },
             activeProviderId = { searchProviderService.activeProviderId() },

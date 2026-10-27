@@ -46,10 +46,11 @@ internal class SearchProviderController(
     fun authPrompts(providerId: String): List<AuthPrompt> = AUTH_PROMPTS[providerId].orEmpty()
 
     /**
-     * Stores a web-search provider's API key. Blank input, an unknown
-     * provider, or a storage failure surfaces a static, secret-free error
-     * and changes nothing. Only a confirmed non-blank save of the active
-     * provider enables web_search on the bound session for the next run.
+     * Stores a web-search provider's credential: an API key, or — for
+     * SearXNG — the instance URL. Blank input, an unknown provider, or a
+     * storage failure surfaces a static, secret-free error and changes
+     * nothing. Only a confirmed non-blank save of the active provider
+     * enables web_search on the bound session for the next run.
      */
     fun saveCredential(providerId: String, apiKeyInput: String) {
         scope.launch {
@@ -157,7 +158,7 @@ internal class SearchProviderController(
     private companion object {
         private val logger = LoggerFactory.getLogger(SearchProviderController::class.java)
 
-        /** Per-provider credential form (search providers offer one API key). */
+        /** Per-provider credential form (one field per provider: an API key, or SearXNG's instance URL). */
         private val AUTH_PROMPTS: Map<String, List<AuthPrompt>> = mapOf(
             SearchProviderService.BRAVE_PROVIDER_ID to listOf(
                 AuthPrompt("BRAVE_API_KEY", "Enter your Brave Search API key", secret = true)
@@ -170,6 +171,13 @@ internal class SearchProviderController(
             ),
             SearchProviderService.EXA_PROVIDER_ID to listOf(
                 AuthPrompt("EXA_API_KEY", "Enter your Exa API key", secret = true)
+            ),
+            SearchProviderService.SEARXNG_PROVIDER_ID to listOf(
+                AuthPrompt(
+                    "SEARXNG_INSTANCE_URL",
+                    "Enter your SearXNG instance URL",
+                    secret = false
+                )
             )
         )
     }

@@ -124,6 +124,11 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
                         configured = false
                     ),
                     ProviderOption(
+                        SearchProviderService.SEARXNG_PROVIDER_ID,
+                        "SearXNG",
+                        configured = false
+                    ),
+                    ProviderOption(
                         SearchProviderService.SERPER_PROVIDER_ID,
                         "Serper",
                         configured = false

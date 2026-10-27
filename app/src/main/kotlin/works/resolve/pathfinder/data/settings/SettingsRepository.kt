@@ -23,6 +23,7 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
         val SHOW_THINKING = booleanPreferencesKey("show_thinking")
         val CUSTOM_PROMPT = stringPreferencesKey("custom_prompt")
         val ACTIVE_SEARCH_PROVIDER_ID = stringPreferencesKey("active_search_provider_id")
+        val SEARXNG_INSTANCE_URL = stringPreferencesKey("searxng_instance_url")
 
         /** Raw pi settings JSON; owned by `SettingsManager`, not typed here. */
         val SETTINGS_JSON = stringPreferencesKey("settings_json")
@@ -37,7 +38,8 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
             showThinking = prefs[Keys.SHOW_THINKING] ?: false,
             customPrompt = prefs[Keys.CUSTOM_PROMPT] ?: "",
             activeSearchProviderId =
-                prefs[Keys.ACTIVE_SEARCH_PROVIDER_ID] ?: SearchProviderService.DEFAULT_PROVIDER_ID
+                prefs[Keys.ACTIVE_SEARCH_PROVIDER_ID] ?: SearchProviderService.DEFAULT_PROVIDER_ID,
+            searxngInstanceUrl = prefs[Keys.SEARXNG_INSTANCE_URL] ?: ""
         )
     }
 
@@ -53,6 +55,17 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
 
     suspend fun setActiveSearchProviderId(providerId: String) {
         dataStore.edit { it[Keys.ACTIVE_SEARCH_PROVIDER_ID] = providerId }
+    }
+
+    /** Null clears the setting back to unconfigured. */
+    suspend fun setSearxngInstanceUrl(url: String?) {
+        dataStore.edit { prefs ->
+            if (url == null) {
+                prefs.remove(Keys.SEARXNG_INSTANCE_URL)
+            } else {
+                prefs[Keys.SEARXNG_INSTANCE_URL] = url
+            }
+        }
     }
 
     suspend fun setShowThinking(showThinking: Boolean) {

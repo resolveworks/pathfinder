@@ -37,14 +37,15 @@ class SearchProviderServiceTest {
     private fun service() = SearchProviderService(settings(), InMemoryCredentialStore())
 
     @Test
-    fun `all four providers are listed`() {
+    fun `all five providers are listed`() {
         val providers = service().providers
         assertEquals(
             listOf(
                 SearchProvider(SearchProviderService.BRAVE_PROVIDER_ID, "Brave Search"),
                 SearchProvider(SearchProviderService.TAVILY_PROVIDER_ID, "Tavily"),
                 SearchProvider(SearchProviderService.SERPER_PROVIDER_ID, "Serper"),
-                SearchProvider(SearchProviderService.EXA_PROVIDER_ID, "Exa")
+                SearchProvider(SearchProviderService.EXA_PROVIDER_ID, "Exa"),
+                SearchProvider(SearchProviderService.SEARXNG_PROVIDER_ID, "SearXNG")
             ),
             providers
         )
@@ -93,5 +94,37 @@ class SearchProviderServiceTest {
         val service = service()
         service.remove("brave")
         assertFalse(service.isConfigured("brave"))
+    }
+
+    @Test
+    fun `searxng instance url lives in settings and is normalized`() = runBlocking<Unit> {
+        val settings = settings()
+        val store = InMemoryCredentialStore()
+        val service = SearchProviderService(settings, store)
+
+        assertFalse(service.isConfigured("searxng"))
+        assertNull(service.apiKey("searxng"))
+
+        service.saveApiKey("searxng", "https://searx.example.com/?q=legacy/")
+        assertTrue(service.isConfigured("searxng"))
+        assertEquals("https://searx.example.com", service.apiKey("searxng"))
+        assertEquals("https://searx.example.com", settings.currentSettings().searxngInstanceUrl)
+        assertNull(store.read("search_searxng"))
+
+        service.remove("searxng")
+        assertFalse(service.isConfigured("searxng"))
+        assertNull(service.apiKey("searxng"))
+    }
+
+    @Test
+    fun `searxng rejects invalid instance urls`() = runBlocking<Unit> {
+        val service = service()
+        assertFailsWith<IllegalArgumentException> {
+            service.saveApiKey("searxng", "not a url")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            service.saveApiKey("searxng", "ftp://searx.example.com")
+        }
+        assertFalse(service.isConfigured("searxng"))
     }
 }
