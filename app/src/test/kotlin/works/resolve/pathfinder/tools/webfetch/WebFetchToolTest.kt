@@ -43,7 +43,7 @@ class WebFetchToolTest {
         assertEquals("web_fetch", WebFetchTool.NAME)
         assertEquals("web_fetch", tool.definition.name)
         assertEquals(
-            "Fetch a webpage and return its main readable content as markdown.",
+            "Fetch a webpage or PDF and return its main readable content as markdown.",
             tool.definition.description
         )
         val params = tool.definition.parameters as JsonObject

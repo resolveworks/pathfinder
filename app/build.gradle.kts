@@ -181,6 +181,10 @@ dependencies {
     // The web_fetch tool renders pages in a hidden WebView with its own profile.
     implementation(libs.androidx.webkit)
 
+    // PDF text extraction for the web_fetch tool (isolated-process platform engine).
+    implementation(libs.androidx.pdf.core)
+    implementation(libs.androidx.pdf.document.service)
+
     implementation(libs.androidx.datastore.preferences)
 
     // HTTP + JSON for the native provider layer.

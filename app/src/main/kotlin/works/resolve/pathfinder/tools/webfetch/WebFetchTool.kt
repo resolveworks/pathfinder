@@ -42,7 +42,7 @@ class WebFetchTool(private val fetcher: PageFetcher) : AgentTool {
 
     override val definition: Tool = Tool(
         name = NAME,
-        description = "Fetch a webpage and return its main readable content as markdown.",
+        description = "Fetch a webpage or PDF and return its main readable content as markdown.",
         parameters = buildJsonObject {
             put("type", "object")
             put(

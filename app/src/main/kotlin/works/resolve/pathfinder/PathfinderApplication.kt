@@ -24,6 +24,8 @@ import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.NativeAgentFactory
+import works.resolve.pathfinder.tools.webfetch.PdfPageFetcher
+import works.resolve.pathfinder.tools.webfetch.RoutingPageFetcher
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.webfetch.WebViewPageFetcher
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
@@ -115,9 +117,14 @@ class PathfinderApplication : Application() {
         )
     }
 
-    /** Renders pages in a hidden WebView outside the default (user) WebView profile. */
+    /** Renders pages in a hidden WebView outside the default (user) WebView profile; PDFs go through androidx.pdf. */
     val webFetchTool: WebFetchTool by lazy {
-        WebFetchTool(WebViewPageFetcher(this))
+        WebFetchTool(
+            RoutingPageFetcher(
+                webViewFetcher = WebViewPageFetcher(this),
+                pdfFetcher = PdfPageFetcher(this, okHttpClient)
+            )
+        )
     }
 
     val settingsRepository: SettingsRepository by lazy {
