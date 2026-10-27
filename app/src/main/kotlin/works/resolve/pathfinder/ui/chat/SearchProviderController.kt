@@ -164,6 +164,12 @@ internal class SearchProviderController(
             ),
             SearchProviderService.TAVILY_PROVIDER_ID to listOf(
                 AuthPrompt("TAVILY_API_KEY", "Enter your Tavily API key", secret = true)
+            ),
+            SearchProviderService.SERPER_PROVIDER_ID to listOf(
+                AuthPrompt("SERPER_API_KEY", "Enter your Serper API key", secret = true)
+            ),
+            SearchProviderService.EXA_PROVIDER_ID to listOf(
+                AuthPrompt("EXA_API_KEY", "Enter your Exa API key", secret = true)
             )
         )
     }

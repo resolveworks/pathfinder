@@ -37,12 +37,14 @@ class SearchProviderServiceTest {
     private fun service() = SearchProviderService(settings(), InMemoryCredentialStore())
 
     @Test
-    fun `brave and tavily are listed as providers`() {
+    fun `all four providers are listed`() {
         val providers = service().providers
         assertEquals(
             listOf(
                 SearchProvider(SearchProviderService.BRAVE_PROVIDER_ID, "Brave Search"),
-                SearchProvider(SearchProviderService.TAVILY_PROVIDER_ID, "Tavily")
+                SearchProvider(SearchProviderService.TAVILY_PROVIDER_ID, "Tavily"),
+                SearchProvider(SearchProviderService.SERPER_PROVIDER_ID, "Serper"),
+                SearchProvider(SearchProviderService.EXA_PROVIDER_ID, "Exa")
             ),
             providers
         )

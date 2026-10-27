@@ -29,8 +29,10 @@ import works.resolve.pathfinder.tools.webfetch.RoutingPageFetcher
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.webfetch.WebViewPageFetcher
 import works.resolve.pathfinder.tools.websearch.BraveSearchExecutor
+import works.resolve.pathfinder.tools.websearch.ExaSearchExecutor
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 import works.resolve.pathfinder.tools.websearch.SearchTransport
+import works.resolve.pathfinder.tools.websearch.SerperSearchExecutor
 import works.resolve.pathfinder.tools.websearch.TavilySearchExecutor
 import works.resolve.pathfinder.tools.websearch.WebSearchTool
 import works.resolve.pathfinder.ui.chat.ChatViewModel
@@ -118,7 +120,9 @@ class PathfinderApplication : Application() {
         WebSearchTool(
             executors = listOf(
                 BraveSearchExecutor(SearchTransport(okHttpClient)),
-                TavilySearchExecutor(SearchTransport(okHttpClient))
+                TavilySearchExecutor(SearchTransport(okHttpClient)),
+                SerperSearchExecutor(SearchTransport(okHttpClient)),
+                ExaSearchExecutor(SearchTransport(okHttpClient))
             ),
             initialProviderId = runBlocking { searchProviderService.activeProviderId() },
             activeProviderId = { searchProviderService.activeProviderId() },

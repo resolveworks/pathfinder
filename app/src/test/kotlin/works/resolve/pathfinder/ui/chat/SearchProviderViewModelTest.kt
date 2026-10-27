@@ -119,6 +119,16 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
                         configured = false
                     ),
                     ProviderOption(
+                        SearchProviderService.EXA_PROVIDER_ID,
+                        "Exa",
+                        configured = false
+                    ),
+                    ProviderOption(
+                        SearchProviderService.SERPER_PROVIDER_ID,
+                        "Serper",
+                        configured = false
+                    ),
+                    ProviderOption(
                         SearchProviderService.TAVILY_PROVIDER_ID,
                         "Tavily",
                         configured = false
