@@ -11,6 +11,7 @@ import java.io.IOException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -49,7 +50,9 @@ class PdfPageFetcher(private val context: Context, private val client: OkHttpCli
                     httpStatus = it.code
                 )
             } finally {
-                withContext(Dispatchers.IO) { file.delete() }
+                // NonCancellable: an aborted fetch must still drop its temp
+                // file — a plain withContext would throw before deleting.
+                withContext(NonCancellable) { file.delete() }
             }
         }
     }
