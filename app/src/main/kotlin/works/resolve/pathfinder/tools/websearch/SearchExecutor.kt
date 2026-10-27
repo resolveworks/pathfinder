@@ -1,5 +1,19 @@
 package works.resolve.pathfinder.tools.websearch
 
+import kotlinx.serialization.json.JsonObject
+
+/**
+ * One optional web_search tool parameter, in the declaring provider's
+ * native vocabulary: names, values, and semantics are the provider's own
+ * and are never translated across providers.
+ */
+data class SearchParam(
+    val name: String,
+    val description: String,
+    val type: String = "string",
+    val enumValues: List<String>? = null
+)
+
 /**
  * A provider's answer to one search, already stripped to the fields the
  * web_search result blocks render.
@@ -24,15 +38,25 @@ interface SearchExecutor {
     /** Display name used in the tool description shown to the model. */
     val providerName: String
 
-    /** Whether the provider honors the optional freshness parameter. */
-    val supportsFreshness: Boolean
-
     /** Stable missing-key message text for this provider. */
     val missingKeyMessage: String
 
     /**
+     * The provider's own optional parameters, declared to the model as-is;
+     * the dispatcher's schema is `query` plus exactly these.
+     */
+    val parameters: List<SearchParam>
+
+    /**
+     * [options] carries the values of exactly the declared [parameters]
+     * that the call included, keyed by parameter name.
+     *
      * @throws SearchRequestException on a non-2xx answer; network failures
      * propagate as OkHttp's [java.io.IOException].
      */
-    suspend fun search(query: String, freshness: String?, apiKey: String): List<SearchResult>
+    suspend fun search(
+        query: String,
+        options: Map<String, String>,
+        apiKey: String
+    ): List<SearchResult>
 }

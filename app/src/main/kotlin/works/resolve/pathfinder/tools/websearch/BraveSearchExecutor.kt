@@ -18,16 +18,24 @@ class BraveSearchExecutor(
 
     override val providerId: String = SearchProviderService.BRAVE_PROVIDER_ID
     override val providerName: String = "Brave"
-    override val supportsFreshness: Boolean = true
     override val missingKeyMessage: String =
         "Error: No Brave Search API key is configured."
 
+    override val parameters: List<SearchParam> = listOf(
+        SearchParam(
+            name = "freshness",
+            description = "Restrict results by age: pd (past day), pw (past week), " +
+                "pm (past month), or py (past year)",
+            enumValues = FRESHNESS_VALUES
+        )
+    )
+
     override suspend fun search(
         query: String,
-        freshness: String?,
+        options: Map<String, String>,
         apiKey: String
     ): List<SearchResult> {
-        val request = buildRequest(query, freshness, apiKey)
+        val request = buildRequest(query, options["freshness"], apiKey)
 
         var response = transport.send(request)
         if (response.code == RATE_LIMIT_CODE) {
@@ -69,6 +77,8 @@ class BraveSearchExecutor(
     }
 
     companion object {
+        val FRESHNESS_VALUES: List<String> = listOf("pd", "pw", "pm", "py")
+
         const val DEFAULT_BASE_URL = "https://api.search.brave.com"
 
         /** Top results per search; kept small since the agent can web_fetch any result for depth. */

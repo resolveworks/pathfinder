@@ -140,7 +140,7 @@ internal class SearchProviderController(
      * Aligns one session's tool set with the active search provider:
      * web_search is appended (last) only while that provider is configured,
      * and its declared schema is rebuilt from the active provider's
-     * capabilities; the order and activation of every other tool is
+     * native parameters; the order and activation of every other tool is
      * preserved exactly. Safe mid-stream: the agent snapshots its tool list
      * per run, so an in-flight run keeps its own snapshot and the change
      * lands on the next run. No `active_tools_change` session entry is

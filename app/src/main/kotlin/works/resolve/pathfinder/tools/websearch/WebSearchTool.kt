@@ -19,7 +19,7 @@ import works.resolve.pathfinder.ai.utils.truncateErrorText
  * provider's [SearchExecutor]. Pathfinder-owned app tooling (pi has no
  * upstream web search): the parameter surface, result payload, and wording
  * are app decisions. The declared schema reflects the active executor's
- * capabilities — refresh it at apply time via [applySchema] and per call
+ * native parameters — refreshed at apply time via [applySchema] and per call
  * when resolving, so a mid-session provider switch takes effect on the
  * next tool call without rebuilding the session.
  */
@@ -65,7 +65,6 @@ class WebSearchTool(
     ): AgentToolResult {
         val query = arguments.str("query")
             ?: throw IllegalArgumentException("web_search: missing required argument 'query'")
-        val freshness = arguments.str("freshness")
 
         val executor = executorFor(activeProviderId()).also {
             currentDefinition = definitionFor(it)
@@ -78,14 +77,21 @@ class WebSearchTool(
                 details = EMPTY_DETAILS
             )
         }
-        if (freshness != null && !executor.supportsFreshness) {
+
+        // Values for exactly the provider's declared optional parameters,
+        // in that provider's native naming; anything else is invalid state.
+        val declared = executor.parameters.mapTo(HashSet()) { it.name }
+        arguments.keys.firstOrNull { it != "query" && it !in declared }?.let {
             throw IllegalArgumentException(
-                "web_search: provider '${executor.providerId}' does not support freshness"
+                "web_search: unexpected argument '$it' for provider '${executor.providerId}'"
             )
+        }
+        val options = executor.parameters.mapNotNull { param ->
+            arguments.str(param.name)?.let { param.name to it }
         }
 
         val results = try {
-            executor.search(query, freshness, apiKey)
+            executor.search(query, options.toMap(), apiKey)
         } catch (e: SearchRequestException) {
             val reason =
                 truncateErrorText(trimJsWhitespace(e.body), MAX_PROVIDER_ERROR_BODY_CHARS)
@@ -144,20 +150,15 @@ class WebSearchTool(
                             put("description", "Search query")
                         }
                     )
-                    if (executor.supportsFreshness) {
+                    executor.parameters.forEach { param ->
                         put(
-                            "freshness",
+                            param.name,
                             buildJsonObject {
-                                put("type", "string")
-                                put(
-                                    "enum",
-                                    JsonArray(FRESHNESS_VALUES.map { JsonPrimitive(it) })
-                                )
-                                put(
-                                    "description",
-                                    "Restrict results by age: pd (past day), pw (past week), " +
-                                        "pm (past month), or py (past year)"
-                                )
+                                put("type", param.type)
+                                param.enumValues?.let { values ->
+                                    put("enum", JsonArray(values.map { JsonPrimitive(it) }))
+                                }
+                                put("description", param.description)
                             }
                         )
                     }
@@ -169,9 +170,6 @@ class WebSearchTool(
 
     companion object {
         const val NAME = "web_search"
-
-        /** Freshness vocabulary the freshness capability declares to the model. */
-        val FRESHNESS_VALUES: List<String> = listOf("pd", "pw", "pm", "py")
 
         private val EMPTY_DETAILS: JsonObject = JsonObject(emptyMap())
     }

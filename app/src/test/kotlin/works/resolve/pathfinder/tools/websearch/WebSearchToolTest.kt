@@ -98,7 +98,7 @@ class WebSearchToolTest {
         assertTrue(
             invalid.message!!.contains("must be equal to one of the allowed values")
         )
-        for (f in WebSearchTool.FRESHNESS_VALUES) {
+        for (f in BraveSearchExecutor.FRESHNESS_VALUES) {
             tool.prepare(args(query = "q", freshness = f))
         }
         tool.prepare(args(query = "q"))
