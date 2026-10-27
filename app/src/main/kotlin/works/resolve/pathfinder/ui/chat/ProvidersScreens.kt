@@ -185,8 +185,9 @@ private fun ProviderListContent(
 
 /**
  * Credential form for one provider (pi's auth dialog): one field per catalog
- * prompt — the first is the secret API key, later prompts fill env slots.
- * Inputs live in plain Compose memory only: never saved across process
+ * prompt — the first is the credential itself, masked when its prompt is
+ * secret (an API key) and plain otherwise (e.g. SearXNG's instance URL);
+ * later prompts fill env slots. Inputs live in plain Compose memory only: never saved across process
  * death, never logged. The form is popped (and its inputs disposed) only
  * after the save is confirmed — the provider flipping to configured in the
  * surrounding entry — so a failed save retains them for correction.
@@ -207,15 +208,15 @@ internal fun ProviderAuthContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        prompts.forEach { prompt ->
-            val isSecret = prompt.secret
+        prompts.forEachIndexed { index, prompt ->
+            val isCredential = index == 0
             OutlinedTextField(
-                value = if (isSecret) apiKeyInput else envInputs[prompt.envKey].orEmpty(),
+                value = if (isCredential) apiKeyInput else envInputs[prompt.envKey].orEmpty(),
                 onValueChange = {
-                    if (isSecret) apiKeyInput = it else envInputs[prompt.envKey] = it
+                    if (isCredential) apiKeyInput = it else envInputs[prompt.envKey] = it
                 },
                 label = { Text(prompt.message) },
-                visualTransformation = if (isSecret) {
+                visualTransformation = if (prompt.secret) {
                     PasswordVisualTransformation()
                 } else {
                     VisualTransformation.None

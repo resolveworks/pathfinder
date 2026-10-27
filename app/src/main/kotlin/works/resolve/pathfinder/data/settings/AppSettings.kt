@@ -10,5 +10,7 @@ data class AppSettings(
     val activeSessionId: String? = null,
     val showThinking: Boolean = false,
     val customPrompt: String = "",
-    val activeSearchProviderId: String = SearchProviderService.DEFAULT_PROVIDER_ID
+    val activeSearchProviderId: String = SearchProviderService.DEFAULT_PROVIDER_ID,
+    /** "" means no SearXNG instance is configured. */
+    val searxngInstanceUrl: String = ""
 )

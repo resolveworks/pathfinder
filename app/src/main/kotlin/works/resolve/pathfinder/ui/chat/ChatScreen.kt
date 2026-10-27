@@ -559,11 +559,12 @@ fun ChatScreen(
                                 val option = uiState.searchProviderOptions
                                     .firstOrNull { it.id == key.providerId }
                                 if (option != null) {
-                                    // Search providers offer only API-key
-                                    // auth: the page is the credential form
-                                    // while unconfigured and the stored-key
-                                    // state once saved (env inputs are not
-                                    // forwarded).
+                                    // Search providers offer a single
+                                    // credential form — an API key, or
+                                    // SearXNG's instance URL — so the page is
+                                    // that form while unconfigured and the
+                                    // stored state once saved (env inputs are
+                                    // not forwarded).
                                     if (option.configured) {
                                         StoredProviderContent(provider = option)
                                     } else {
