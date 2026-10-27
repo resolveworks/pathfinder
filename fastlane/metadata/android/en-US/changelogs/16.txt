@@ -1,0 +1,1 @@
+web_search now supports multiple providers — Brave, Tavily, Serper, Exa, and keyless SearXNG using your own instance URL — selectable in settings, and web_fetch can read PDF pages.
