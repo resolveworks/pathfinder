@@ -11,7 +11,7 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.truthyString
 
-/** Exa search executor (open-webui's exa.py wire shape, minus its unlimited text). */
+/** Exa search executor (open-webui's exa.py wire shape). */
 class ExaSearchExecutor(
     private val transport: SearchTransport,
     private val baseUrl: String = DEFAULT_BASE_URL
@@ -35,15 +35,11 @@ class ExaSearchExecutor(
                 buildJsonObject {
                     put("query", query)
                     put("numResults", RESULT_COUNT)
+                    put("type", "auto")
                     put(
                         "contents",
                         buildJsonObject {
-                            put(
-                                "text",
-                                buildJsonObject {
-                                    put("maxCharacters", MAX_SNIPPET_CHARACTERS)
-                                }
-                            )
+                            put("text", true)
                         }
                     )
                 }.toString().toRequestBody("application/json".toMediaType())
@@ -73,12 +69,5 @@ class ExaSearchExecutor(
 
         /** Top results per search; kept small since the agent can web_fetch any result for depth. */
         private const val RESULT_COUNT = 5
-
-        /**
-         * Exa returns no text at all unless contents.text is requested, and its
-         * default is the full page. We cap the snippet to keep tool results
-         * small on a phone; deeper reading goes through web_fetch.
-         */
-        private const val MAX_SNIPPET_CHARACTERS = 1000
     }
 }
