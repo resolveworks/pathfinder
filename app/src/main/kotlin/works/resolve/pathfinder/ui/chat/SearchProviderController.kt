@@ -161,6 +161,9 @@ internal class SearchProviderController(
         private val AUTH_PROMPTS: Map<String, List<AuthPrompt>> = mapOf(
             SearchProviderService.BRAVE_PROVIDER_ID to listOf(
                 AuthPrompt("BRAVE_API_KEY", "Enter your Brave Search API key", secret = true)
+            ),
+            SearchProviderService.TAVILY_PROVIDER_ID to listOf(
+                AuthPrompt("TAVILY_API_KEY", "Enter your Tavily API key", secret = true)
             )
         )
     }
