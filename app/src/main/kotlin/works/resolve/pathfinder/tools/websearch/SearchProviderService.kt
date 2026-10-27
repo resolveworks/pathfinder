@@ -13,7 +13,9 @@ class SearchProviderService(
 
     val providers: List<SearchProvider> = listOf(
         SearchProvider(BRAVE_PROVIDER_ID, "Brave Search"),
-        SearchProvider(TAVILY_PROVIDER_ID, "Tavily")
+        SearchProvider(TAVILY_PROVIDER_ID, "Tavily"),
+        SearchProvider(SERPER_PROVIDER_ID, "Serper"),
+        SearchProvider(EXA_PROVIDER_ID, "Exa")
     )
 
     suspend fun isConfigured(providerId: String): Boolean = apiKey(providerId) != null
@@ -63,6 +65,8 @@ class SearchProviderService(
     companion object {
         const val BRAVE_PROVIDER_ID = "brave"
         const val TAVILY_PROVIDER_ID = "tavily"
+        const val SERPER_PROVIDER_ID = "serper"
+        const val EXA_PROVIDER_ID = "exa"
 
         const val DEFAULT_PROVIDER_ID = BRAVE_PROVIDER_ID
 
