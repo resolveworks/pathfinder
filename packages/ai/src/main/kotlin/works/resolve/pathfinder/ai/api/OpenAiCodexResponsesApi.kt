@@ -77,6 +77,7 @@ import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.ai.utils.truthyString
 import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.ai.utils.validateRetryDelayMs
+import works.resolve.pathfinder.ai.utils.withCauseDetail
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
@@ -847,7 +848,7 @@ internal fun formatCodexError(error: Exception): String = when (error) {
     is CodexApiException -> error.message ?: "Codex error"
     is ProviderHttpException -> formatProviderError(normalizeProviderError(error))
     is ProviderStreamException -> error.message ?: "Codex stream error"
-    else -> error.message ?: error::class.simpleName ?: "Unknown error"
+    else -> withCauseDetail(error)
 }
 
 internal fun buildCodexRequestBody(

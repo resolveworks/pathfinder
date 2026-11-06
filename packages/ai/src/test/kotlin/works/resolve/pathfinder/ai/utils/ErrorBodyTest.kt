@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.utils
 
+import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -7,6 +8,7 @@ import works.resolve.pathfinder.ai.api.formatCodexError
 import works.resolve.pathfinder.ai.api.formatResponsesProviderError
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
+import works.resolve.pathfinder.ai.transport.NetworkException
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 
 class ErrorBodyTest {
@@ -153,6 +155,80 @@ class ErrorBodyTest {
     //     val norm = normalizeProviderError(httpError(500, "upstream exploded"))
     //     assertEquals(true, norm.messageCarriesBody)
     // }
+
+    @Test
+    fun `withCauseDetail appends the deepest cause`() {
+        val socket = IOException("connect ECONNREFUSED 127.0.0.1:8080")
+        val fetch = IOException("fetch failed", socket)
+        val error = IOException("Connection error.", fetch)
+
+        assertEquals(
+            "Connection error.: connect ECONNREFUSED 127.0.0.1:8080",
+            withCauseDetail(error)
+        )
+    }
+
+    @Test
+    fun `withCauseDetail leaves a cause-less error unchanged`() {
+        assertEquals("Connection error.", withCauseDetail(IOException("Connection error.")))
+    }
+
+    @Test
+    fun `withCauseDetail falls back to the cause class name for a blank message`() {
+        assertEquals(
+            "Connection error.: IOException",
+            withCauseDetail(IOException("Connection error.", IOException("  ")))
+        )
+    }
+
+    @Test
+    fun `withCauseDetail does not duplicate an already present detail`() {
+        assertEquals(
+            "Connection error.: connection reset",
+            withCauseDetail(
+                IOException("Connection error.: connection reset", IOException("connection reset"))
+            )
+        )
+    }
+
+    @Test
+    fun `http status and body take precedence over cause detail`() {
+        val error = httpError(403, """{"error":"blocked by gateway WAF"}""")
+            .apply { initCause(IOException("connection reset")) }
+
+        val formatted = formatResponsesProviderError(error, "OpenAI API error")
+
+        assertEquals(
+            """OpenAI API error (403): {"error":"blocked by gateway WAF"}""",
+            formatted
+        )
+        assertTrue("connection reset" !in formatted)
+    }
+
+    @Test
+    fun `adapters append cause detail to a connection failure`() {
+        assertEquals(
+            "fetch failed: connection reset",
+            formatCodexError(NetworkException(IOException("connection reset"), "fetch failed"))
+        )
+        assertEquals(
+            "fetch failed: reset",
+            formatResponsesProviderError(
+                NetworkException(IOException("reset"), "fetch failed"),
+                "OpenAI API error"
+            )
+        )
+        val api = works.resolve.pathfinder.ai.api.MistralConversationsApi(
+            FakeTransport(),
+            clock = FakeClock(0L)
+        )
+        assertEquals(
+            "terminated: connection reset",
+            api.formatMistralError(
+                NetworkException(IOException("connection reset"), "terminated")
+            )
+        )
+    }
 
     @Test
     fun `openai responses golden format`() {

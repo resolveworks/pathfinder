@@ -71,6 +71,7 @@ import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.ai.utils.truncateErrorText
 import works.resolve.pathfinder.ai.utils.truthyString
+import works.resolve.pathfinder.ai.utils.withCauseDetail
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 typealias MistralReasoningEffort = String // "none" | "low" | "medium" | "high" | "max"
@@ -458,8 +459,9 @@ class MistralConversationsApi(
         }
 
         is NetworkException ->
-            // The cause carries the platform failure (e.g. "timeout").
-            error.cause?.message ?: error.message ?: "Network request failed"
+            // Keeps the transport's "fetch failed"/"terminated" prefix and
+            // appends the platform failure from the cause chain (e.g. "timeout").
+            withCauseDetail(error)
 
         else -> error.message ?: error::class.simpleName ?: "Unknown error"
     }

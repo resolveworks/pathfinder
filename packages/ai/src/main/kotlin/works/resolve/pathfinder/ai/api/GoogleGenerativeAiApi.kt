@@ -61,6 +61,7 @@ import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.truthyString
+import works.resolve.pathfinder.ai.utils.withCauseDetail
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
@@ -336,7 +337,7 @@ internal object GoogleStreamEngine {
         // pi's safeJsonStringify fallback for non-Error throws is moot in Kotlin.
         is ProviderStreamException -> error.message ?: "Provider stream error"
 
-        else -> error.message ?: error::class.simpleName ?: "Unknown error"
+        else -> withCauseDetail(error)
     }
 
     /**

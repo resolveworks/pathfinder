@@ -60,6 +60,38 @@ fun formatProviderError(norm: NormalizedProviderError, prefix: String? = null): 
     }
 }
 
+private const val MAX_CAUSE_DEPTH = 5
+
+/**
+ * Connection-level failures carry no status or body, and SDKs replace the
+ * reason with a generic message (`"Connection error."`). The real reason sits
+ * in the [Throwable.cause] chain, often two levels deep (a transport's
+ * `"fetch failed"` wraps `connect ECONNREFUSED ...`). Append the deepest cause
+ * so callers that surface only the message keep the reason.
+ *
+ * JS's errno `code` suffix has no Kotlin counterpart: JVM exceptions expose no
+ * such property, so none is appended.
+ */
+fun withCauseDetail(error: Throwable): String {
+    var deepest: Throwable? = null
+    var current = error.cause
+    var depth = 0
+    while (depth < MAX_CAUSE_DEPTH && current != null) {
+        deepest = current
+        current = current.cause
+        depth++
+    }
+    val message = error.message ?: error::class.simpleName ?: "Unknown error"
+    if (deepest == null) return message
+    val detail = trimJsWhitespace(
+        deepest.message?.takeIf { trimJsWhitespace(it).isNotEmpty() }
+            ?: deepest::class.simpleName
+            ?: ""
+    )
+    if (detail.isEmpty() || message.contains(detail)) return message
+    return if (message.isNotEmpty()) "$message: $detail" else detail
+}
+
 fun truncateErrorText(text: String, maxChars: Int): String {
     if (text.length <= maxChars) return text
     return text.take(maxChars) + "... [truncated ${text.length - maxChars} chars]"
