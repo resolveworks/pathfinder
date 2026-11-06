@@ -37,18 +37,21 @@ class SecretRedactionTest {
         // These classes share one optionsToString() implementation; the exact
         // strings lock its format.
         assertEquals(
-            "StreamOptions(apiKey=<redacted>, sessionId=s1, temperature=0.5, maxTokens=null, " +
+            "StreamOptions(apiKey=<redacted>, sessionId=s1, disableContinuation=null, " +
+                "temperature=0.5, maxTokens=null, " +
                 "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, telemetry=false)",
             StreamOptions(apiKey = secret, sessionId = "s1", temperature = 0.5).toString()
         )
         assertEquals(
-            "StreamOptions(apiKey=null, sessionId=null, temperature=null, maxTokens=null, " +
+            "StreamOptions(apiKey=null, sessionId=null, disableContinuation=null, " +
+                "temperature=null, maxTokens=null, " +
                 "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, telemetry=false)",
             StreamOptions().toString()
         )
 
         assertEquals(
-            "SimpleStreamOptions(apiKey=<redacted>, sessionId=s1, temperature=0.7, maxTokens=42, " +
+            "SimpleStreamOptions(apiKey=<redacted>, sessionId=s1, disableContinuation=null, " +
+                "temperature=0.7, maxTokens=42, " +
                 "reasoning=MINIMAL, toolChoice=Auto, cacheRetention=null, " +
                 "timeoutMs=null, maxRetries=1, " +
                 "maxRetryDelayMs=60000, env=[PI_ENV_A], headers=[Authorization], " +
@@ -69,7 +72,8 @@ class SecretRedactionTest {
             ).toString()
         )
         assertEquals(
-            "SimpleStreamOptions(apiKey=null, sessionId=null, temperature=null, maxTokens=null, " +
+            "SimpleStreamOptions(apiKey=null, sessionId=null, disableContinuation=null, " +
+                "temperature=null, maxTokens=null, " +
                 "reasoning=null, toolChoice=null, cacheRetention=null, " +
                 "timeoutMs=null, maxRetries=0, " +
                 "maxRetryDelayMs=60000, env=[], headers=[], onPayload=false, onResponse=false, " +

@@ -482,6 +482,12 @@ data class StreamOptions(
     val apiKey: String? = null,
     /** Session identifier usable for affinity/sticky routing. */
     val sessionId: String? = null,
+    /**
+     * Do not use or record server-side continuation state for this request
+     * (for example Anthropic message threads). Providers that do not keep
+     * continuation state ignore it.
+     */
+    val disableContinuation: Boolean? = null,
     /** How the request identifies the calling app: `User-Agent` and provider attribution headers. */
     val identity: ClientIdentity? = null,
     val temperature: Double? = null,
@@ -500,6 +506,7 @@ data class StreamOptions(
         "StreamOptions",
         "apiKey" to redactedSecret(apiKey),
         "sessionId" to sessionId,
+        "disableContinuation" to disableContinuation,
         "temperature" to temperature,
         "maxTokens" to maxTokens,
         "timeoutMs" to timeoutMs,
@@ -517,6 +524,12 @@ data class StreamOptions(
 data class SimpleStreamOptions(
     val apiKey: String? = null,
     val sessionId: String? = null,
+    /**
+     * Do not use or record server-side continuation state for this request
+     * (for example Anthropic message threads). Providers that do not keep
+     * continuation state ignore it.
+     */
+    val disableContinuation: Boolean? = null,
     /** How the request identifies the calling app: `User-Agent` and provider attribution headers. */
     val identity: ClientIdentity? = null,
     val temperature: Double? = null,
@@ -577,6 +590,7 @@ data class SimpleStreamOptions(
         "SimpleStreamOptions",
         "apiKey" to redactedSecret(apiKey),
         "sessionId" to sessionId,
+        "disableContinuation" to disableContinuation,
         "temperature" to temperature,
         "maxTokens" to maxTokens,
         "reasoning" to reasoning,
@@ -809,6 +823,12 @@ data class AnthropicMessagesCompat(
     val supportsMidConvoSystemMessages: Boolean = false,
     /** Whether the exact model accepts mid-conversation `tool_addition` blocks with inline tool definitions (`inline-tools-2026-09-15`) and `tool_removal` blocks. Requires [supportsMidConvoSystemMessages]. Default: false. */
     val supportsMidConvoToolChanges: Boolean = false,
+    /**
+     * Whether the endpoint supports Anthropic message threads. Default: true
+     * for provider `anthropic` on api.anthropic.com, false otherwise; the
+     * generated catalog resolves that default.
+     */
+    val supportsMessageThreads: Boolean = false,
     /**
      * Models Anthropic accepts in `fallbacks` for server-side refusal fallback,
      * with local pricing metadata for returned fallback responses. When empty,

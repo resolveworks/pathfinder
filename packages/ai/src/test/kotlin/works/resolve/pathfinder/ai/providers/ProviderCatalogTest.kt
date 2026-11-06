@@ -700,7 +700,8 @@ class ProviderCatalogTest {
             works.resolve.pathfinder.ai.AnthropicMessagesCompat(
                 supportsTemperature = false,
                 supportsStrictTools = true,
-                forceAdaptiveThinking = true
+                forceAdaptiveThinking = true,
+                supportsMessageThreads = true
             ),
             catalog.getModel("anthropic", "claude-opus-4-7")!!.anthropicCompat
         )
