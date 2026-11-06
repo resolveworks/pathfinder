@@ -53,6 +53,7 @@ import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
+import works.resolve.pathfinder.ai.api.OpenAICodexWebSocketSessions
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
@@ -329,6 +330,7 @@ internal class ChatHarness(
         credentials = credentials,
         catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
         transport = transport,
+        webSocketSessions = OpenAICodexWebSocketSessions(),
         settingsManager = settingsManager,
         authRegistry = authRegistry
     )

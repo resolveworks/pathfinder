@@ -27,6 +27,7 @@ import works.resolve.pathfinder.ai.ThinkingFormat
 import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.api.AzureOpenAiCompletionsChatApi
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
+import works.resolve.pathfinder.ai.api.OpenAICodexWebSocketSessions
 import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.ProviderAuth as RuntimeProviderAuth
@@ -143,6 +144,7 @@ class CatalogProvider(
         auth: RuntimeProviderAuth,
         retry: ProviderRetry = ProviderRetry(),
         webSocketTransport: WebSocketStreamingTransport? = null,
+        webSocketSessions: OpenAICodexWebSocketSessions? = null,
         filterModels: ((List<Model>, Credential?) -> List<Model>)? =
             { available, credential -> filterCatalogModels(this, credential) }
     ): Provider = Provider(
@@ -152,7 +154,13 @@ class CatalogProvider(
         auth = auth,
         models = models,
         apis = apis.mapNotNull { apiId ->
-            ChatApiRegistry.create(apiId, transport, retry, webSocketTransport)?.let { api ->
+            ChatApiRegistry.create(
+                apiId,
+                transport,
+                retry,
+                webSocketTransport,
+                webSocketSessions
+            )?.let { api ->
                 val wrapped = when {
                     id == "azure" && apiId == ChatApiRegistry.OPENAI_COMPLETIONS ->
                         AzureOpenAiCompletionsChatApi(api)

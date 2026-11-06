@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
+import works.resolve.pathfinder.ai.api.OpenAICodexWebSocketSessions
 import works.resolve.pathfinder.ai.auth.CatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.CredentialStore
 import works.resolve.pathfinder.ai.auth.ProductionCatalogAuthRegistry
@@ -79,6 +80,16 @@ class PathfinderApplication : Application() {
      */
     val webSocketTransport: OkHttpWebSocketTransport by lazy {
         OkHttpWebSocketTransport(client = okHttpClient)
+    }
+
+    /**
+     * One Codex WebSocket pool for the app process. Every runtime provider
+     * stack receives this instance, matching pi's module-global session cache
+     * so a restored or re-created session keeps its pooled connections and
+     * `previous_response_id` continuation.
+     */
+    val codexWebSocketSessions: OpenAICodexWebSocketSessions by lazy {
+        OpenAICodexWebSocketSessions()
     }
 
     val credentials: CredentialStore by lazy {
@@ -177,6 +188,7 @@ class PathfinderApplication : Application() {
             catalog = modelCatalog,
             transport = transport,
             webSocketTransport = webSocketTransport,
+            webSocketSessions = codexWebSocketSessions,
             settingsManager = settingsManager,
             authRegistry = authRegistry,
             tools = listOf(webSearchTool, webFetchTool),

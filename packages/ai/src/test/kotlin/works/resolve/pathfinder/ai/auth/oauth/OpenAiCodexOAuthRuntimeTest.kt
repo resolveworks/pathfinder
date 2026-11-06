@@ -17,6 +17,7 @@ import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.api.OpenAICodexWebSocketSessions
 import works.resolve.pathfinder.ai.auth.CatalogAuthProviderRef
 import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
 import works.resolve.pathfinder.ai.auth.InMemoryCredentialStore
@@ -102,7 +103,8 @@ class OpenAiCodexOAuthRuntimeTest {
                         mapOf("openai-codex" to OpenAiCodexOAuthAuth(NoNetwork))
                     )
                 ),
-                webSocketTransport = NoWebSocketTransport
+                webSocketTransport = NoWebSocketTransport,
+                webSocketSessions = OpenAICodexWebSocketSessions()
             )
             val models = Models(listOf(runtimeProvider), credentials = credentials)
 
