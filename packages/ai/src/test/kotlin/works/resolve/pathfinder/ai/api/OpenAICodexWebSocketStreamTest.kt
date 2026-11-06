@@ -9,6 +9,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.toList
@@ -660,6 +661,35 @@ class OpenAICodexWebSocketStreamTest {
     }
 
     @Test
+    fun `concurrent fallback recording and reset leave consistent state`() = runTest {
+        val sessions = cleanSlate()
+        val start = CompletableDeferred<Unit>()
+        val jobs = (0 until 64).map { worker ->
+            launch(Dispatchers.Default) {
+                start.await()
+                repeat(50) {
+                    if (worker % 2 == 0) {
+                        sessions.recordWebSocketFailure("race", IOException("boom"))
+                    } else {
+                        sessions.resetOpenAICodexWebSocketDebugStats("race")
+                    }
+                }
+            }
+        }
+        start.complete(Unit)
+        jobs.forEach { it.join() }
+
+        val stats = sessions.getOpenAICodexWebSocketDebugStats("race")
+        val active = sessions.isSseFallbackActive("race")
+        if (stats == null) {
+            assertFalse(active)
+        } else {
+            assertTrue(active)
+            assertEquals(true, stats.websocketFallbackActive)
+        }
+    }
+
+    @Test
     fun `previous_response_not_found is retried once with the full body`() = runTest {
         val sessions = cleanSlate()
         val ws = FakeWebSocketTransport()
@@ -740,6 +770,38 @@ class OpenAICodexWebSocketStreamTest {
         assertEquals(1, stats.deltaRequests)
         assertEquals(0, stats.websocketFailures)
         assertEquals(0, stats.sseFallbacks)
+    }
+
+    @Test
+    fun `close sessions closes pooled sockets before returning`() = runTest {
+        val sessions = cleanSlate()
+        val ws = FakeWebSocketTransport()
+        val http = FakeTransport()
+        val api = api(http, ws, sessions)
+        ws.onConnect = { connection ->
+            connection.onSend = { _ -> connection.serverAll(completedOnly("resp_1")) }
+        }
+        val context = normalizeContext(
+            Context(
+                systemPrompt = "You are a helpful assistant.",
+                messages = listOf(UserMessage.ofText("Say hello"))
+            )
+        )
+        api.stream(
+            model,
+            context,
+            OpenAICodexResponsesOptions(
+                apiKey = jwt("acc_test"),
+                sessionId = "close-session",
+                transport = Transport.WEBSOCKET_CACHED
+            )
+        ).toList()
+        val connection = ws.connections.single()
+        assertTrue(connection.isOpen)
+
+        sessions.closeOpenAICodexWebSocketSessions("close-session")
+
+        assertFalse(connection.isOpen)
     }
 
     @Test
@@ -828,6 +890,7 @@ class OpenAICodexWebSocketStreamTest {
     @Test
     fun `websocket headers carry the beta flag and drop sse-only headers`() {
         val headers = buildCodexWebSocketHeaders(
+            target = model,
             modelHeaders = emptyMap(),
             optionsHeaders = mapOf(
                 "accept" to "text/event-stream",

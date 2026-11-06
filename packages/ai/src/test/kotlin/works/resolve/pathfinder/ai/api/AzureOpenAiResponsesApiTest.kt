@@ -232,6 +232,20 @@ class AzureOpenAiResponsesApiTest {
     }
 
     @Test
+    fun `blank error bodies surface the transport message`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueError(429, "  ")
+        val events = api(
+            transport
+        ).stream(model, context, AzureOpenAiResponsesOptions(apiKey = "k")).toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.last())
+        assertEquals(
+            "Azure OpenAI API error (429): 429 status code (no body)",
+            error.error.errorMessage
+        )
+    }
+
+    @Test
     fun `model headers override the default user agent`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completed().toTypedArray()))
@@ -278,7 +292,7 @@ class AzureOpenAiResponsesApiTest {
             )
         ).toList()
         assertEquals(
-            "https://my-proxy.example.com/v1?custom=true/responses?api-version=v1",
+            "https://my-proxy.example.com/v1/responses?custom=true&api-version=v1",
             transport.requests.single().url
         )
     }

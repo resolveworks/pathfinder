@@ -51,6 +51,9 @@ import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.NetworkException
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
+import works.resolve.pathfinder.ai.utils.ClientAttributionSetting
+import works.resolve.pathfinder.ai.utils.ClientIdentity
+import works.resolve.pathfinder.ai.utils.PATHFINDER_ATTRIBUTION
 import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class OpenAiCodexResponsesApiTest {
@@ -787,6 +790,27 @@ class OpenAiCodexResponsesApiTest {
         assertEquals(0.006, done.message.usage.cost.total, 1e-9)
     }
 
+    @Test
+    fun `fast service tier does not change cost`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"type":"response.done","response":{"id":"r","status":"completed",
+                    "service_tier":"fast",
+                    "usage":{"input_tokens":1000,"output_tokens":1000,"total_tokens":2000}}}"""
+            )
+        )
+        val events = api(transport).stream(
+            model,
+            context,
+            OpenAICodexResponsesOptions(apiKey = apiKey, serviceTier = "fast")
+        ).toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(0.001, done.message.usage.cost.input, 1e-9)
+        assertEquals(0.002, done.message.usage.cost.output, 1e-9)
+        assertEquals(0.003, done.message.usage.cost.total, 1e-9)
+    }
+
     // Ports deferred-tools.test.ts "selects additional tools, tool search, or
     // top-level tools for Codex models": catalog compat flags pick the mode.
 
@@ -965,9 +989,32 @@ class OpenAiCodexResponsesApiTest {
     }
 
     @Test
+    fun `attribution headers follow an openrouter base url`() {
+        val headers = buildCodexSSEHeaders(
+            target = model.copy(baseUrl = "https://openrouter.ai/api/v1"),
+            modelHeaders = emptyMap(),
+            optionsHeaders = emptyMap(),
+            accountId = "acc",
+            token = "tok",
+            sessionId = null,
+            identity = ClientIdentity(
+                attribution = ClientAttributionSetting.On(PATHFINDER_ATTRIBUTION)
+            )
+        )
+        assertEquals("pathfinder", headers["originator"])
+        assertEquals(PATHFINDER_ATTRIBUTION.url, headers["HTTP-Referer"])
+        assertEquals(PATHFINDER_ATTRIBUTION.name, headers["X-OpenRouter-Title"])
+        assertEquals(
+            works.resolve.pathfinder.ai.utils.formatUserAgent(),
+            headers["User-Agent"]
+        )
+    }
+
+    @Test
     fun `header overrides and deletions are case-insensitive`() {
         // Headers.set/delete match names case-insensitively.
         val base = buildBaseCodexHeaders(
+            target = model,
             modelHeaders = mapOf("X-Model" to "a", "Accept" to "text/plain"),
             optionsHeaders = mapOf("x-model" to "b", "ACCEPT" to null),
             accountId = "acc",
@@ -977,6 +1024,7 @@ class OpenAiCodexResponsesApiTest {
         assertNull(base.keys.firstOrNull { it.equals("accept", ignoreCase = true) })
 
         val ws = buildCodexWebSocketHeaders(
+            target = model,
             modelHeaders = mapOf(
                 "Accept" to "text/event-stream",
                 "Content-Type" to "application/json"
