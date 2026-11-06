@@ -1,9 +1,13 @@
 package works.resolve.pathfinder.codingagent.core.compaction
 
+import kotlin.math.ceil
 import kotlin.time.Clock
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.MessageRole
 import works.resolve.pathfinder.ai.Model
@@ -13,8 +17,10 @@ import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.toThinkingLevelOrNull
@@ -24,9 +30,9 @@ import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
 import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.ai.utils.contentText
-import works.resolve.pathfinder.ai.utils.estimateMessageTokens
-import works.resolve.pathfinder.ai.utils.estimateTextTokens
 import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.toolToJson
 import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.codingagent.core.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.CompactionEntry
@@ -81,20 +87,65 @@ fun getLastAssistantUsage(entries: List<SessionEntry>): Usage? {
     return null
 }
 
-/**
- * pi's compaction-local estimator, deliberately not the ai-module
- * `estimateMessageTokens`: system messages estimate to 0 (pi's role switch
- * has no system case). pi additionally estimates custom and summary roles;
- * pathfinder has no custom messages, and the summary roles are estimated
- * from their entries by [estimateEntryTokens] because they project to
- * wrapped user messages (Messages.kt).
- */
-fun estimateTokens(message: Message): Int = when (message.role) {
-    MessageRole.SYSTEM -> 0
+private const val ESTIMATED_IMAGE_CHARS = 4800
 
-    MessageRole.USER, MessageRole.ASSISTANT, MessageRole.TOOL_RESULT ->
-        estimateMessageTokens(message)
+private fun estimateContentChars(content: List<works.resolve.pathfinder.ai.Content>): Int =
+    content.sumOf { block ->
+        when (block) {
+            is TextContent -> block.text.length
+            is ImageContent -> ESTIMATED_IMAGE_CHARS
+            else -> 0
+        }
+    }
+
+private fun safeJsonStringify(element: JsonElement): String =
+    lenientJson.encodeToString(JsonElement.serializer(), element)
+
+private fun estimateSystemChars(system: SystemMessage): Int {
+    var chars = estimateContentChars(system.content)
+    for (section in system.sections.orEmpty().values) {
+        if (section != null) chars += section.length
+    }
+    val tools = system.toolsAdded
+    if (tools != null) {
+        chars += safeJsonStringify(JsonArray(tools.map(::toolToJson))).length
+    }
+    return chars
 }
+
+/**
+ * pi's compaction-local estimator: chars/4, including the system prompt's
+ * content, sections, and added tool definitions. Pathfinder has no custom or
+ * bashExecution roles; summary entries are measured by [estimateEntryTokens]
+ * because they project to wrapped user messages (Messages.kt).
+ */
+fun estimateTokens(message: Message): Int = ceil(
+    when (message) {
+        is SystemMessage -> estimateSystemChars(message)
+
+        is UserMessage -> estimateContentChars(message.content)
+
+        is AssistantMessage -> {
+            var chars = 0
+            for (block in message.content) {
+                when (block) {
+                    is TextContent -> chars += block.text.length
+
+                    is ThinkingContent -> chars += block.thinking.length
+
+                    is ToolCall ->
+                        chars += block.name.length +
+                            safeJsonStringify(block.arguments).length
+
+                    else -> {}
+                }
+            }
+            chars
+        }
+
+        is ToolResultMessage -> estimateContentChars(message.content)
+    } / 4.0
+).toInt()
 
 private fun getLastAssistantUsageInfo(messages: List<Message>): Pair<Usage, Int>? {
     for (i in messages.indices.reversed()) {
@@ -184,7 +235,7 @@ fun estimateProjectedContextTokens(
     }
 
     val currentSystem = getCurrentSystemMessage(projection.messages)
-    var tokens = if (currentSystem != null) estimateMessageTokens(currentSystem) else 0
+    var tokens = if (currentSystem != null) estimateTokens(currentSystem) else 0
     for (message in projection.messages) {
         if (message.role != MessageRole.SYSTEM) tokens += estimateTokens(message)
     }
@@ -212,11 +263,11 @@ private fun entryContextMessages(entry: SessionEntry): List<Message> =
  * pi sums `estimateTokens` over an entry's context messages, where the
  * summary entries project dedicated branchSummary/compactionSummary roles;
  * pathfinder projects wrapped user messages, so the summary length is
- * measured at the entry with the shared estimator instead.
+ * measured at the entry instead.
  */
 internal fun estimateEntryTokens(entry: SessionEntry): Int = when (entry) {
-    is CompactionEntry -> estimateTextTokens(entry.summary)
-    is BranchSummaryEntry -> estimateTextTokens(entry.summary)
+    is CompactionEntry -> ceil(entry.summary.length / 4.0).toInt()
+    is BranchSummaryEntry -> ceil(entry.summary.length / 4.0).toInt()
     else -> entryContextMessages(entry).sumOf { estimateTokens(it) }
 }
 
@@ -574,20 +625,20 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages."""
 
-private const val TURN_PREFIX_SUMMARIZATION_PROMPT = """This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
+private const val TURN_PREFIX_SUMMARIZATION_PROMPT = """The messages above are earlier context from an ongoing conversation. Later messages are stored separately and do not need to be reconstructed.
 
-Summarize the prefix to provide context for the retained suffix:
+Create a concise checkpoint of the user's request and the progress shown above. This checkpoint will be placed before the later messages so the conversation can continue with the necessary context.
 
 ## Original Request
-[What did the user ask for in this turn?]
+[What did the user ask for?]
 
-## Early Progress
-- [Key decisions and work done in the prefix]
+## Progress So Far
+- [Key decisions and work completed in these messages]
 
-## Context for Suffix
-- [Information needed to understand the retained recent work]
+## Context Needed to Continue
+- [Information from these messages needed to understand the later work]
 
-Be concise. Focus on what's needed to understand the kept suffix."""
+Only summarize information explicitly present above. Do not infer or recreate later messages."""
 
 private fun summarizationContext(promptText: String, clock: Clock): Context = Context(
     systemPrompt = SUMMARIZATION_SYSTEM_PROMPT,
@@ -599,7 +650,7 @@ private fun summarizationContext(promptText: String, clock: Clock): Context = Co
     )
 )
 
-private fun completionOptions(
+internal fun completionOptions(
     model: Model,
     thinkingLevel: ModelThinkingLevel?
 ): SimpleStreamOptions = // The OFF guard above makes the shared OFF→null mapper total here: OFF
@@ -872,7 +923,7 @@ private suspend fun generateTurnPrefixSummary(
     customInstructions: String?
 ): CompactionResult<GeneratedSummary> {
     val conversationText = serializeConversation(messages)
-    var promptText = "<conversation>\n$conversationText\n</conversation>\n\n" +
+    var promptText = "# Conversation\n$conversationText\n\n# Instructions\n" +
         TURN_PREFIX_SUMMARIZATION_PROMPT
     if (customInstructions != null) {
         promptText = "$promptText\n\nAdditional focus: $customInstructions"

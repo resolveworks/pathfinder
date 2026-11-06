@@ -318,9 +318,9 @@ class CompactionLlmTest {
             )
         )!!
 
-        // The effective system prompt is counted once, plus 1 token for the
-        // user text and 1 for the assistant text.
-        assertEquals(1145, preparation.tokensBefore)
+        // The effective system prompt is counted once at chars/4, plus 1
+        // token for the user text and 1 for the assistant text.
+        assertEquals(1002, preparation.tokensBefore)
     }
 
     @Test
@@ -340,7 +340,7 @@ class CompactionLlmTest {
         // Context entries are [compaction, kept, tail]: pathfinder projects
         // the summary as a wrapped user message, so its prefix and suffix are
         // estimated with the message rather than the bare summary length.
-        assertEquals(147, preparation.tokensBefore)
+        assertEquals(129, preparation.tokensBefore)
     }
 
     @Test
@@ -696,7 +696,12 @@ class CompactionLlmTest {
         )
 
         assertEquals(1, faux.api.seenContexts.size)
-        assertTrue("Additional focus: keep migration decisions" in firstPrompt(faux))
+        val prompt = firstPrompt(faux)
+        assertTrue(prompt.startsWith("# Conversation\n[User]: Summarize this.\n\n# Instructions\n"))
+        assertTrue(
+            "The messages above are earlier context from an ongoing conversation." in prompt
+        )
+        assertTrue("Additional focus: keep migration decisions" in prompt)
     }
 
     @Test

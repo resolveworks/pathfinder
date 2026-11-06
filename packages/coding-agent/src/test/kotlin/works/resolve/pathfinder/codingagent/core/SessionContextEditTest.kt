@@ -400,9 +400,9 @@ class SessionContextEditTest {
         val estimate =
             estimateProjectedContextTokens(session.buildSessionProjection(), session.getBranch())
         assertEquals(4_100, estimate.usageTokens)
-        // Pathfinder estimates at 3.5 chars/token: "next" is 2 tokens, not pi's 1.
-        assertEquals(2, estimate.trailingTokens)
-        assertEquals(4_102, estimate.tokens)
+        // The compaction-local estimator uses pi's chars/4: "next" is 1 token.
+        assertEquals(1, estimate.trailingTokens)
+        assertEquals(4_101, estimate.tokens)
     }
 
     @Test

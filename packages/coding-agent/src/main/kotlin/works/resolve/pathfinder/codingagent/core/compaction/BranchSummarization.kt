@@ -5,8 +5,8 @@ import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.MessageRole
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolCall
@@ -27,6 +27,7 @@ import works.resolve.pathfinder.codingagent.core.SessionEntry
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.codingagent.core.createBranchSummaryMessage
 import works.resolve.pathfinder.codingagent.core.createCompactionSummaryMessage
+import works.resolve.pathfinder.codingagent.core.projectContextEntry
 
 data class BranchSummaryResult(val summary: String, val usage: Usage?)
 
@@ -73,25 +74,30 @@ fun collectEntriesForBranchSummary(
     return CollectEntriesResult(entries = entries, commonAncestorId = commonAncestorId)
 }
 
-private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
-    is MessageEntry -> if (entry.message.role == MessageRole.TOOL_RESULT) null else entry.message
+private fun getMessageFromEntry(entry: SessionEntry, edit: ContextEditEntry?): Message? =
+    when (entry) {
+        is MessageEntry -> if (entry.message.role == MessageRole.TOOL_RESULT) {
+            null
+        } else {
+            projectContextEntry(entry, edit).firstOrNull()
+        }
 
-    // Upstream returns a dedicated branchSummary agent message; pathfinder
-    // has no such role, so the entry projects to a wrapped user message.
-    is BranchSummaryEntry -> createBranchSummaryMessage(
-        entry.summary,
-        entry.fromId,
-        entry.timestamp
-    )
+        // Upstream returns a dedicated branchSummary agent message; pathfinder
+        // has no such role, so the entry projects to a wrapped user message.
+        is BranchSummaryEntry -> createBranchSummaryMessage(
+            entry.summary,
+            entry.fromId,
+            entry.timestamp
+        )
 
-    is CompactionEntry -> createCompactionSummaryMessage(
-        entry.summary,
-        entry.tokensBefore,
-        entry.timestamp
-    )
+        is CompactionEntry -> createCompactionSummaryMessage(
+            entry.summary,
+            entry.tokensBefore,
+            entry.timestamp
+        )
 
-    is ModelChangeEntry, is ThinkingLevelEntry, is RawEntry, is ContextEditEntry -> null
-}
+        is ModelChangeEntry, is ThinkingLevelEntry, is RawEntry, is ContextEditEntry -> null
+    }
 
 /**
  * Newest→oldest within the token budget; an over-budget compaction or
@@ -101,13 +107,21 @@ private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
  *
  */
 fun prepareBranchEntries(entries: List<SessionEntry>, tokenBudget: Int = 0): BranchPreparation {
+    val edits = HashMap<String, ContextEditEntry>()
+    for (entry in entries) {
+        if (entry is ContextEditEntry) edits[entry.targetId] = entry
+    }
+
     val messages = mutableListOf<Message>()
     var totalTokens = 0
     for (i in entries.indices.reversed()) {
         val entry = entries[i]
-        val message = getMessageFromEntry(entry) ?: continue
+        val message = getMessageFromEntry(entry, edits[entry.id]) ?: continue
 
-        val tokens = estimateEntryTokens(entry)
+        val tokens = when (entry) {
+            is CompactionEntry, is BranchSummaryEntry -> estimateEntryTokens(entry)
+            else -> estimateTokens(message)
+        }
         if (tokenBudget > 0 && totalTokens + tokens > tokenBudget) {
             if ((entry is CompactionEntry || entry is BranchSummaryEntry) &&
                 totalTokens < tokenBudget * 0.9
@@ -172,6 +186,8 @@ data class GenerateBranchSummaryOptions(
     val customInstructions: String? = null,
     /** Replace the default prompt instead of appending to it. */
     val replaceInstructions: Boolean = false,
+    /** Thinking level for reasoning-capable models. */
+    val thinkingLevel: ModelThinkingLevel? = null,
     /** Headroom for the summarization prompt and model output. */
     val reserveTokens: Int = 16384,
     val retry: RetryPolicy? = null,
@@ -239,7 +255,7 @@ suspend fun generateBranchSummary(
                 )
             )
         ),
-        SimpleStreamOptions(),
+        completionOptions(options.model, options.thinkingLevel),
         options.retry,
         options.callbacks,
         options.retryRunner

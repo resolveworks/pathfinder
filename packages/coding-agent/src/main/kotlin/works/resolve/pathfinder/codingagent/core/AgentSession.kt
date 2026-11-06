@@ -951,6 +951,7 @@ class AgentSession(
                         model = model,
                         customInstructions = options.customInstructions,
                         replaceInstructions = options.replaceInstructions,
+                        thinkingLevel = agent.thinkingLevel,
                         reserveTokens = reserveTokens.toInt(),
                         retry = retryPolicy(),
                         callbacks = summarizationRetryCallbacks(
