@@ -79,9 +79,10 @@ class AnthropicMessagesStreamTest {
         output: Int = 0,
         cacheRead: Int = 0,
         cacheWrite: Int = 0,
-        model: String = "claude-sonnet-4-5"
+        model: String = "claude-sonnet-4-5",
+        id: String = "msg_test"
     ) = "message_start" to
-        """{"type":"message_start","message":{"id":"msg_test","model":"$model","usage":{"input_tokens":$input,"output_tokens":$output,"cache_read_input_tokens":$cacheRead,"cache_creation_input_tokens":$cacheWrite}}}"""
+        """{"type":"message_start","message":{"id":"$id","model":"$model","usage":{"input_tokens":$input,"output_tokens":$output,"cache_read_input_tokens":$cacheRead,"cache_creation_input_tokens":$cacheWrite}}}"""
 
     private fun messageDelta(
         stopReason: String? = "end_turn",

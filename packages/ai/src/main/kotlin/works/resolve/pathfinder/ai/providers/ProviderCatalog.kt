@@ -347,7 +347,9 @@ private data class ModelDto(
             compat = compat.toDomain("${owner.id}/$id", detectedCacheControlFormat),
             anthropicCompat = compat.toAnthropicDomain(
                 where = "${owner.id}/$id",
-                isOpenRouter = isOpenRouter
+                isOpenRouter = isOpenRouter,
+                provider = resolvedProvider,
+                baseUrl = effectiveBaseUrl
             ),
             responsesCompat = if (api in
                 RESPONSES_FAMILY_APIS
@@ -437,6 +439,7 @@ private data class CompatDto(
     val supportsMidConvoSystemMessages: Boolean? = null,
     val supportsMidConvoToolAdditions: Boolean? = null,
     val supportsMidConvoToolChanges: Boolean? = null,
+    val supportsMessageThreads: Boolean? = null,
     // Consumed via [Model.responsesCompat]; [supportsStrictMode] also maps
     // to the completions compat via [Model.compat].
     val supportsStrictMode: Boolean? = null,
@@ -514,23 +517,29 @@ private data class CompatDto(
     )
 
     /** Per-field defaults mirror pi's getAnthropicCompat. */
-    fun toAnthropicDomain(where: String, isOpenRouter: Boolean) = AnthropicMessagesCompat(
-        supportsEagerToolInputStreaming = supportsEagerToolInputStreaming ?: true,
-        supportsLongCacheRetention = supportsLongCacheRetention ?: true,
-        sendSessionAffinityHeaders = sendSessionAffinityHeaders ?: isOpenRouter,
-        supportsCacheControlOnTools = supportsCacheControlOnTools ?: true,
-        supportsTemperature = supportsTemperature ?: true,
-        allowEmptySignature = allowEmptySignature ?: false,
-        supportsStrictTools = supportsStrictTools ?: false,
-        forceAdaptiveThinking = forceAdaptiveThinking,
-        allowedFallbackModels = allowedFallbackModels?.map { it.toDomain() } ?: emptyList(),
-        supportsMidConvoEffort = supportsMidConvoEffort ?: false,
-        sessionAffinityFormat = sessionAffinityFormat
-            ?.let { parseSessionAffinityFormat(it, where) }
-            ?: if (isOpenRouter) SessionAffinityFormat.OPENROUTER else null,
-        supportsMidConvoSystemMessages = supportsMidConvoSystemMessages ?: false,
-        supportsMidConvoToolChanges = supportsMidConvoToolChanges ?: false
-    )
+    fun toAnthropicDomain(where: String, isOpenRouter: Boolean, provider: String, baseUrl: String) =
+        AnthropicMessagesCompat(
+            supportsEagerToolInputStreaming = supportsEagerToolInputStreaming ?: true,
+            supportsLongCacheRetention = supportsLongCacheRetention ?: true,
+            sendSessionAffinityHeaders = sendSessionAffinityHeaders ?: isOpenRouter,
+            supportsCacheControlOnTools = supportsCacheControlOnTools ?: true,
+            supportsTemperature = supportsTemperature ?: true,
+            allowEmptySignature = allowEmptySignature ?: false,
+            supportsStrictTools = supportsStrictTools ?: false,
+            forceAdaptiveThinking = forceAdaptiveThinking,
+            allowedFallbackModels = allowedFallbackModels?.map { it.toDomain() } ?: emptyList(),
+            supportsMidConvoEffort = supportsMidConvoEffort ?: false,
+            sessionAffinityFormat = sessionAffinityFormat
+                ?.let { parseSessionAffinityFormat(it, where) }
+                ?: if (isOpenRouter) SessionAffinityFormat.OPENROUTER else null,
+            supportsMidConvoSystemMessages = supportsMidConvoSystemMessages ?: false,
+            supportsMidConvoToolChanges = supportsMidConvoToolChanges ?: false,
+            // Gateways that drop unknown request fields would silently turn a
+            // thread continue into a request without the earlier conversation, so
+            // the default is limited to Anthropic's own endpoint.
+            supportsMessageThreads = supportsMessageThreads
+                ?: (provider == "anthropic" && baseUrl.contains("api.anthropic.com"))
+        )
 }
 
 private fun parseCacheControlFormat(value: String, where: String): CacheControlFormat =

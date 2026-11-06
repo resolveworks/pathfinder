@@ -73,6 +73,7 @@ import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
 import works.resolve.pathfinder.ai.utils.resolveTranscript
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
+import works.resolve.pathfinder.ai.utils.shortHash
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.strictDoubleOrNull
@@ -118,6 +119,7 @@ internal const val SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-07-01"
 internal const val MID_CONVERSATION_OUTPUT_CONFIG_BETA = "mid-conversation-output-config-2026-07-01"
 internal const val THINKING_BINDING_CONTROLS_BETA = "thinking-binding-controls-2026-08-01"
 internal const val INLINE_TOOLS_BETA = "inline-tools-2026-09-15"
+internal const val MESSAGE_THREADS_BETA = "message-threads-2026-08-12"
 
 /**
  * Stable deferred tool declared whenever native tool changes are in use. Anthropic adds
@@ -138,6 +140,225 @@ private val DEFERRED_TOOL_PLACEHOLDER: JsonObject = buildJsonObject {
         }
     )
     put("defer_loading", true)
+}
+
+internal data class AnthropicThreadEntry(
+    /** Number of messages in the last full request as sent plus the converted reply. */
+    val prefixCount: Int,
+    /** [hashThreadPrefix] of the request's settings and those messages. */
+    val prefixHash: String,
+    /** Id of the reply to continue from. */
+    val replyId: String
+)
+
+internal data class PreparedThreadRequest(val sessionId: String, val body: JsonObject)
+
+/**
+ * Per-session message-thread continuation state, keyed by the same session id
+ * as pi's module-level `threadState`. The instance lives as long as the
+ * process-wide [AnthropicMessagesApi] that owns it, so a restored or
+ * re-created agent session keeps continuing the thread the server holds.
+ * pi frees entries through `registerSessionResourceCleanup`; Android has no
+ * session-lifecycle hook here, so the session cap bounds memory instead.
+ * Dropping the least recently updated session is cheap: its thread has most
+ * likely expired on the server already (after a few minutes idle), and
+ * otherwise its next request just starts a new thread.
+ */
+internal class AnthropicMessageThreads {
+    private sealed interface Value {
+        data class Entry(val entry: AnthropicThreadEntry) : Value
+        data object Off : Value
+    }
+
+    private companion object {
+        const val MAX_ENTRIES = 10_000
+    }
+
+    private val lock = Any()
+    private val states = LinkedHashMap<String, Value>()
+
+    /**
+     * Returns the request to send for [params]: a `continue` when the session's
+     * thread prefix is unchanged, a `create` otherwise, or null after the
+     * endpoint rejected threads for the session.
+     */
+    fun prepare(model: Model, sessionId: String, params: JsonObject): PreparedThreadRequest? =
+        synchronized(lock) {
+            val messages = params["messages"] as? JsonArray
+                ?: error("Anthropic request is missing its messages array")
+            val state = states[sessionId]
+            if (state == Value.Off) return null
+            val entry = (state as? Value.Entry)?.entry
+            if (entry != null &&
+                messages.size > entry.prefixCount &&
+                hashThreadPrefix(
+                    model,
+                    params,
+                    JsonArray(messages.take(entry.prefixCount))
+                ) == entry.prefixHash
+            ) {
+                // Each reply can be continued once; deleting also keeps a
+                // concurrent request from trying.
+                states.remove(sessionId)
+                return PreparedThreadRequest(
+                    sessionId,
+                    buildJsonObject {
+                        params.forEach { (key, value) ->
+                            if (key != "system" && key != "tools") put(key, value)
+                        }
+                        put("messages", JsonArray(messages.drop(entry.prefixCount)))
+                        put("thread", continueThreadParam(entry.replyId))
+                    }
+                )
+            }
+            createThreadRequest(sessionId, params)
+        }
+
+    /** Records where the session's next request can continue after [output]. */
+    fun recordReply(
+        model: Model,
+        thread: PreparedThreadRequest,
+        params: JsonObject,
+        output: AssistantMessage,
+        isOAuth: Boolean,
+        allowEmptySignature: Boolean
+    ) {
+        // `responseModel` is set only when a fallback model answered; the
+        // server does not store those replies, so they cannot be continued.
+        val replyId = output.responseId ?: return
+        if (output.responseModel != null) return
+        // Convert the reply like the next request will, keeping only the
+        // assistant message (transformMessages adds placeholder results for
+        // trailing tool calls).
+        val reply = convertMessages(
+            transformMessages(listOf(output), model) { id, _ -> normalizeToolCallId(id) },
+            isOAuth,
+            null,
+            allowEmptySignature
+        ).messages.filter { it.str("role") == "assistant" }
+        val conversation = params["messages"] as? JsonArray
+            ?: error("Anthropic request is missing its messages array")
+        val prefix = JsonArray(conversation + reply)
+        setState(
+            thread.sessionId,
+            Value.Entry(
+                AnthropicThreadEntry(
+                    prefixCount = prefix.size,
+                    prefixHash = hashThreadPrefix(model, params, prefix),
+                    replyId = replyId
+                )
+            )
+        )
+    }
+
+    /** Turns threads off for the session after the endpoint rejected them. */
+    fun disable(sessionId: String) {
+        setState(sessionId, Value.Off)
+    }
+
+    private fun setState(sessionId: String, value: Value) = synchronized(lock) {
+        // Re-insert so map order stays oldest-first for the cap.
+        states.remove(sessionId)
+        states[sessionId] = value
+        if (states.size > MAX_ENTRIES) {
+            states.keys.firstOrNull()?.let(states::remove)
+        }
+    }
+}
+
+/** Rejections of a `continue` that a new thread fixes: expired, raced, or a fixed setting changed. */
+private val ANTHROPIC_NEW_THREAD_ERRORS: Set<String> =
+    setOf(
+        "thread_not_found",
+        "thread_already_continued",
+        "thread_continue_in_flight",
+        "thread_fingerprint_mismatch"
+    )
+
+private fun createThreadRequest(sessionId: String, params: JsonObject): PreparedThreadRequest =
+    PreparedThreadRequest(
+        sessionId,
+        buildJsonObject {
+            params.forEach { (key, value) -> put(key, value) }
+            put("thread", buildJsonObject { put("type", "create") })
+        }
+    )
+
+private fun continueThreadParam(previousMessageId: String): JsonObject = buildJsonObject {
+    put("type", "continue")
+    put("previous_message_id", previousMessageId)
+}
+
+/**
+ * Hash of everything a `continue` builds on: the settings that must stay the
+ * same within a thread and the messages the server already holds.
+ *
+ * - Settings, as sent: the endpoint (a thread exists on one endpoint only),
+ *   and the fixed request fields. A `continue` omits `system` and `tools` and
+ *   the server keeps the thread's own, so only this check can notice a change
+ *   to them, including their cache markers. The server rejects changes to the
+ *   other fields with `thread_fingerprint_mismatch`; checking them here saves
+ *   that rejected request. A fixed field missing here costs only that
+ *   rejection, which also starts a new thread.
+ * - Messages, normalized so messages that mean the same to the API hash the
+ *   same.
+ */
+internal fun hashThreadPrefix(model: Model, params: JsonObject, messages: JsonArray): String {
+    val settings = JsonArray(
+        buildList {
+            add(JsonPrimitive(model.provider))
+            add(JsonPrimitive(model.baseUrl))
+            add(params["model"] ?: JsonNull)
+            for (key in listOf(
+                "system",
+                "tools",
+                "thinking",
+                "output_config",
+                "tool_choice",
+                "betas",
+                "fallbacks"
+            )) {
+                add(params[key] ?: JsonNull)
+            }
+        }
+    )
+    val conversation = JsonArray(messages.map(::normalizeThreadMessage))
+    return shortHash(settings.toString() + conversation.toString())
+}
+
+private fun normalizeThreadMessage(value: JsonElement): JsonElement = when (value) {
+    is JsonObject -> JsonObject(
+        LinkedHashMap<String, JsonElement>().apply {
+            for ((key, element) in value) {
+                // Cache markers don't change what a message means, but they
+                // move: pi puts one on the newest message, so the message that
+                // had it in the last request has none in this one.
+                if (key == "cache_control") continue
+                // To attach that marker, the newest user message's string
+                // content is sent as one text block; the next request sends
+                // the same message as a string.
+                if (key == "content" && element is JsonPrimitive && element.isString) {
+                    put(
+                        key,
+                        JsonArray(
+                            listOf(
+                                buildJsonObject {
+                                    put("type", "text")
+                                    put("text", element.content)
+                                }
+                            )
+                        )
+                    )
+                } else {
+                    put(key, normalizeThreadMessage(element))
+                }
+            }
+        }
+    )
+
+    is JsonArray -> JsonArray(value.map(::normalizeThreadMessage))
+
+    else -> value
 }
 
 internal fun toClaudeCodeName(name: String): String = CC_TOOL_LOOKUP[name.lowercase()] ?: name
@@ -213,6 +434,11 @@ sealed interface AnthropicToolChoice {
 data class AnthropicMessagesOptions(
     val apiKey: String? = null,
     val sessionId: String? = null,
+    /**
+     * Do not use or record message-thread continuation state for this
+     * request: it neither continues nor replaces the session's thread.
+     */
+    val disableContinuation: Boolean? = null,
     val temperature: Double? = null,
     val maxTokens: Int? = null,
     /** Null means "unspecified" (thinking omitted). */
@@ -250,6 +476,7 @@ data class AnthropicMessagesOptions(
         "AnthropicMessagesOptions",
         "apiKey" to redactedSecret(apiKey),
         "sessionId" to sessionId,
+        "disableContinuation" to disableContinuation,
         "temperature" to temperature,
         "maxTokens" to maxTokens,
         "thinkingEnabled" to thinkingEnabled,
@@ -286,6 +513,8 @@ class AnthropicMessagesApi(
     private val clock: Clock = Clock.System
 ) : ChatApi {
 
+    private val threads = AnthropicMessageThreads()
+
     fun stream(
         model: Model,
         context: TranscriptContext,
@@ -300,43 +529,27 @@ class AnthropicMessagesApi(
         val isOAuth =
             model.provider != "github-copilot" && options.apiKey?.let { isOAuthToken(it) } == true
         val state = AnthropicStreamState(model, startedAtMs, isOAuth)
+        val compat = anthropicCompatOf(model)
         try {
             assertRequestAuth(model.provider, options.apiKey, options.headers)
 
             val retention = resolveCacheRetention(options.cacheRetention, options.env)
             val cacheSessionId = if (retention == CacheRetention.NONE) null else options.sessionId
+            // Sessions where the endpoint rejected threads ("off") still send
+            // the threads beta, which the resend that turned them off was
+            // accepted with; prepare() just sends no `thread`.
+            val threadSessionId = if (compat.supportsMessageThreads) cacheSessionId else null
+            val url = model.baseUrl.trimEnd('/') + "/v1/messages?beta=true"
 
-            var disablePreferredStrictTools = false
-            var response: TransportResponse
-            while (true) {
-                currentCoroutineContext().ensureActive()
-                val built = buildAnthropicParams(
-                    model,
-                    normalizedContext,
-                    isOAuth,
-                    options,
-                    disablePreferredStrictTools
-                )
-                built.providerThinkingLevel?.let { state.providerThinkingLevel = it }
-                var params = built.params
-                options.onPayload?.let { hook ->
-                    hook(params, model)?.let { next ->
-                        // A replacement payload must not turn off streaming.
-                        params = JsonObject(
-                            next.toMutableMap().apply { put("stream", JsonPrimitive(true)) }
-                        )
-                    }
-                }
+            suspend fun send(body: JsonObject): TransportResponse {
                 // The beta namespace moves `betas` out of the body and into the
                 // `anthropic-beta` header (see getBetaFeatures).
-                val betas = (params["betas"] as? JsonArray)
+                val betas = (body["betas"] as? JsonArray)
                     ?.mapNotNull { (it as? JsonPrimitive)?.content }
                     ?: emptyList()
-                params = JsonObject(params.toMutableMap().apply { remove("betas") })
-                val body = params
+                val wireBody = JsonObject(body.toMutableMap().apply { remove("betas") })
                     .toString()
                     .toByteArray(Charsets.UTF_8)
-
                 val (headers, bearerToken) = buildHeaders(
                     model,
                     isOAuth,
@@ -345,22 +558,112 @@ class AnthropicMessagesApi(
                     cacheSessionId,
                     betas
                 )
-                val url = model.baseUrl.trimEnd('/') + "/v1/messages?beta=true"
                 val request = TransportRequest(
                     url = url,
                     bearerToken = bearerToken,
                     headers = headers,
-                    body = body,
+                    body = wireBody,
                     timeoutMs = options.timeoutMs
                 )
+                return retry.retryProviderRequest(options.maxRetries, options.maxRetryDelayMs) {
+                    transport.post(request)
+                }
+            }
 
+            suspend fun sendThreadRequest(
+                thread: PreparedThreadRequest,
+                params: JsonObject
+            ): Pair<TransportResponse, PreparedThreadRequest?> {
                 try {
-                    response = retry.retryProviderRequest<TransportResponse>(
-                        options.maxRetries,
-                        options.maxRetryDelayMs
-                    ) {
-                        transport.post(request)
+                    return send(thread.body) to thread
+                } catch (error: ProviderHttpException) {
+                    currentCoroutineContext().ensureActive()
+                    val apiError = anthropicApiError(error)
+                    val errorCode = apiError?.errorCode
+                    val startNewThread =
+                        errorCode != null && errorCode in ANTHROPIC_NEW_THREAD_ERRORS
+                    // The endpoint can't use threads: it can't thread this
+                    // request, or it doesn't know the `thread` field and
+                    // rejects it without a code.
+                    val threadsUnsupported =
+                        errorCode == "thread_unsupported_request" ||
+                            (
+                                errorCode == null &&
+                                    error.status == 400 &&
+                                    apiError?.message?.contains("thread") == true
+                                )
+                    // Any other error (prompt too long, unknown model, strict
+                    // tool limits, ...) is not about the thread, and resending
+                    // would only fail again.
+                    if (!startNewThread && !threadsUnsupported) throw error
+                    // Recorded before the resend, so a failed resend keeps it.
+                    state.appendDiagnostic(
+                        AssistantMessageDiagnostic(
+                            type = "anthropic_thread_fallback",
+                            timestamp = clock.now().toEpochMilliseconds(),
+                            error = DiagnosticErrorInfo(
+                                message = apiError.message
+                                    ?: error.message
+                                    ?: error::class.simpleName
+                                    ?: "Anthropic thread fallback"
+                            ),
+                            details = buildJsonObject {
+                                put("reason", errorCode ?: error.status.toString())
+                            }
+                        )
+                    )
+                    if (startNewThread) {
+                        val created = createThreadRequest(thread.sessionId, params)
+                        return send(created.body) to created
                     }
+                    // With the threads beta, a request without `thread` is a
+                    // normal request.
+                    val response = send(params)
+                    threads.disable(thread.sessionId)
+                    return response to null
+                }
+            }
+
+            var disablePreferredStrictTools = false
+            var response: TransportResponse
+            var params: JsonObject
+            // The thread request that produced the response; null when no
+            // `thread` was sent.
+            var thread: PreparedThreadRequest? = null
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val built = buildAnthropicParams(
+                    model,
+                    normalizedContext,
+                    isOAuth,
+                    options,
+                    disablePreferredStrictTools,
+                    messageThreads = threadSessionId != null
+                )
+                built.providerThinkingLevel?.let { state.providerThinkingLevel = it }
+                params = built.params
+                options.onPayload?.let { hook ->
+                    hook(params, model)?.let { next ->
+                        // A replacement payload must not turn off streaming.
+                        params = JsonObject(
+                            next.toMutableMap().apply { put("stream", JsonPrimitive(true)) }
+                        )
+                    }
+                }
+                val prepared =
+                    if (threadSessionId != null && options.disableContinuation != true) {
+                        threads.prepare(model, threadSessionId, params)
+                    } else {
+                        null
+                    }
+                try {
+                    val sent = if (prepared != null) {
+                        sendThreadRequest(prepared, params)
+                    } else {
+                        send(params) to null
+                    }
+                    response = sent.first
+                    thread = sent.second
                     break
                 } catch (error: ProviderHttpException) {
                     // Only downgrade a rejected request, never an already-started stream.
@@ -406,6 +709,16 @@ class AnthropicMessagesApi(
                 throw ProviderStreamException(state.errorMessage ?: "An unknown error occurred")
             }
 
+            thread?.let {
+                threads.recordReply(
+                    model,
+                    it,
+                    params,
+                    state.snapshot(),
+                    isOAuth,
+                    compat.allowEmptySignature
+                )
+            }
             var message = state.snapshot()
             state.inputTransformationsDiagnostic(
                 clock.now().toEpochMilliseconds()
@@ -634,6 +947,7 @@ internal fun buildBaseOptions(
 ): AnthropicMessagesOptions = AnthropicMessagesOptions(
     apiKey = options.apiKey,
     sessionId = options.sessionId,
+    disableContinuation = options.disableContinuation,
     temperature = options.temperature,
     maxTokens = clampMaxTokensToContext(model, context, options.maxTokens ?: model.maxTokens),
     cacheRetention = options.cacheRetention,
@@ -672,7 +986,8 @@ internal fun getBetaFeatures(
     context: TranscriptContext,
     isOAuthToken: Boolean,
     nativeToolChanges: Boolean,
-    options: AnthropicMessagesOptions?
+    options: AnthropicMessagesOptions?,
+    messageThreads: Boolean = false
 ): List<String> {
     var configuredFeatures: String? = null
     var configured = false
@@ -716,6 +1031,7 @@ internal fun getBetaFeatures(
         features.add(THINKING_BINDING_CONTROLS_BETA)
     }
     if (nativeToolChanges) features.add(INLINE_TOOLS_BETA)
+    if (messageThreads) features.add(MESSAGE_THREADS_BETA)
     return features.distinct()
 }
 
@@ -838,7 +1154,8 @@ internal fun buildAnthropicParams(
     context: TranscriptContext,
     isOAuthToken: Boolean,
     options: AnthropicMessagesOptions,
-    disablePreferredStrictTools: Boolean = false
+    disablePreferredStrictTools: Boolean = false,
+    messageThreads: Boolean = false
 ): AnthropicBuiltRequest {
     val cacheControl = getCacheControl(model, options)
     val compat = anthropicCompatOf(model)
@@ -900,7 +1217,14 @@ internal fun buildAnthropicParams(
         if (nativeToolChanges) ({ tools: List<Tool> -> convertToolDefinitions(tools) }) else null
     )
     val activeEffort = options.effort ?: "high"
-    val betaFeatures = getBetaFeatures(model, context, isOAuthToken, nativeToolChanges, options)
+    val betaFeatures = getBetaFeatures(
+        model,
+        context,
+        isOAuthToken,
+        nativeToolChanges,
+        options,
+        messageThreads
+    )
 
     val body = mutableMapOf<String, JsonElement>()
     body["model"] = JsonPrimitive(model.id)
@@ -1436,7 +1760,13 @@ private fun toolRemovalBlock(toolName: String, isOAuthToken: Boolean): JsonObjec
         )
     }
 
-private data class AnthropicApiError(val status: Int, val type: String?, val message: String)
+private data class AnthropicApiError(
+    val status: Int,
+    val type: String?,
+    val message: String,
+    /** The `error.details.error_code` Anthropic puts in thread rejections. */
+    val errorCode: String?
+)
 
 private fun anthropicApiError(error: ProviderHttpException): AnthropicApiError? {
     val parsed = try {
@@ -1446,7 +1776,12 @@ private fun anthropicApiError(error: ProviderHttpException): AnthropicApiError? 
     }
     val detail = (parsed as? JsonObject)?.obj("error") ?: return null
     val message = detail.str("message") ?: return null
-    return AnthropicApiError(error.status, detail.str("type"), message)
+    return AnthropicApiError(
+        error.status,
+        detail.str("type"),
+        message,
+        detail.obj("details")?.str("error_code")
+    )
 }
 
 private val ANTHROPIC_STRICT_TOOL_LIMIT_MESSAGES = listOf(
