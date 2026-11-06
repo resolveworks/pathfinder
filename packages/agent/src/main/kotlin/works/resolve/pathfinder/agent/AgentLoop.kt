@@ -35,12 +35,12 @@ import works.resolve.pathfinder.ai.toThinkingLevelOrNull
 import works.resolve.pathfinder.ai.utils.ClientAttributionSetting
 import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.PATHFINDER_ATTRIBUTION
+import works.resolve.pathfinder.ai.utils.ToolCallArgumentsStream
 import works.resolve.pathfinder.ai.utils.ToolStateChanges
 import works.resolve.pathfinder.ai.utils.getCurrentTools
 import works.resolve.pathfinder.ai.utils.getToolStateChanges
 import works.resolve.pathfinder.ai.utils.mergeClientIdentity
 import works.resolve.pathfinder.ai.utils.normalizeContext
-import works.resolve.pathfinder.ai.utils.parseStreamingJson
 import works.resolve.pathfinder.ai.utils.toToolDeclaration
 import works.resolve.pathfinder.ai.utils.validateToolArguments
 
@@ -579,16 +579,16 @@ private suspend fun streamAssistantResponse(
  * those incrementally). Tool-call argument deltas are not plain text —
  * Google emits the complete arguments as a single redundant delta after a
  * complete start scaffold, while other providers stream JSON fragments — so
- * at materialize the joined fragments are salvaged into the arguments
- * object through the streaming parser, the same parse the providers run at
- * every fragment, and replace the scaffold's arguments whenever any
- * arrived.
+ * each content index keeps one [ToolCallArgumentsStream] across boundaries,
+ * and materialize uses the partial arguments of every call that received a
+ * delta, replacing the scaffold's arguments.
  */
 private class AssistantStreamFold {
     private var boundary: AssistantMessage? = null
     private val textSinceBoundary = mutableMapOf<Int, StringBuilder>()
     private val thinkingSinceBoundary = mutableMapOf<Int, StringBuilder>()
-    private val toolArguments = mutableMapOf<Int, StringBuilder>()
+    private val toolArguments = mutableMapOf<Int, ToolCallArgumentsStream>()
+    private val toolArgumentSnapshots = mutableMapOf<Int, JsonObject>()
 
     fun onBoundary(partial: AssistantMessage) {
         boundary = partial
@@ -605,7 +605,8 @@ private class AssistantStreamFold {
     }
 
     fun appendToolArguments(contentIndex: Int, delta: String) {
-        toolArguments.getOrPut(contentIndex) { StringBuilder() }.append(delta)
+        toolArgumentSnapshots[contentIndex] =
+            toolArguments.getOrPut(contentIndex) { ToolCallArgumentsStream() }.append(delta)
     }
 
     fun materialize(): AssistantMessage? {
@@ -624,10 +625,8 @@ private class AssistantStreamFold {
                             ?: block
 
                     is ToolCall ->
-                        toolArguments[index]
-                            ?.let { args ->
-                                block.copy(arguments = parseStreamingJson(args.toString()))
-                            }
+                        toolArgumentSnapshots[index]
+                            ?.let { arguments -> block.copy(arguments = arguments) }
                             ?: block
 
                     else -> block

@@ -50,6 +50,7 @@ import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
+import works.resolve.pathfinder.ai.utils.ToolCallArgumentsStream
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
 import works.resolve.pathfinder.ai.utils.getCurrentTools
@@ -60,8 +61,6 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.long
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
-import works.resolve.pathfinder.ai.utils.parseStreamingJson
-import works.resolve.pathfinder.ai.utils.parseToolCallArguments
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
 import works.resolve.pathfinder.ai.utils.resolveTranscript
@@ -561,10 +560,11 @@ internal class MistralStreamingState(private val model: Model, private val times
         }
 
         class Tool(val id: String, val name: String) : Block {
+            val argumentsStream = ToolCallArgumentsStream()
+
             /** Parsed arguments; kept current with every streamed fragment. */
             var arguments: JsonObject = JsonObject(emptyMap())
             var argumentsError: String? = null
-            val partialArgs = StringBuilder()
             override var built: Content? = null
         }
     }
@@ -672,8 +672,7 @@ internal class MistralStreamingState(private val model: Model, private val times
             is JsonPrimitive -> arg.content
             else -> arg.toString()
         }
-        toolBlock.partialArgs.append(argsDelta)
-        toolBlock.arguments = parseStreamingJson(toolBlock.partialArgs.toString())
+        toolBlock.arguments = toolBlock.argumentsStream.append(argsDelta)
         toolBlock.built = null
 
         events.add(AssistantMessageEvent.ToolCallDelta(blockIndex, argsDelta))
@@ -686,7 +685,7 @@ internal class MistralStreamingState(private val model: Model, private val times
         for (index in toolBlocksByKey.values) {
             val block = blocks[index]
             if (block is Block.Tool) {
-                val parsed = parseToolCallArguments(block.partialArgs.toString())
+                val parsed = block.argumentsStream.finish()
                 block.arguments = parsed.arguments
                 block.argumentsError = parsed.argumentsError
                 block.built = null

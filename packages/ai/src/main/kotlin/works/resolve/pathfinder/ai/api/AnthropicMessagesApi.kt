@@ -54,6 +54,7 @@ import works.resolve.pathfinder.ai.utils.AssistantMessageDiagnostic
 import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.DiagnosticErrorInfo
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.ToolCallArgumentsStream
 import works.resolve.pathfinder.ai.utils.appendAssistantMessageDiagnostic
 import works.resolve.pathfinder.ai.utils.applyOpenRouterReportedCost
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
@@ -68,8 +69,6 @@ import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.parseJsonWithRepair
-import works.resolve.pathfinder.ai.utils.parseStreamingJson
-import works.resolve.pathfinder.ai.utils.parseToolCallArguments
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
 import works.resolve.pathfinder.ai.utils.resolveTranscript
@@ -1552,7 +1551,7 @@ internal class AnthropicStreamState(
         /** Parsed arguments; seeded from the content_block_start input object. */
         var arguments: JsonObject = JsonObject(emptyMap())
         var argumentsError: String? = null
-        val partialJson = StringBuilder()
+        val argumentsStream = ToolCallArgumentsStream()
         override var built: Content? = null
     }
 
@@ -1706,8 +1705,7 @@ internal class AnthropicStreamState(
             "input_json_delta" -> {
                 val tool = (blocks[blockIndex] as? Tool) ?: return emptyList()
                 val value = delta["partial_json"].strOrNull() ?: ""
-                tool.partialJson.append(value)
-                tool.arguments = parseStreamingJson(tool.partialJson.toString())
+                tool.arguments = tool.argumentsStream.append(value)
                 tool.built = null
                 listOf(AssistantMessageEvent.ToolCallDelta(blockIndex, value))
             }
@@ -1741,10 +1739,10 @@ internal class AnthropicStreamState(
 
             is Tool -> {
                 // The content_block_start seed input is discarded here: like
-                // upstream, final arguments come from re-parsing the accumulated
-                // partial JSON only. Finished calls parse strictly so a malformed
-                // tail is reported instead of keeping a valid prefix.
-                val parsed = parseToolCallArguments(block.partialJson.toString())
+                // upstream, final arguments come from the accumulated argument
+                // stream only. Finished calls parse strictly so a malformed tail
+                // is reported instead of keeping a valid prefix.
+                val parsed = block.argumentsStream.finish()
                 block.arguments = parsed.arguments
                 block.argumentsError = parsed.argumentsError
                 block.built = null

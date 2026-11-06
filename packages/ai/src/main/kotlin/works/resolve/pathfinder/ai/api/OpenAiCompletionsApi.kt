@@ -60,6 +60,7 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ClientIdentity
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.ToolCallArgumentsStream
 import works.resolve.pathfinder.ai.utils.TranscriptToolSupport
 import works.resolve.pathfinder.ai.utils.applyOpenRouterReportedCost
 import works.resolve.pathfinder.ai.utils.arr
@@ -74,8 +75,6 @@ import works.resolve.pathfinder.ai.utils.long
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
-import works.resolve.pathfinder.ai.utils.parseStreamingJson
-import works.resolve.pathfinder.ai.utils.parseToolCallArguments
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
 import works.resolve.pathfinder.ai.utils.resolveSamplingParams
@@ -655,9 +654,10 @@ private suspend fun kotlinx.coroutines.flow.FlowCollector<AssistantMessageEvent>
  * the error path — while deltas append into per-block builders; immutable
  * content values are cached per block and reused while unchanged, so a
  * boundary snapshot re-renders only the blocks a delta landed in.
- * Streamed `tool_calls[].function.arguments` fragments accumulate as a
- * string and are parsed into the arguments object at every fragment and
- * again at finish, exactly like upstream. `custom` tool-call input
+ * Streamed `tool_calls[].function.arguments` fragments feed one
+ * [ToolCallArgumentsStream] per call, whose partial arguments replace the
+ * block's at every fragment and whose finished text is parsed once at the
+ * end, exactly like upstream. `custom` tool-call input
  * accumulates raw fragments through [GrammarToolInputJsonBuffer], which
  * yields the JSON-encoded delta view while the accumulated input is stored
  * as the arguments object's sole property.
@@ -672,7 +672,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     internal class ToolCallAccumulator {
         var id: String = ""
         var name: String = ""
-        val partialArgs = StringBuilder()
+        val argumentsStream = ToolCallArgumentsStream()
         var arguments: JsonObject = JsonObject(emptyMap())
         var argumentsError: String? = null
 
@@ -855,8 +855,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         val arguments = function?.get("arguments").strOrNull()
         if (!arguments.isNullOrEmpty()) {
             argDelta = arguments
-            accumulator.partialArgs.append(arguments)
-            accumulator.arguments = parseStreamingJson(accumulator.partialArgs.toString())
+            accumulator.arguments = accumulator.argumentsStream.append(arguments)
         } else {
             val input = custom?.get("input").strOrNull()
             if (!input.isNullOrEmpty()) {
@@ -899,7 +898,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
                             events.add(AssistantMessageEvent.ToolCallDelta(index, delta))
                         }
                     } else {
-                        val parsed = parseToolCallArguments(accumulator.partialArgs.toString())
+                        val parsed = accumulator.argumentsStream.finish()
                         accumulator.arguments = parsed.arguments
                         accumulator.argumentsError = parsed.argumentsError
                     }
