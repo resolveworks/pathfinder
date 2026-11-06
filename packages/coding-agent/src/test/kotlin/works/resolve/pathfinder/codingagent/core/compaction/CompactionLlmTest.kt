@@ -20,7 +20,6 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
@@ -30,6 +29,7 @@ import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.testing.fixedApiKeyAuth
 import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
@@ -149,7 +149,7 @@ class CompactionLlmTest {
                         "https://faux.test",
                         // Ambient credential so these tests don't exercise stored-
                         // credential resolution.
-                        authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
+                        auth = fixedApiKeyAuth("faux-key"),
                         models = listOf(model),
                         apis = mapOf("faux-api" to api)
                     )

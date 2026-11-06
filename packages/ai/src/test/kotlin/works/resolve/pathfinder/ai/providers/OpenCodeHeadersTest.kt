@@ -7,15 +7,18 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.Provider
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.utils.normalizeContext
+import works.resolve.pathfinder.ai.testing.fixedApiKeyAuth
 
 class OpenCodeHeadersTest {
 
@@ -36,64 +39,72 @@ class OpenCodeHeadersTest {
         id = "model",
         name = "Model",
         api = "opencode",
-        provider = "opencode",
-        baseUrl = "https://example.test",
+        provider = "custom",
+        baseUrl = "https://opencode.ai/zen/v1",
         input = listOf(InputModality.TEXT)
     )
 
-    private val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
+    private fun models(api: RecordingApi) = Models(
+        listOf(
+            Provider(
+                id = "custom",
+                name = "Custom",
+                baseUrl = model.baseUrl,
+                auth = fixedApiKeyAuth("key"),
+                models = listOf(model),
+                apis = mapOf(model.api to api)
+            )
+        )
+    )
+
+    private suspend fun stream(api: RecordingApi, options: SimpleStreamOptions) {
+        models(api).stream(
+            model,
+            Context(messages = listOf(UserMessage.ofText("hi"))),
+            options
+        ).toList()
+    }
 
     @Test
     fun `adds the session header when unset`() = runTest {
         val api = RecordingApi()
-        OpenCodeSessionHeaderChatApi(api).streamSimple(
-            model,
-            context,
-            SimpleStreamOptions(sessionId = "session-1")
-        )
-        assertEquals("session-1", api.captured?.headers?.get(OPENCODE_SESSION_HEADER))
+        stream(api, SimpleStreamOptions(sessionId = "session-1"))
+        assertEquals("session-1", api.captured?.headers?.get("x-opencode-session"))
     }
 
     @Test
     fun `a null session header still suppresses adding it`() = runTest {
-        // pi's suppression checks header presence, not a non-blank value: an
-        // explicit null keeps the header absent downstream.
+        // Explicit request headers win over the target-derived session header.
         val api = RecordingApi()
-        OpenCodeSessionHeaderChatApi(api).streamSimple(
-            model,
-            context,
+        stream(
+            api,
             SimpleStreamOptions(
                 sessionId = "session-1",
-                headers = mapOf(OPENCODE_SESSION_HEADER to null)
+                headers = mapOf("x-opencode-session" to null)
             )
         )
-        assertNull(api.captured?.headers?.get(OPENCODE_SESSION_HEADER))
-        assertTrue(api.captured?.headers?.containsKey(OPENCODE_SESSION_HEADER) == true)
+        assertNull(api.captured?.headers?.get("x-opencode-session"))
+        assertTrue(api.captured?.headers?.containsKey("x-opencode-session") == true)
     }
 
     @Test
     fun `suppression is case insensitive and keeps the caller value`() = runTest {
         val api = RecordingApi()
-        OpenCodeSessionHeaderChatApi(api).streamSimple(
-            model,
-            context,
+        stream(
+            api,
             SimpleStreamOptions(
                 sessionId = "session-1",
                 headers = mapOf("X-Opencode-Session" to "caller-value")
             )
         )
         assertEquals("caller-value", api.captured?.headers?.get("X-Opencode-Session"))
-        assertFalse(api.captured?.headers?.containsKey(OPENCODE_SESSION_HEADER) == true)
+        assertFalse(api.captured?.headers?.containsKey("x-opencode-session") == true)
     }
 
     @Test
     fun `no session id leaves the options untouched`() = runTest {
         val api = RecordingApi()
-        OpenCodeSessionHeaderChatApi(api).streamSimple(
-            model,
-            context,
-            SimpleStreamOptions()
-        )
+        stream(api, SimpleStreamOptions())
         assertTrue(api.captured?.headers?.isEmpty() == true)
     }
 }

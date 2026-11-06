@@ -14,6 +14,7 @@ import works.resolve.pathfinder.ai.api.OpenAiCompletionsApi
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.TestCatalogs
+import works.resolve.pathfinder.ai.testing.credentialApiKeyAuth
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 
@@ -26,10 +27,7 @@ class ModelsRegistryTest {
                 id = "zai",
                 name = "Z.AI",
                 baseUrl = TestCatalogs.ZAI.baseUrl,
-                authResolver = { explicitKey, _ ->
-                    explicitKey?.let { ResolvedAuth(it) }
-                        ?: storedKey?.let { ResolvedAuth(it) }
-                },
+                auth = credentialApiKeyAuth(fallback = storedKey),
                 models = TestCatalogs.MODELS,
                 apiId = "openai-completions",
                 api = OpenAiCompletionsApi(

@@ -55,13 +55,13 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.AuthInteraction
+import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
 import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.auth.CredentialInfo
 import works.resolve.pathfinder.ai.auth.CredentialStore
 import works.resolve.pathfinder.ai.auth.LoginOptions
 import works.resolve.pathfinder.ai.auth.MapCatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.ModelAuth
-import works.resolve.pathfinder.ai.auth.NoopAuthContext
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
@@ -77,7 +77,6 @@ import works.resolve.pathfinder.codingagent.core.createAgentSession
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
-import works.resolve.pathfinder.runtime.catalogAuthResolver
 import works.resolve.pathfinder.tools.websearch.BraveSearchExecutor
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 import works.resolve.pathfinder.tools.websearch.SearchTransport
@@ -102,6 +101,7 @@ internal val testModel = Model(
 internal class FakeCredentialStore : CredentialStore {
     val creds = mutableMapOf<String, Credential>()
     var failWrites = false
+    var beforeModify: (suspend () -> Unit)? = null
     private fun check() {
         if (failWrites) throw java.io.IOException("credential store failed")
     }
@@ -117,6 +117,7 @@ internal class FakeCredentialStore : CredentialStore {
         providerId: String,
         update: suspend (Credential?) -> Credential?
     ): Credential? {
+        beforeModify?.invoke()
         check()
         val next = update(creds[providerId])
         if (next != null) creds[providerId] = next
@@ -177,6 +178,9 @@ internal class ChatHarness(
 ) {
     val viewModels = CopyOnWriteArrayList<ChatViewModel>()
 
+    /** Process-wide teardown scope; cancelled after each test. */
+    val processScope = CoroutineScope(SupervisorJob() + testDispatcher)
+
     val credentials = FakeCredentialStore()
 
     private val fakeWebSearchTool: AgentTool = object : AgentTool {
@@ -208,11 +212,6 @@ internal class ChatHarness(
     )
     val authRegistry = MapCatalogAuthRegistry(
         mapOf("zai" to oauthZai, "oauth-only" to oauthOnly, "github-copilot" to oauthCopilot)
-    )
-    val authService = ProviderAuthService(
-        catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
-        registry = authRegistry,
-        credentials = credentials
     )
     val dataStoreScope = CoroutineScope(SupervisorJob() + testDispatcher)
     val failingDataStore = FailingDataStore(
@@ -307,22 +306,23 @@ internal class ChatHarness(
 
     /**
      * Live-switch model stack built through the real production path
-     * ([CatalogProvider.toRuntimeProvider] + [catalogAuthResolver]), so
-     * setModel's checkAuth resolves stored credentials exactly like
-     * production.
+     * ([CatalogProvider.toRuntimeProvider] + catalog auth), so setModel's
+     * checkAuth resolves stored credentials exactly like production.
      */
     val switchModels = Models(
-        works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG.providers.map { entry ->
-            entry.toRuntimeProvider(
-                transport = transport,
-                authResolver = catalogAuthResolver(
-                    entry,
-                    credentials,
-                    NoopAuthContext,
-                    authRegistry
+        providers = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG.providers
+            .map { entry ->
+                entry.toRuntimeProvider(
+                    transport = transport,
+                    auth = CatalogProviderAuth(entry, authRegistry)
                 )
-            )
-        }
+            },
+        credentials = credentials
+    )
+
+    val authService = ProviderAuthService(
+        catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
+        models = switchModels
     )
 
     private val nativeFactory = NativeAgentFactory(
@@ -357,7 +357,7 @@ internal class ChatHarness(
             tools = listOf(fakeWebSearchTool),
             customPrompt = appSettings.customPrompt,
             // pi's restore presence check, wired like production.
-            hasConfiguredAuth = { providerId -> authService.isConfigured(providerId) },
+            hasConfiguredAuth = { providerId -> switchModels.hasConfiguredAuth(providerId) },
             // Keep the prompt loop inside runTest's virtual clock: the
             // production default (Dispatchers.Default) is invisible to it.
             loopDispatcher = testDispatcher,
@@ -386,6 +386,7 @@ internal class ChatHarness(
         sessionIdFactory = sessionIdFactory,
         sessionIoDispatcher = sessionIoDispatcher,
         agentFactory = factory,
+        processScope = processScope,
         modelResolver = modelResolver,
         searchProviderService = searchProviders,
         webSearchTool = webSearchTool,
@@ -492,6 +493,21 @@ internal abstract class ChatHarnessTest {
     protected fun harness(): ChatHarness =
         ChatHarness(tmpFolder, mainDispatcherRule.testDispatcher).also { harnesses += it }
 
+    /** Invokes [ChatViewModel.onCleared] through its owner store. */
+    protected fun clearViewModel(vm: ChatViewModel) {
+        val store = androidx.lifecycle.ViewModelStore()
+        val provider = androidx.lifecycle.ViewModelProvider(
+            store,
+            object : androidx.lifecycle.ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T =
+                    vm as T
+            }
+        )
+        provider[ChatViewModel::class.java]
+        store.clear()
+    }
+
     /** Safety net: passing tests join via [closeForTest]; a test that failed first leaves live ViewModel scopes to cancel and join here. */
     @After
     fun disposeHarnesses() {
@@ -503,6 +519,7 @@ internal abstract class ChatHarnessTest {
                 }
             }
             harness.dataStoreScope.cancel()
+            harness.processScope.cancel()
         }
         harnesses.clear()
     }

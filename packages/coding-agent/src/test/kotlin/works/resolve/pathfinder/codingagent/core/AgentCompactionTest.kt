@@ -29,7 +29,6 @@ import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
@@ -39,6 +38,7 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.testing.fixedApiKeyAuth
 import works.resolve.pathfinder.codingagent.core.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.CompactionSettings
 import works.resolve.pathfinder.codingagent.core.ContextEditEntry
@@ -109,7 +109,7 @@ class AgentCompactionTest {
                     model.provider,
                     model.provider,
                     "https://faux.test",
-                    authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
+                    auth = fixedApiKeyAuth("faux-key"),
                     models = listOf(model),
                     apis = mapOf(model.api to api)
                 )

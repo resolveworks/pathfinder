@@ -55,7 +55,6 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
@@ -96,7 +95,6 @@ import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
-import works.resolve.pathfinder.runtime.catalogAuthResolver
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 import works.resolve.pathfinder.tools.websearch.WebSearchTool
@@ -548,12 +546,10 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
     fun storedOAuthCredential_configuresProvider_onlyWithRegisteredFlow() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
-            // A stored OAuth credential marks the provider configured where a
-            // flow is registered (zai)...
+            // Only the registered flow makes a provider configured; stored
+            // types stay visible for sign-out regardless.
             h.credentials.creds["zai"] =
                 OAuthCredential("access-token-9", "refresh-token-9", Long.MAX_VALUE)
-            // ...but resolves as unconfigured without a handler (cloudflare has
-            // no registered flow).
             h.credentials.creds["cloudflare-ai-gateway"] =
                 OAuthCredential("access-token-9", "refresh-token-9", Long.MAX_VALUE)
 
@@ -562,7 +558,10 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             assertTrue(state.providerOptions.first { it.id == "zai" }.configured)
             assertEquals(AuthType.OAUTH, state.providerOptions.first { it.id == "zai" }.authType)
             assertFalse(state.providerOptions.first { it.id == "cloudflare-ai-gateway" }.configured)
-            assertNull(state.providerOptions.first { it.id == "cloudflare-ai-gateway" }.authType)
+            assertEquals(
+                AuthType.OAUTH,
+                state.providerOptions.first { it.id == "cloudflare-ai-gateway" }.authType
+            )
             assertTrue(state.modelOptions.all { it.providerId == "zai" })
             assertTrue(state.modelOptions.isNotEmpty())
             assertFalse(state.toString().contains("access-token-9"))

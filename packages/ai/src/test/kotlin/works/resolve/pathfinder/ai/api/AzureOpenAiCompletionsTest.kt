@@ -29,6 +29,7 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
@@ -57,8 +58,9 @@ class AzureOpenAiCompletionsTest {
     private fun models(transport: FakeTransport) = Models(
         listOf(
             azureProvider().toRuntimeProvider(
-                transport,
-                ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 })
+                transport = transport,
+                auth = CatalogProviderAuth(azureProvider()),
+                retry = ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 })
             )
         )
     )

@@ -6,6 +6,7 @@ import com.mikepenz.markdown.model.State
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -94,6 +95,8 @@ class ChatViewModel(
     /** Where session manager IO runs; the test harness keeps it on virtual time. */
     private val sessionIoDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val agentFactory: AgentFactory,
+    /** Process-wide scope for teardown work that must outlive this ViewModel. */
+    private val processScope: CoroutineScope,
     /** Resolves a provider/model pair to the effective request model; throwing input is surfaced as a safe unknown-model error. */
     private val modelResolver: (providerId: String, modelId: String) -> Model,
     /**
@@ -1131,6 +1134,16 @@ class ChatViewModel(
                 )
             }
         }
+    }
+
+    /**
+     * Best-effort analogue of pi's process-exit credential settle: a detached
+     * OAuth refresh may have already spent the single-use refresh token, so
+     * start waiting for its write. Android has no deterministic process-exit
+     * hook; the process may die first.
+     */
+    override fun onCleared() {
+        processScope.launch { authService.settleCredentialWrites() }
     }
 
     // ---- app foreground tracking (Android platform glue for OAuth gating) ----

@@ -17,12 +17,14 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.testing.fixedApiKeyAuth
+import works.resolve.pathfinder.ai.testing.testApiKeyAuth
+import works.resolve.pathfinder.ai.testing.testProviderAuth
 
 /**
  * Characterization of createAgentSession against pi's sdk.ts ordering:
@@ -72,10 +74,10 @@ class CreateAgentSessionTest {
             id = id,
             name = id,
             baseUrl = "https://$id.example.invalid",
-            authResolver = if (authenticated) {
-                { _, _ -> ResolvedAuth(apiKey = "k") }
+            auth = if (authenticated) {
+                fixedApiKeyAuth("k")
             } else {
-                { _, _ -> null }
+                testProviderAuth(apiKey = testApiKeyAuth { _, _ -> null })
             },
             models = models,
             apis = emptyMap()
@@ -93,7 +95,7 @@ class CreateAgentSessionTest {
         streamFn: StreamFn = idleStream,
         hasConfiguredAuth: suspend (
             String
-        ) -> Boolean = { providerId -> models.checkAuth(providerId) }
+        ) -> Boolean = { providerId -> models.checkAuth(providerId) != null }
     ): CreateAgentSessionResult = createAgentSession(
         manager = manager,
         settingsManager = SettingsManager.inMemory(settings),
@@ -258,10 +260,14 @@ class CreateAgentSessionTest {
                     id = model.provider,
                     name = model.provider,
                     baseUrl = "https://${model.provider}.example.invalid",
-                    authResolver = { _, _ ->
-                        resolverCalls++
-                        ResolvedAuth(apiKey = "k")
-                    },
+                    auth = testProviderAuth(
+                        apiKey = testApiKeyAuth { _, _ ->
+                            resolverCalls++
+                            works.resolve.pathfinder.ai.auth.AuthResult(
+                                works.resolve.pathfinder.ai.auth.ModelAuth(apiKey = "k")
+                            )
+                        }
+                    ),
                     models = listOf(model),
                     apis = emptyMap()
                 )
@@ -404,10 +410,10 @@ class FindInitialModelTest {
             id = id,
             name = id,
             baseUrl = "https://$id.example.invalid",
-            authResolver = if (authenticated) {
-                { _, _ -> ResolvedAuth(apiKey = "k") }
+            auth = if (authenticated) {
+                fixedApiKeyAuth("k")
             } else {
-                { _, _ -> null }
+                testProviderAuth(apiKey = testApiKeyAuth { _, _ -> null })
             },
             models = models,
             apis = emptyMap()
@@ -420,7 +426,10 @@ class FindInitialModelTest {
         defaultProvider: String? = null,
         defaultModelId: String? = null,
         defaultThinkingLevel: ModelThinkingLevel? = null,
-        modelThinkingLevels: Map<String, ModelThinkingLevel> = emptyMap()
+        modelThinkingLevels: Map<String, ModelThinkingLevel> = emptyMap(),
+        hasConfiguredAuth: suspend (String) -> Boolean = { providerId ->
+            models.checkAuth(providerId) != null
+        }
     ): InitialModelResult = findInitialModel(
         scopedModels = scopedModels,
         isContinuing = isContinuing,
@@ -428,7 +437,8 @@ class FindInitialModelTest {
         defaultModelId = defaultModelId,
         defaultThinkingLevel = defaultThinkingLevel,
         modelThinkingLevels = modelThinkingLevels,
-        models = models
+        models = models,
+        hasConfiguredAuth = hasConfiguredAuth
     )
 
     /** pi: "findInitialModel ignores an unauthenticated saved default". */

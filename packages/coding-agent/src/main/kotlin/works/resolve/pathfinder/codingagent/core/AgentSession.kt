@@ -116,6 +116,11 @@ class AgentSession(
     private val appendSystemPrompt: String = "",
     /** Provider stack for compaction summarization; null disables automatic compaction. */
     private val models: Models? = null,
+    /**
+     * pi's ModelRuntime.hasConfiguredAuth seam: cheap credential presence,
+     * checked before resolving auth (which can refresh OAuth tokens).
+     */
+    private val hasConfiguredAuth: suspend (providerId: String) -> Boolean = { false },
     /** Injectable backoff sleep so tests never wait. */
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     /** Wall clock for minting message timestamps. */
@@ -489,7 +494,9 @@ class AgentSession(
             // appends has no pathfinder equivalent (the app owns login UX)
             // and is dropped from both messages, as in [Messages.kt].
             models?.let { stack ->
-                if (!stack.checkAuth(model.provider)) {
+                val configured = hasConfiguredAuth(model.provider)
+                val check = if (configured) null else stack.checkAuth(model.provider)
+                if (!configured && check == null) {
                     val message =
                         if (stack.isUsingOAuth(model.provider)) {
                             "Authentication failed for \"${model.provider}\". " +
@@ -738,7 +745,7 @@ class AgentSession(
     suspend fun setModel(model: Model, persist: Boolean = false) {
         val models = this.models
             ?: throw IllegalStateException("No model stack available for setModel")
-        if (!models.checkAuth(model.provider)) {
+        if (models.checkAuth(model.provider) == null) {
             throw IllegalStateException("No API key for ${model.provider}/${model.id}")
         }
         val thinkingLevel = getThinkingLevelForModelSwitch(model)

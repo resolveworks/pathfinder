@@ -25,7 +25,6 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.Provider
 import works.resolve.pathfinder.ai.ProviderResponse
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
@@ -127,8 +126,10 @@ class FauxProvider(
                 id = model.provider,
                 name = model.provider,
                 baseUrl = model.baseUrl,
-                authResolver = { _, _ ->
-                    if (configuredAuth) ResolvedAuth(apiKey = "faux-key") else null
+                auth = if (configuredAuth) {
+                    fixedApiKeyAuth("faux-key")
+                } else {
+                    testProviderAuth(apiKey = testApiKeyAuth { _, _ -> null })
                 },
                 models = listOf(model) + additionalModels,
                 apis = mapOf(model.api to api)

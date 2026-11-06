@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.testing.fixedApiKeyAuth
 import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
 import works.resolve.pathfinder.telemetry.SpanOptions
 import works.resolve.pathfinder.telemetry.SpanStatus
@@ -88,7 +89,7 @@ class ModelStreamTelemetryTest {
                 id = model.provider,
                 name = model.provider,
                 baseUrl = model.baseUrl,
-                authResolver = { _, _ -> ResolvedAuth(apiKey = "key") },
+                auth = fixedApiKeyAuth("key"),
                 models = listOf(model),
                 apiId = model.api,
                 api = api

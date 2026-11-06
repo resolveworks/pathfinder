@@ -27,7 +27,10 @@ import works.resolve.pathfinder.ai.ThinkingFormat
 import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.api.AzureOpenAiCompletionsChatApi
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
+import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.auth.ModelAuth
+import works.resolve.pathfinder.ai.auth.ProviderAuth as RuntimeProviderAuth
+import works.resolve.pathfinder.ai.filterCatalogModels
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
@@ -137,28 +140,20 @@ class CatalogProvider(
      */
     fun toRuntimeProvider(
         transport: HttpStreamingTransport,
+        auth: RuntimeProviderAuth,
         retry: ProviderRetry = ProviderRetry(),
-        authResolver: (
-            suspend (
-                apiKey: String?,
-                env: Map<String, String>
-            ) -> ResolvedAuth?
-        )? = null,
         webSocketTransport: WebSocketStreamingTransport? = null,
-        auth: works.resolve.pathfinder.ai.auth.ProviderAuth? = null
+        filterModels: ((List<Model>, Credential?) -> List<Model>)? =
+            { available, credential -> filterCatalogModels(this, credential) }
     ): Provider = Provider(
         id = id,
         name = name,
         baseUrl = baseUrl,
         auth = auth,
-        authResolver = authResolver,
         models = models,
         apis = apis.mapNotNull { apiId ->
             ChatApiRegistry.create(apiId, transport, retry, webSocketTransport)?.let { api ->
                 val wrapped = when {
-                    id == "opencode" || id == "opencode-go" ->
-                        OpenCodeSessionHeaderChatApi(api)
-
                     id == "azure" && apiId == ChatApiRegistry.OPENAI_COMPLETIONS ->
                         AzureOpenAiCompletionsChatApi(api)
 
@@ -166,7 +161,8 @@ class CatalogProvider(
                 }
                 apiId to wrapped
             }
-        }.toMap()
+        }.toMap(),
+        filterModels = filterModels
     )
 }
 

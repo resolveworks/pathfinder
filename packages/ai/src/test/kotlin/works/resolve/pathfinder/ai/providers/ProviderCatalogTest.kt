@@ -21,6 +21,7 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.ThinkingFormat
 import works.resolve.pathfinder.ai.ThinkingLevelMap
+import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.TestCatalogs
 
@@ -900,7 +901,7 @@ class ProviderCatalogTest {
     fun `mixed api provider runtime dispatch registers only implemented apis`() {
         val catalog = realAsset()
         val entry = catalog.getProvider("cloudflare-ai-gateway")!!
-        val runtime = entry.toRuntimeProvider(FakeTransport())
+        val runtime = entry.toRuntimeProvider(FakeTransport(), CatalogProviderAuth(entry))
         assertEquals(
             setOf("openai-completions", "anthropic-messages", "openai-responses"),
             runtime.apis.keys

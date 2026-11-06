@@ -25,12 +25,12 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ThinkingLevelMap
+import works.resolve.pathfinder.ai.testing.fixedApiKeyAuth
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 
@@ -79,7 +79,7 @@ class AgentSessionThinkingTest {
         id = model.provider,
         name = model.provider,
         baseUrl = model.baseUrl,
-        authResolver = { _, _ -> ResolvedAuth(apiKey = "k") },
+        auth = fixedApiKeyAuth("k"),
         models = listOf(model),
         apis = emptyMap() // StreamFn is scripted; no request flows through Models
     )
