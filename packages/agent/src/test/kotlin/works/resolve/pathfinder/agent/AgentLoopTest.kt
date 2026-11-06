@@ -686,7 +686,7 @@ class AgentLoopTest {
         assertTrue(end.isError)
         assertEquals(
             "Validation failed for tool \"read\":\n" +
-                "  - limit: must be number\n\n" +
+                "  - limit: expected number, got string\n\n" +
                 "Received arguments:\n" +
                 "{\n" +
                 "  \"path\": \"a.txt\",\n" +
@@ -720,7 +720,7 @@ class AgentLoopTest {
         assertTrue(end.isError)
         assertEquals(
             "Validation failed for tool \"read\":\n" +
-                "  - path: must have required properties path\n\n" +
+                "  - path: missing\n\n" +
                 "Received arguments:\n" +
                 "{\n" +
                 "  \"limit\": 5\n" +

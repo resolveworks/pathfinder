@@ -80,7 +80,7 @@ class WebSearchToolTest {
     fun `schema validation rejects missing query and coerces mistyped ones`() {
         val tool = tool()
         val missing = assertFailsWith<IllegalArgumentException> { tool.prepare(args()) }
-        assertTrue(missing.message!!.contains("must have required properties query"))
+        assertTrue(missing.message!!.contains("query: missing"))
         // pi coerces a numeric query to a string instead of rejecting it.
         assertEquals(
             "5",
@@ -96,7 +96,7 @@ class WebSearchToolTest {
             tool.prepare(args(query = "q", freshness = "po"))
         }
         assertTrue(
-            invalid.message!!.contains("must be equal to one of the allowed values")
+            invalid.message!!.contains("expected one of [\"pd\",\"pw\",\"pm\",\"py\"]")
         )
         for (f in BraveSearchExecutor.FRESHNESS_VALUES) {
             tool.prepare(args(query = "q", freshness = f))

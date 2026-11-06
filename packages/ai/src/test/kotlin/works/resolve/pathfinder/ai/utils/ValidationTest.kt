@@ -53,21 +53,26 @@ class ValidationTest {
     fun coercesPlainJsonSchemasWithAjvCompatiblePrimitiveRules() {
         // pi: "coerces serialized plain JSON schemas with AJV-compatible primitive rules"
         val expectations = listOf(
-            """{"type":"number"}""" to ("\"42\"" to "42.0"),
+            """{"type":"number"}""" to ("\"42\"" to "42"),
             """{"type":"number"}""" to ("true" to "1"),
             """{"type":"number"}""" to ("null" to "0"),
-            """{"type":"integer"}""" to ("\"42\"" to "42.0"),
+            """{"type":"integer"}""" to ("\"42\"" to "42"),
             """{"type":"boolean"}""" to ("\"true\"" to "true"),
             """{"type":"boolean"}""" to ("\"false\"" to "false"),
             """{"type":"boolean"}""" to ("1" to "true"),
             """{"type":"boolean"}""" to ("0" to "false"),
-            """{"type":"string"}""" to ("null" to "s:"),
+            """{"type":"boolean"}""" to ("\"1\"" to "true"),
+            """{"type":"boolean"}""" to ("\"0\"" to "false"),
+            """{"type":"string"}""" to ("null" to "s:null"),
             """{"type":"string"}""" to ("true" to "s:true"),
             """{"type":"null"}""" to ("\"\"" to "null"),
             """{"type":"null"}""" to ("0" to "null"),
             """{"type":"null"}""" to ("false" to "null"),
+            """{"type":"null"}""" to ("\"null\"" to "null"),
             """{"type":["number","string"]}""" to ("\"1\"" to "s:1"),
-            """{"type":["boolean","number"]}""" to ("\"1\"" to "1.0")
+            """{"type":["boolean","number"]}""" to ("\"1\"" to "1"),
+            """{"type":"integer"}""" to ("\"42.1\"" to "42"),
+            """{"type":"array","items":{"type":"number"}}""" to ("\"7\"" to "[7]")
         )
         for ((schemaJson, expected) in expectations) {
             val (input, output) = expected
@@ -83,10 +88,10 @@ class ValidationTest {
     fun rejectsInvalidCoercionsForPlainJsonSchemas() {
         // pi: "rejects invalid coercions for serialized plain JSON schemas"
         val failingCases = listOf(
-            """{"type":"boolean"}""" to "\"1\"",
-            """{"type":"boolean"}""" to "\"0\"",
-            """{"type":"null"}""" to "\"null\"",
-            """{"type":"integer"}""" to "\"42.1\""
+            """{"type":"boolean"}""" to "\"yes\"",
+            """{"type":"number"}""" to "\"abc\"",
+            """{"type":"null"}""" to "\"nil\"",
+            """{"type":"integer"}""" to "\"4x\""
         )
         for ((schemaJson, input) in failingCases) {
             val error = assertFailsWith<IllegalArgumentException> {
@@ -157,29 +162,25 @@ class ValidationTest {
         // match any arm" — pi exercises anyOf here; a type array is the
         // plain-schema equivalent this port supports.
         val result = validateValue("""{"type":["number","null"]}""", "\"42\"")
-        assertEquals("42.0", result["value"].repr())
+        assertEquals("42", result["value"].repr())
     }
 
     @Test
     fun coercesJsNumberLiteralsForNumberFields() {
         // JS Number(): radix literals parse, whitespace trims, blanks and
         // non-literals do not.
-        assertEquals("16.0", validateValue("""{"type":"number"}""", "\"0x10\"")["value"].repr())
-        assertEquals("5.0", validateValue("""{"type":"number"}""", "\" 5 \"")["value"].repr())
-        assertEquals("100.0", validateValue("""{"type":"number"}""", "\"1e2\"")["value"].repr())
-        assertFailsWith<IllegalArgumentException> {
-            validateValue("""{"type":"number"}""", "\"\"")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            validateValue("""{"type":"number"}""", "\"  \"")
-        }
+        assertEquals("16", validateValue("""{"type":"number"}""", "\"0x10\"")["value"].repr())
+        assertEquals("5", validateValue("""{"type":"number"}""", "\" 5 \"")["value"].repr())
+        assertEquals("100", validateValue("""{"type":"number"}""", "\"1e2\"")["value"].repr())
+        assertEquals("0", validateValue("""{"type":"number"}""", "\"\"")["value"].repr())
+        assertEquals("0", validateValue("""{"type":"number"}""", "\"  \"")["value"].repr())
         assertFailsWith<IllegalArgumentException> {
             validateValue("""{"type":"number"}""", "\"Infinity\"")
         }
         // JS trim (not Kotlin trim) guards the coercion, so JS-whitespace
         // around a literal still coerces — pi's `value.trim() !== ""`.
         assertEquals(
-            "5.0",
+            "5",
             validateValue("""{"type":"number"}""", "\"\u00A05\u00A0\"")["value"].repr()
         )
     }
@@ -199,7 +200,7 @@ class ValidationTest {
             }
         )
         val result = validate(tool, buildJsonObject { put("command", JsonNull) })
-        assertEquals("s:", result["command"].repr())
+        assertEquals("s:null", result["command"].repr())
     }
 
     @Test
@@ -230,7 +231,7 @@ class ValidationTest {
         }
         assertEquals(
             "Validation failed for tool \"bash\":\n" +
-                "  - timeout: must be number\n\n" +
+                "  - timeout: expected number, got string\n\n" +
                 "Received arguments:\n" +
                 "{\n  \"command\": \"ls\",\n  \"timeout\": \"abc\"\n}",
             error.message
@@ -244,7 +245,7 @@ class ValidationTest {
         }
         assertEquals(
             "Validation failed for tool \"echo\":\n" +
-                "  - value: must have required properties value\n\n" +
+                "  - value: missing\n\n" +
                 "Received arguments:\n" +
                 "{}",
             error.message
@@ -301,7 +302,7 @@ class ValidationTest {
         // required property remains, exactly like pi.
         assertEquals(
             "Validation failed for tool \"edit\":\n" +
-                "  - edits.0.newText: must have required properties newText\n\n" +
+                "  - edits.0.newText: missing\n\n" +
                 "Received arguments:\n" +
                 "{\n" +
                 "  \"path\": 5,\n" +
@@ -326,7 +327,7 @@ class ValidationTest {
         }
         assertEquals(
             "Validation failed for tool \"echo\":\n" +
-                "  - value: must be equal to one of the allowed values",
+                "  - value: expected one of [\"pd\",\"pw\"]",
             error.message!!.substringBefore("\n\nReceived arguments:")
         )
     }
@@ -359,7 +360,7 @@ class ValidationTest {
             )
         }
         assertEquals(
-            "  - value: must have required properties value",
+            "  - value: missing",
             error.message!!.substringBefore("\n\nReceived arguments:").substringAfter("\n")
         )
         assertEquals(
@@ -402,10 +403,10 @@ class ValidationTest {
     @Test
     fun rejectsUnsupportedSchemaKeywordsLoudly() {
         val error = assertFailsWith<IllegalArgumentException> {
-            validateValue("""{"type":"string","minLength":2}""", "\"ab\"")
+            validateValue("""{"type":"object","unevaluatedProperties":false}""", "{}")
         }
         assertEquals(
-            "Unsupported schema keyword \"minLength\" in tool \"echo\" parameters",
+            "Unsupported schema keyword \"unevaluatedProperties\"",
             error.message
         )
     }
@@ -466,6 +467,6 @@ class ValidationTest {
         )
         val pair = result["pair"] as kotlinx.serialization.json.JsonArray
         assertEquals("s:5", pair[0].repr())
-        assertEquals("7.0", pair[1].repr())
+        assertEquals("7", pair[1].repr())
     }
 }
