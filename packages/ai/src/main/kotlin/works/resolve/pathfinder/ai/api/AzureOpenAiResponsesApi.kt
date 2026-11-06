@@ -14,6 +14,7 @@ import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.PromptCacheKeyMode
 import works.resolve.pathfinder.ai.ProviderAuthException
 import works.resolve.pathfinder.ai.ProviderResponse
 import works.resolve.pathfinder.ai.ProviderStreamException
@@ -198,18 +199,20 @@ class AzureOpenAiResponsesApi(
         val startedAtMs = clock.now().toEpochMilliseconds()
         val normalizedContext =
             resolveTranscript(context, model.responsesCompat?.supportsMidConvoSystemMessages)
-        val grammarToolInputProperties = createGrammarToolInputProperties(
-            getDeclaredTools(normalizedContext.messages),
-            model.responsesCompat?.supportsOpenAIGrammarTools ?: false
-        )
-        val state = OpenAiResponsesShared.ResponsesStreamState(
-            model,
-            startedAtMs,
-            OpenAiResponsesShared.StreamProcessingOptions(
-                grammarToolInputProperties = grammarToolInputProperties
-            )
-        )
+        var state: OpenAiResponsesShared.ResponsesStreamState? = null
         try {
+            val grammarToolInputProperties = createGrammarToolInputProperties(
+                getDeclaredTools(normalizedContext.messages),
+                model.responsesCompat?.supportsOpenAIGrammarTools ?: false
+            )
+            val current = OpenAiResponsesShared.ResponsesStreamState(
+                model,
+                startedAtMs,
+                OpenAiResponsesShared.StreamProcessingOptions(
+                    grammarToolInputProperties = grammarToolInputProperties
+                )
+            )
+            state = current
             val apiKey = options.apiKey
                 ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
             val config = resolveAzureConfig(model, options)
@@ -248,26 +251,39 @@ class AzureOpenAiResponsesApi(
                 model
             )
 
-            emit(AssistantMessageEvent.Start(state.partialSnapshot()))
+            emit(AssistantMessageEvent.Start(current.partialSnapshot()))
             response.events.collect { event ->
-                processSseEvent(event, state)?.forEach { emit(it) }
+                processSseEvent(event, current)?.forEach { emit(it) }
             }
-            state.assertTerminalEvent()
-            if (state.stopReason == StopReason.PENDING) {
+            current.assertTerminalEvent()
+            if (current.stopReason == StopReason.PENDING) {
                 throw ProviderStreamException(
                     "Azure OpenAI Responses stream ended without a stop reason"
                 )
             }
-            if (state.stopReason == StopReason.ERROR || state.stopReason == StopReason.ABORTED) {
-                throw ProviderStreamException(state.errorMessage ?: "An unknown error occurred")
+            if (current.stopReason == StopReason.ERROR ||
+                current.stopReason == StopReason.ABORTED
+            ) {
+                throw ProviderStreamException(
+                    current.errorMessage ?: "An unknown error occurred"
+                )
             }
-            emit(AssistantMessageEvent.Done(state.stopReason, state.partialSnapshot()))
+            emit(
+                AssistantMessageEvent.Done(
+                    current.stopReason,
+                    current.partialSnapshot()
+                )
+            )
         } catch (error: Exception) {
             if (error is CancellationException) throw error
+            val failed = state ?: OpenAiResponsesShared.ResponsesStreamState(
+                model,
+                startedAtMs
+            )
             emit(
                 AssistantMessageEvent.Error(
                     StopReason.ERROR,
-                    state.partialSnapshot().copy(
+                    failed.partialSnapshot().copy(
                         stopReason = StopReason.ERROR,
                         errorMessage = formatResponsesProviderError(
                             error,
@@ -319,8 +335,10 @@ internal fun buildAzureParams(
         put("model", deploymentName)
         put("input", kotlinx.serialization.json.JsonArray(messages))
         put("stream", true)
-        clampOpenAIPromptCacheKey(options?.sessionId)?.let {
-            put("prompt_cache_key", it)
+        if (model.responsesCompat?.promptCacheKeyMode != PromptCacheKeyMode.DISABLED) {
+            clampOpenAIPromptCacheKey(options?.sessionId)?.let {
+                put("prompt_cache_key", it)
+            }
         }
         put("store", false)
 

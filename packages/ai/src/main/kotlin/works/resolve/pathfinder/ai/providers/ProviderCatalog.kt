@@ -20,6 +20,7 @@ import works.resolve.pathfinder.ai.ModelCostTier
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.OpenAiCompletionsCompat
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
+import works.resolve.pathfinder.ai.PromptCacheKeyMode
 import works.resolve.pathfinder.ai.Provider
 import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SessionAffinityFormat
@@ -442,6 +443,7 @@ private data class CompatDto(
     val supportsOpenAIGrammarTools: Boolean? = null,
     val cacheControlFormat: String? = null,
     val sessionAffinityFormat: String? = null,
+    val promptCacheKeyMode: String? = null,
     val supportsAdditionalTools: Boolean? = null,
     val supportsToolSearch: Boolean? = null,
     val supportsExplicitPromptCacheMode: Boolean? = null,
@@ -472,6 +474,9 @@ private data class CompatDto(
             sessionAffinityFormat = sessionAffinityFormat?.let {
                 parseSessionAffinityFormat(it, where)
             },
+            promptCacheKeyMode = promptCacheKeyMode?.let {
+                parsePromptCacheKeyMode(it, where)
+            } ?: PromptCacheKeyMode.AUTO,
             supportsLongCacheRetention = supportsLongCacheRetention ?: true,
             supportsStrictMode = supportsStrictMode ?: true,
             supportsOpenAIGrammarTools = supportsOpenAIGrammarTools ?: false,
@@ -495,6 +500,9 @@ private data class CompatDto(
         sessionAffinityFormat = sessionAffinityFormat?.let {
             parseSessionAffinityFormat(it, where)
         },
+        promptCacheKeyMode = promptCacheKeyMode?.let {
+            parsePromptCacheKeyMode(it, where)
+        } ?: PromptCacheKeyMode.AUTO,
         supportsLongCacheRetention = supportsLongCacheRetention ?: true,
         supportsStrictMode = supportsStrictMode,
         supportsOpenAIGrammarTools = supportsOpenAIGrammarTools ?: false,
@@ -541,6 +549,19 @@ private fun parseSessionAffinityFormat(value: String, where: String): SessionAff
 
         else -> throw IllegalArgumentException(
             "Unknown session affinity format '$value' for $where"
+        )
+    }
+
+private fun parsePromptCacheKeyMode(value: String, where: String): PromptCacheKeyMode =
+    when (value) {
+        "auto" -> PromptCacheKeyMode.AUTO
+
+        "enabled" -> PromptCacheKeyMode.ENABLED
+
+        "disabled" -> PromptCacheKeyMode.DISABLED
+
+        else -> throw IllegalArgumentException(
+            "Unknown prompt cache key mode '$value' for $where"
         )
     }
 

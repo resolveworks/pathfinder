@@ -16,6 +16,7 @@ import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.PromptCacheKeyMode
 import works.resolve.pathfinder.ai.ProviderAuthException
 import works.resolve.pathfinder.ai.ProviderResponse
 import works.resolve.pathfinder.ai.ProviderStreamException
@@ -105,6 +106,7 @@ internal fun getCompat(model: Model): ResolvedResponsesCompat {
         supportsDeveloperRole = compat?.supportsDeveloperRole ?: true,
         supportsMidConvoSystemMessages = compat?.supportsMidConvoSystemMessages ?: false,
         sessionAffinityFormat = compat?.sessionAffinityFormat ?: detectSessionAffinityFormat(model),
+        promptCacheKeyMode = compat?.promptCacheKeyMode ?: PromptCacheKeyMode.AUTO,
         supportsLongCacheRetention = compat?.supportsLongCacheRetention ?: true,
         supportsStrictMode = compat?.supportsStrictMode ?: false,
         supportsOpenAIGrammarTools = compat?.supportsOpenAIGrammarTools ?: false,
@@ -120,6 +122,7 @@ internal data class ResolvedResponsesCompat(
     val supportsDeveloperRole: Boolean,
     val supportsMidConvoSystemMessages: Boolean,
     val sessionAffinityFormat: SessionAffinityFormat,
+    val promptCacheKeyMode: PromptCacheKeyMode,
     val supportsLongCacheRetention: Boolean,
     val supportsStrictMode: Boolean,
     val supportsOpenAIGrammarTools: Boolean,
@@ -186,7 +189,7 @@ internal fun sessionAffinityHeaders(
         SessionAffinityFormat.OPENAI_NOSESSION -> mapOf("x-client-request-id" to sessionId)
 
         SessionAffinityFormat.OPENAI -> mapOf(
-            "session_id" to sessionId,
+            "session-id" to sessionId,
             "x-client-request-id" to sessionId
         )
     }
@@ -309,7 +312,6 @@ class OpenAiResponsesApi(
         context: TranscriptContext,
         options: SimpleStreamOptions
     ): Flow<AssistantMessageEvent> {
-        val apiKey = options.apiKey
         val clamped = options.reasoning?.let {
             works.resolve.pathfinder.ai.clampThinkingLevel(model, it.toModelThinkingLevel())
         }
@@ -330,23 +332,25 @@ class OpenAiResponsesApi(
         val configurationUpdateEffort = getConfigurationUpdateEffort(model, options, compat)
         val normalizedContext =
             resolveTranscript(context, compat.supportsMidConvoSystemMessages)
-        val grammarToolInputProperties = createGrammarToolInputProperties(
-            getDeclaredTools(normalizedContext.messages),
-            compat.supportsOpenAIGrammarTools
-        )
-        val state = OpenAiResponsesShared.ResponsesStreamState(
-            model,
-            startedAtMs,
-            OpenAiResponsesShared.StreamProcessingOptions(
-                serviceTier = options.serviceTier,
-                grammarToolInputProperties = grammarToolInputProperties,
-                applyServiceTierPricing = { usage, tier ->
-                    applyServiceTierPricing(usage, tier, model.id)
-                }
-            ),
-            configurationUpdateEffort
-        )
+        var state: OpenAiResponsesShared.ResponsesStreamState? = null
         try {
+            val grammarToolInputProperties = createGrammarToolInputProperties(
+                getDeclaredTools(normalizedContext.messages),
+                compat.supportsOpenAIGrammarTools
+            )
+            val current = OpenAiResponsesShared.ResponsesStreamState(
+                model,
+                startedAtMs,
+                OpenAiResponsesShared.StreamProcessingOptions(
+                    serviceTier = options.serviceTier,
+                    grammarToolInputProperties = grammarToolInputProperties,
+                    applyServiceTierPricing = { usage, tier ->
+                        applyServiceTierPricing(usage, tier, model.id)
+                    }
+                ),
+                configurationUpdateEffort
+            )
+            state = current
             val apiKey = getClientApiKey(
                 model.provider,
                 options.apiKey,
@@ -405,15 +409,20 @@ class OpenAiResponsesApi(
                 model
             )
 
-            emit(AssistantMessageEvent.Start(state.partialSnapshot()))
+            emit(AssistantMessageEvent.Start(current.partialSnapshot()))
 
             // No early break: like pi, the SDK stream is consumed to its
             // end; finish() validates the terminal state afterwards.
             response.events.collect { event ->
-                processSseEvent(event, state)?.forEach { emit(it) }
+                processSseEvent(event, current)?.forEach { emit(it) }
             }
-            finish(state)
-            emit(AssistantMessageEvent.Done(state.stopReason, state.partialSnapshot()))
+            finish(current)
+            emit(
+                AssistantMessageEvent.Done(
+                    current.stopReason,
+                    current.partialSnapshot()
+                )
+            )
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             val errorMessage = formatResponsesProviderError(
@@ -432,10 +441,15 @@ class OpenAiResponsesApi(
 
                 else -> errorMessage
             }
+            val failed = state ?: OpenAiResponsesShared.ResponsesStreamState(
+                model,
+                startedAtMs,
+                providerThinkingLevel = configurationUpdateEffort
+            )
             emit(
                 AssistantMessageEvent.Error(
                     StopReason.ERROR,
-                    state.partialSnapshot().copy(
+                    failed.partialSnapshot().copy(
                         stopReason = StopReason.ERROR,
                         errorMessage = errorMessageWithHint
                     )
@@ -522,7 +536,9 @@ internal fun buildParams(
         put("model", model.id)
         put("input", kotlinx.serialization.json.JsonArray(messages))
         put("stream", true)
-        if (cacheRetention != CacheRetention.NONE) {
+        if (cacheRetention != CacheRetention.NONE &&
+            compat.promptCacheKeyMode != PromptCacheKeyMode.DISABLED
+        ) {
             clampOpenAIPromptCacheKey(options?.sessionId)?.let {
                 put("prompt_cache_key", it)
             }

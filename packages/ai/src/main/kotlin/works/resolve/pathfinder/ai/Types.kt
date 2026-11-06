@@ -741,6 +741,8 @@ data class OpenAiCompletionsCompat(
     val sendSessionAffinityHeaders: Boolean = false,
     /** null means auto-detect (openrouter vs openai). */
     val sessionAffinityFormat: SessionAffinityFormat? = null,
+    /** Controls the `prompt_cache_key` request field. Default: auto. */
+    val promptCacheKeyMode: PromptCacheKeyMode = PromptCacheKeyMode.AUTO,
     /** Whether `prompt_cache_retention: "24h"` is supported. */
     val supportsLongCacheRetention: Boolean = true,
     val supportsStrictMode: Boolean = true,
@@ -773,6 +775,8 @@ data class OpenAiResponsesCompat(
     val supportsMidConvoSystemMessages: Boolean = false,
     /** null means auto-detect from provider/baseUrl. */
     val sessionAffinityFormat: SessionAffinityFormat? = null,
+    /** Controls the `prompt_cache_key` request field. Default: auto. */
+    val promptCacheKeyMode: PromptCacheKeyMode = PromptCacheKeyMode.AUTO,
     val supportsLongCacheRetention: Boolean = true,
     /** null means unset; each adapter applies its own default (codex and
      * azure true, openai-responses false), as pi does per-API. */
@@ -872,6 +876,9 @@ sealed interface ChatTemplateKwargValue {
 }
 
 enum class SessionAffinityFormat { OPENAI, OPENAI_NOSESSION, OPENROUTER }
+
+/** `auto` and `enabled` send `prompt_cache_key` whenever caching is active; `disabled` never sends it. */
+enum class PromptCacheKeyMode { AUTO, ENABLED, DISABLED }
 
 /**
  * The uniform stream contract every API adapter module implements (pi

@@ -250,40 +250,62 @@ fun getGrammarToolInput(toolName: String, arguments: JsonObject, inputProperty: 
     return input
 }
 
+/**
+ * Append `inputDelta` to a streaming grammar tool input and return the matching piece of its JSON
+ * arguments text, or null for an empty delta. Costs time linear in the delta, never in the input so far.
+ */
 fun appendGrammarToolInputJsonDelta(
     buffer: GrammarToolInputJsonBuffer,
     inputProperty: String,
-    nextInput: String,
-    close: Boolean
+    inputDelta: String
 ): String? {
     if (buffer.closed) {
-        if (close && nextInput == buffer.input) return null
         throw ConstrainedSamplingError(
             "grammar tool input for property \"$inputProperty\" changed after it was closed"
         )
     }
-    if (!nextInput.startsWith(buffer.input)) {
+    if (inputDelta.isEmpty()) return null
+    buffer.input += inputDelta
+    return grammarToolInputJsonStart(buffer, inputProperty) +
+        JsonPrimitive(inputDelta).toString().drop(1).dropLast(1)
+}
+
+/**
+ * Close a streaming grammar tool input and return the rest of its JSON arguments text. `finalInput`
+ * is the complete input when the provider sends one; it must continue the input streamed so far.
+ * Closing again with the same input returns null.
+ */
+fun closeGrammarToolInputJson(
+    buffer: GrammarToolInputJsonBuffer,
+    inputProperty: String,
+    finalInput: String?
+): String? {
+    if (buffer.closed) {
+        if (finalInput == null || finalInput == buffer.input) return null
+        throw ConstrainedSamplingError(
+            "grammar tool input for property \"$inputProperty\" changed after it was closed"
+        )
+    }
+    if (finalInput != null && !finalInput.startsWith(buffer.input)) {
         throw ConstrainedSamplingError(
             "grammar tool input for property \"$inputProperty\" changed non-monotonically"
         )
     }
+    val rest = if (finalInput == null) "" else finalInput.substring(buffer.input.length)
+    if (finalInput != null) buffer.input = finalInput
+    buffer.closed = true
+    return "${grammarToolInputJsonStart(buffer, inputProperty)}" +
+        "${JsonPrimitive(rest).toString().drop(1).dropLast(1)}\"" + "}"
+}
 
-    val inputDelta = nextInput.substring(buffer.input.length)
-    if (!close && inputDelta.isEmpty()) return null
-
-    var delta = ""
-    if (!buffer.started) {
-        delta += "{${JsonPrimitive(inputProperty)}:\""
-        buffer.started = true
-    }
-    delta += JsonPrimitive(inputDelta).toString().drop(1).dropLast(1)
-    buffer.input = nextInput
-
-    if (close) {
-        delta += "\"}"
-        buffer.closed = true
-    }
-    return delta
+/** The opening of the JSON arguments text, once. */
+private fun grammarToolInputJsonStart(
+    buffer: GrammarToolInputJsonBuffer,
+    inputProperty: String
+): String {
+    if (buffer.started) return ""
+    buffer.started = true
+    return "{${JsonPrimitive(inputProperty)}:\""
 }
 
 private fun inferGrammarInputProperty(tool: Tool): String {

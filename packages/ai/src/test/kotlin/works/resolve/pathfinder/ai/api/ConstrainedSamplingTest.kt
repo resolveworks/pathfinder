@@ -296,13 +296,32 @@ class ConstrainedSamplingTest {
     @Test
     fun `keeps grammar input JSON deltas append-only`() {
         val buffer = GrammarToolInputJsonBuffer()
-        val first = appendGrammarToolInputJsonDelta(buffer, "payload", "a\"", close = false)
-        val second = appendGrammarToolInputJsonDelta(buffer, "payload", "a\"\nb", close = true)
+        val first = appendGrammarToolInputJsonDelta(buffer, "payload", "a\"")
+        val second = closeGrammarToolInputJson(buffer, "payload", "a\"\nb")
 
         assertEquals("""{"payload":"a\"\nb"}""", first + second)
-        assertNull(appendGrammarToolInputJsonDelta(buffer, "payload", "a\"\nb", close = true))
+        assertNull(closeGrammarToolInputJson(buffer, "payload", "a\"\nb"))
+        assertNull(closeGrammarToolInputJson(buffer, "payload", null))
         val failure = assertFailsWith<ConstrainedSamplingError> {
-            appendGrammarToolInputJsonDelta(buffer, "payload", "changed", close = true)
+            closeGrammarToolInputJson(buffer, "payload", "changed")
+        }
+        assertEquals(
+            "grammar tool input for property \"payload\" changed after it was closed",
+            failure.message
+        )
+    }
+
+    @Test
+    fun `close grammar input tolerates a missing final input`() {
+        val buffer = GrammarToolInputJsonBuffer()
+        val first = appendGrammarToolInputJsonDelta(buffer, "payload", "ab")
+        val second = closeGrammarToolInputJson(buffer, "payload", null)
+
+        assertEquals("""{"payload":"ab"}""", first + second)
+        assertEquals("ab", buffer.input)
+        assertNull(closeGrammarToolInputJson(buffer, "payload", null))
+        val failure = assertFailsWith<ConstrainedSamplingError> {
+            appendGrammarToolInputJsonDelta(buffer, "payload", "c")
         }
         assertEquals(
             "grammar tool input for property \"payload\" changed after it was closed",
@@ -313,10 +332,10 @@ class ConstrainedSamplingTest {
     @Test
     fun `rejects non-monotonic grammar input deltas`() {
         val buffer = GrammarToolInputJsonBuffer()
-        appendGrammarToolInputJsonDelta(buffer, "payload", "ab", close = false)
-        assertNull(appendGrammarToolInputJsonDelta(buffer, "payload", "ab", close = false))
+        appendGrammarToolInputJsonDelta(buffer, "payload", "ab")
+        assertNull(appendGrammarToolInputJsonDelta(buffer, "payload", ""))
         val failure = assertFailsWith<ConstrainedSamplingError> {
-            appendGrammarToolInputJsonDelta(buffer, "payload", "ax", close = false)
+            closeGrammarToolInputJson(buffer, "payload", "ax")
         }
         assertEquals(
             "grammar tool input for property \"payload\" changed non-monotonically",
