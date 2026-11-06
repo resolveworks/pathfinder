@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.put
@@ -43,6 +44,7 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.clampThinkingLevel
 import works.resolve.pathfinder.ai.getSupportedThinkingLevels
+import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
 import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
@@ -164,6 +166,20 @@ class AgentSession(
     /** pi's _isAgentRunActive; mirrored into [isStreaming]. */
     @Volatile
     private var agentRunActive = false
+
+    /**
+     * pi's _promptPreflightCount: prompts between their auth check and their
+     * run claim. Tree navigation is rejected while one is in flight, so a
+     * prompt cannot race a model/compaction preflight. Guarded by [lock].
+     */
+    private var promptPreflightCount = 0
+
+    /** pi's _isEmittingAgentSettled: see [deferredSettledActions]. */
+    @Volatile
+    private var isEmittingAgentSettled = false
+
+    /** pi's _deferredSettledActions: prompts submitted by `agent_settled` listeners. Guarded by [lock]. */
+    private val deferredSettledActions = mutableListOf<suspend () -> Unit>()
 
     /**
      * pi's _agentRunAbortRequested: set by [abort] while a run is active,
@@ -349,6 +365,28 @@ class AgentSession(
         agent.state.value.messages.lastOrNull { it is AssistantMessage } as AssistantMessage?
 
     /**
+     * pi's _recordThinkingLevel (#11451): tree navigation can leave the latest
+     * `thinking_level_change` on another branch, so record the live level on
+     * the branch a prompt will extend when it implies a different one. The
+     * recorded level is compared after clamping to the current model, so a
+     * level clamped on resume (e.g. `xhigh` running as `high`) is not
+     * recorded over the requested one.
+     */
+    private suspend fun recordThinkingLevel() {
+        val recorded = manager.getBranch().lastOrNull { it is ThinkingLevelEntry }
+            as ThinkingLevelEntry? ?: return
+        val recordedLevel = modelThinkingLevelFromWire(recorded.thinkingLevel) ?: return
+        val available = getSupportedThinkingLevels(model)
+        val effective = if (recordedLevel in available) {
+            recordedLevel
+        } else {
+            clampThinkingLevel(model, recordedLevel)
+        }
+        if (effective == thinkingLevel) return
+        manager.appendThinkingLevelChange(thinkingLevel.wire)
+    }
+
+    /**
      * Current effective system prompt, including changes not yet sent to
      * the model (pi's getter; its run/base prompt-options distinction has
      * no pathfinder producer — extension mutations and forced prompts — so
@@ -362,21 +400,33 @@ class AgentSession(
     fun getActiveToolNames(): List<String> = agent.state.value.tools.map { it.definition.name }
 
     /**
-     * Set active tools by name: only tools in the registry can be enabled,
-     * unknown names are ignored, and a name appearing twice resolves to two
-     * entries (no dedupe — the request-time loadout in
-     * [preparePromptAndToolLoadout] dedupes). Takes effect on the next
-     * request, where the desired prompt is re-derived and recorded as a
-     * section patch; the loadout itself is durable through the
-     * transcript's system-message tool declarations, restored by
-     * [restoreToolsFromTranscript] on reload and navigation.
+     * Set active tools by name: only tools in the registry can be enabled
+     * and unknown names are ignored. The active tools are a set — tools that
+     * stay active keep their current order and newly active ones are
+     * appended ([applyToolLoadout]) — so reordering the same names does not
+     * change the prompt. Takes effect on the next request, where the desired
+     * prompt is re-derived and recorded as a section patch; the loadout
+     * itself is durable through the transcript's system-message tool
+     * declarations, restored by [restoreToolsFromTranscript] on reload and
+     * navigation.
      */
     fun setActiveToolsByName(toolNames: List<String>) {
-        agent.setTools(toolNames.mapNotNull(toolRegistry::get))
+        agent.setTools(applyToolLoadout(toolNames))
     }
 
     private fun resolveTools(toolNames: List<String>): List<AgentTool> =
         toolNames.mapNotNull(toolRegistry::get)
+
+    /**
+     * pi's _applyToolLoadout: resolve [toolNames] to registered tools as a
+     * set — tools that stay active keep their current order, newly active
+     * ones are appended, duplicates collapse (#11495).
+     */
+    private fun applyToolLoadout(toolNames: List<String>): List<AgentTool> {
+        val requested = toolNames.toSet()
+        val kept = getActiveToolNames().filter { it in requested }
+        return resolveTools((kept + requested).distinct())
+    }
 
     /**
      * pi's _preparePromptAndToolLoadout: apply the prompt and tool loadout
@@ -396,11 +446,11 @@ class AgentSession(
         toolNames: List<String>,
         messages: List<Message> = agent.state.value.messages
     ): SystemMessage? {
-        val activeToolNames = toolNames.distinct().filter(toolRegistry::containsKey)
-        agent.setTools(resolveTools(activeToolNames))
+        val activeTools = applyToolLoadout(toolNames)
+        agent.setTools(activeTools)
         val sections = diffSystemPromptSections(
             getCurrentSystemMessage(messages)?.sections ?: emptyMap(),
-            buildSystemPromptSections(resolveTools(activeToolNames), promptConfig)
+            buildSystemPromptSections(activeTools, promptConfig)
         )
         return sections?.let {
             SystemMessage(
@@ -429,7 +479,7 @@ class AgentSession(
         val toolNames = getCurrentTools(systemMessages)
             .map { it.name }
             .filter(toolRegistry::containsKey)
-        agent.setTools(resolveTools(toolNames))
+        agent.setTools(applyToolLoadout(toolNames))
     }
 
     /**
@@ -446,27 +496,39 @@ class AgentSession(
      * message queued exactly as the cycle settles is delivered by the next
      * prompt's initial steering poll — pi's race, ported as-is.
      *
-     * Guards, in pi's order: manual compaction in progress, then the active
-     * prompt cycle. Automatic compaction and tree navigation are NOT guard
-     * inputs — pi's prompt only checks the manual-compaction controller and
-     * its own run state, leaving a latent race against pre-prompt
-     * auto-compaction and navigation that is ported as-is (a navigation's
-     * tree mutations stay serialized by the manager's mutex, but a prompt
-     * racing one can append to a moving leaf). A prompt racing another
-     * prompt's preflight — before its run is active — likewise proceeds and
-     * fails at the agent's own single-run guard, exactly like pi.
+     * Guards, in pi's order: manual compaction or branch summarization in
+     * progress, then the active prompt cycle. The preflight (auth, pre-prompt
+     * compaction, message build) is reserved against tree navigation through
+     * [promptPreflightCount]; the run slot is claimed before the pre-prompt
+     * compaction (pi's `_startRun` before `_prepareRun`), so an abort
+     * requested while it runs stops the run at its first `agent_start`.
      *
-     * @throws IllegalStateException when manual compaction is running, or a
-     *   prompt cycle is active and [streamingBehavior] was not specified.
+     * A prompt submitted while [AgentEvent.AgentSettled] is being emitted is
+     * deferred and run once the emission finishes (pi's
+     * _deferredSettledActions).
+     *
+     * @throws IllegalStateException when manual compaction or branch
+     *   summarization is running, or a prompt cycle is active and
+     *   [streamingBehavior] was not specified.
      * @throws CancellationException when aborted during the cycle or the
      *   caller is cancelled; the agent has committed its terminal state
      *   either way. An abort landing during the pre-prompt compaction
-     *   cancels only that compaction — pi's prompt proceeds (see
-     *   [runPrePromptCompaction]).
+     *   cancels only that compaction, and then stops the run at
+     *   `agent_start` (see [runPrePromptCompaction]).
      */
     suspend fun prompt(text: String, streamingBehavior: StreamingBehavior? = null) {
+        val deferred = synchronized(lock) {
+            if (isEmittingAgentSettled) {
+                deferredSettledActions.add { prompt(text, streamingBehavior) }
+                true
+            } else {
+                false
+            }
+        }
+        if (deferred) return
+
         synchronized(lock) {
-            if (manualCompactionJob != null) {
+            if (manualCompactionJob != null || branchSummaryJob != null) {
                 throw IllegalStateException(COMPACTION_IN_PROGRESS)
             }
         }
@@ -485,6 +547,8 @@ class AgentSession(
             return
         }
 
+        synchronized(lock) { promptPreflightCount++ }
+        val promptMessages: List<Message>
         try {
             // Preflight (pi's prompt ordering: model/auth validation before
             // the compaction check, before any message is built). The model
@@ -508,22 +572,39 @@ class AgentSession(
                 }
             }
 
-            // Check if we need to compact before sending (catches aborted
-            // responses the post-run check skips). The user's new prompt is
-            // sent below, so do not continue the agent here (pi: the result
-            // is likewise unused).
-            findLastAssistantMessage()?.let { lastAssistant ->
-                runPrePromptCompaction(lastAssistant)
+            synchronized(lock) {
+                agentRunAbortRequested = false
+                agentRunActive = true
             }
+            _isStreaming.value = true
+            try {
+                // Check if we need to compact before sending (catches aborted
+                // responses the post-run check skips). The user's new prompt is
+                // sent below, so do not continue the agent here (pi: the result
+                // is likewise unused).
+                findLastAssistantMessage()?.let { lastAssistant ->
+                    runPrePromptCompaction(lastAssistant)
+                }
+                recordThinkingLevel()
 
-            val promptMessage = UserMessage.ofText(text, clock.now().toEpochMilliseconds())
-            // pi's before_agent_start block, minus the extension producers:
-            // the live loadout is authoritative, so apply the prompt/tool
-            // loadout and record the desired prompt as a system message
-            // ahead of the user message (pi's unshift).
-            val updateMessage =
-                preparePromptAndToolLoadout(getActiveToolNames(), agent.state.value.messages)
-            val promptMessages = listOfNotNull(updateMessage, promptMessage)
+                val promptMessage = UserMessage.ofText(text, clock.now().toEpochMilliseconds())
+                // pi's before_agent_start block, minus the extension producers:
+                // the live loadout is authoritative, so apply the prompt/tool
+                // loadout and record the desired prompt as a system message
+                // ahead of the user message (pi's unshift).
+                val updateMessage =
+                    preparePromptAndToolLoadout(getActiveToolNames(), agent.state.value.messages)
+                promptMessages = listOfNotNull(updateMessage, promptMessage)
+            } catch (e: Throwable) {
+                releaseRunSlot()
+                throw e
+            }
+        } finally {
+            synchronized(lock) { promptPreflightCount-- }
+        }
+
+        var aborted = false
+        try {
             // The loop runs on loopDispatcher: prompt() is Main-friendly in the app
             // (per-token reduce, event emission, and tool execution leave the
             // UI thread) while staying dispatcher-agnostic in tests. Tools
@@ -541,13 +622,36 @@ class AgentSession(
                     job.start()
 
                     job.join()
-                    if (job.isCancelled) {
-                        throw CancellationException("Prompt aborted")
-                    }
+                    aborted = job.isCancelled
                 }
             }
         } finally {
             promptJob = null
+            // Deferred submits are new work, not part of the settled cycle: a
+            // cancelled caller drops them, an aborted cycle still runs them.
+            if (currentCoroutineContext().isActive) drainDeferredSettledActions()
+        }
+        if (aborted) throw CancellationException("Prompt aborted")
+    }
+
+    /** pi's _startRun failure path: the run slot is free again. */
+    private fun releaseRunSlot() {
+        synchronized(lock) { agentRunActive = false }
+        _isStreaming.value = false
+    }
+
+    /**
+     * pi's _deferredSettledActions: prompts submitted while `agent_settled`
+     * was being emitted run once the emission finished, outside the
+     * settlement's [NonCancellable] tail.
+     */
+    private suspend fun drainDeferredSettledActions() {
+        while (true) {
+            val action = synchronized(lock) {
+                if (deferredSettledActions.isEmpty()) return
+                deferredSettledActions.removeAt(0)
+            }
+            action()
         }
     }
 
@@ -657,17 +761,13 @@ class AgentSession(
 
     /**
      * pi's _runAgentPrompt: the prompt cycle — one agent run plus the
-     * post-run continuation loop (retries, auto-compaction). Run-active
-     * state spans the whole cycle, so [isStreaming] stays busy across retry
-     * backoff and inter-continuation compaction, and the cycle settles
-     * ([AgentEvent.AgentSettled]) in the finally even when aborted.
+     * post-run continuation loop (retries, auto-compaction). The run slot is
+     * already claimed by [prompt] before its preflight, so [isStreaming]
+     * stays busy across retry backoff and inter-continuation compaction, and
+     * the cycle settles ([AgentEvent.AgentSettled]) in the finally even when
+     * aborted.
      */
     private suspend fun runAgentPrompt(messages: List<Message>) {
-        synchronized(lock) {
-            agentRunAbortRequested = false
-            agentRunActive = true
-        }
-        _isStreaming.value = true
         try {
             agent.prompt(messages)
             while (handlePostAgentRun()) {
@@ -682,9 +782,13 @@ class AgentSession(
             throw e
         } finally {
             withContext(NonCancellable) {
-                agentRunActive = false
-                _isStreaming.value = false
-                _events.emit(AgentEvent.AgentSettled(aborted = agentRunAbortRequested))
+                releaseRunSlot()
+                isEmittingAgentSettled = true
+                try {
+                    _events.emit(AgentEvent.AgentSettled(aborted = agentRunAbortRequested))
+                } finally {
+                    isEmittingAgentSettled = false
+                }
             }
         }
     }
@@ -867,8 +971,8 @@ class AgentSession(
      * session (unlike fork). Idle-only; a session [abort] (or caller
      * cancellation) aborts an in-flight navigation — pi's branch-summary
      * AbortController — surfacing as the aborted result. Rejected while a
-     * prompt cycle, compaction, or another navigation runs (pi's isStreaming
-     * and isCompacting guards).
+     * prompt cycle, prompt preflight, compaction, or another navigation runs
+     * (pi's isStreaming, _promptPreflightCount, and isCompacting guards).
      *
      * A user-message target re-edits instead of moving the leaf onto it:
      * the leaf moves to the target's parent (or root) and the text is
@@ -892,7 +996,7 @@ class AgentSession(
     ): NavigationResult {
         val parentJob = currentCoroutineContext()[Job]
         val controller: CompletableJob = synchronized(lock) {
-            if (agentRunActive) {
+            if (agentRunActive || promptPreflightCount > 0) {
                 throw IllegalStateException(
                     "Wait for the current response to finish before navigating the session tree."
                 )
@@ -1032,6 +1136,10 @@ class AgentSession(
      * the UI sees the updated queue state (pi's order).
      */
     private suspend fun processEvent(event: AgentEvent) {
+        // An abort requested while the run was starting, e.g. during the
+        // pre-prompt compaction, stops it here: agent_start is emitted before
+        // the first request, with the run's job already published.
+        if (event is AgentEvent.AgentStart && agentRunAbortRequested) agent.abort()
         when (event) {
             is AgentEvent.MessageStart -> {
                 val userMessage = event.message as? UserMessage
@@ -1130,7 +1238,7 @@ class AgentSession(
             finishCancelledRetry()
             return false
         }
-        if (msg == null) return false
+        if (msg == null) return agent.hasQueuedMessages()
 
         if (isRetryableError(msg) && prepareRetry(msg)) {
             if (agentRunAbortRequested) finishCancelledRetry()
@@ -1732,12 +1840,19 @@ class AgentSession(
 
     /**
      * Context overflow errors are not retryable (compaction's job); every
-     * other retryable assistant error is.
+     * other retryable assistant error is. Overflow classification sizes the
+     * message by its own model's context window, falling back to the live
+     * model (pi's _modelForMessage).
      */
     private fun isRetryableError(message: AssistantMessage): Boolean {
-        if (isContextOverflow(message, model.contextWindow)) return false
+        val contextWindow = (modelForMessage(message) ?: model).contextWindow
+        if (isContextOverflow(message, contextWindow)) return false
         return retryClassifier.isRetryableAssistantError(message)
     }
+
+    /** pi's _modelForMessage: the live model when it produced [message], else nothing to size it by. */
+    private fun modelForMessage(message: AssistantMessage): Model? =
+        model.takeIf { it.provider == message.provider && it.id == message.model }
 
     /**
      * pi's _finishCancelledRetry: terminal retry event for an aborted run;
