@@ -8,19 +8,13 @@ import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.auth.AuthContext
-import works.resolve.pathfinder.ai.auth.AuthResolutionOverrides
-import works.resolve.pathfinder.ai.auth.CatalogAuthProviderRef
 import works.resolve.pathfinder.ai.auth.CatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
 import works.resolve.pathfinder.ai.auth.CredentialStore
 import works.resolve.pathfinder.ai.auth.NoopAuthContext
-import works.resolve.pathfinder.ai.auth.ProviderAuthService
-import works.resolve.pathfinder.ai.auth.resolveProviderAuth
-import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.providers.normalizeBaseUrl
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
@@ -80,40 +74,34 @@ class NativeAgentFactory(
     private val promptConfig: suspend () -> PromptConfig = { PromptConfig() }
 ) : AgentFactory {
 
+    /**
+     * Process-wide models stack: register every catalog provider, not just
+     * the initial one, so live model switching (AgentSession.setModel) works
+     * across providers — the next prompt resolves auth and the API from the
+     * same stack. The app-facing ProviderAuthService wraps this same stack,
+     * so UI status and runtime resolution share one credential store.
+     */
+    val models: Models = Models(
+        providers = catalog.providers.map { entry ->
+            entry.toRuntimeProvider(
+                transport = transport,
+                auth = CatalogProviderAuth(entry, authRegistry),
+                retry = retry,
+                webSocketTransport = webSocketTransport
+            )
+        },
+        credentials = credentials,
+        authContext = authContext
+    )
+
     override suspend fun create(sessionManager: SessionManager): CreateAgentSessionResult {
-        // Register every catalog provider, not just the initial one: the
-        // models stack is what makes live model switching
-        // (AgentSession.setModel) work across providers — the next prompt
-        // resolves auth and the API from the same stack.
-        val models = Models(
-            catalog.providers.map { entry ->
-                entry.toRuntimeProvider(
-                    transport = transport,
-                    retry = retry,
-                    authResolver = catalogAuthResolver(
-                        entry,
-                        credentials,
-                        authContext,
-                        authRegistry
-                    ),
-                    webSocketTransport = webSocketTransport,
-                    auth = CatalogProviderAuth(entry, authRegistry)
-                )
-            }
-        )
-
-        // pi's ModelRuntime.hasConfiguredAuth: the restore path checks
-        // provider-credential presence without resolving (no OAuth refresh);
-        // ProviderAuthService.isConfigured is that presence check.
-        val authService = ProviderAuthService(catalog, authRegistry, credentials)
-
         val prompt = promptConfig()
         val result =
             createAgentSession(
                 manager = sessionManager,
                 settingsManager = settingsManager,
                 models = models,
-                hasConfiguredAuth = { providerId -> authService.isConfigured(providerId) },
+                hasConfiguredAuth = models::hasConfiguredAuth,
                 streamFn = StreamFn { requestedModel, context, options ->
                     // Request encoding and stream decoding run off Main; agent/session
                     // state and tool execution stay on the loop's dispatcher. A small
@@ -154,42 +142,6 @@ class NativeAgentFactory(
         return model.copy(baseUrl = normalizeBaseUrl(model.baseUrl))
     }
 }
-
-/**
- * An explicit request key/env is shaped by the provider's auth semantics
- * without reading stored credentials; otherwise the stored credential is
- * read per request with explicit env merged over stored env per field before
- * completeness and shaping. A stored OAuth credential resolves (and
- * refreshes) through the provider's registered OAuth flow, when one is
- * registered. Returns null when unconfigured.
- */
-internal fun catalogAuthResolver(
-    entry: CatalogProvider,
-    credentials: CredentialStore,
-    authContext: AuthContext = NoopAuthContext,
-    authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY
-): suspend (apiKey: String?, env: Map<String, String>) -> ResolvedAuth? =
-    { explicitKey, explicitEnv ->
-        val overrides =
-            if (explicitKey == null && explicitEnv.isEmpty()) {
-                null
-            } else {
-                AuthResolutionOverrides(apiKey = explicitKey, env = explicitEnv)
-            }
-        resolveProviderAuth(
-            provider = CatalogAuthProviderRef(entry, authRegistry),
-            credentials = credentials,
-            authContext = authContext,
-            overrides = overrides
-        )?.let { result ->
-            ResolvedAuth(
-                apiKey = result.auth.apiKey,
-                env = result.env,
-                headers = result.auth.headers,
-                baseUrl = result.auth.baseUrl
-            )
-        }
-    }
 
 /** Bounded handoff buffer between the network stream and the agent loop collector. */
 private const val STREAM_BUFFER_CAPACITY = 64

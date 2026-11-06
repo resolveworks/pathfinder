@@ -57,13 +57,12 @@ internal val DEFAULT_MODEL_PER_PROVIDER: List<Pair<String, String>> = listOf(
 )
 
 /**
- * pi's ModelRuntime.getAvailableSnapshot analog: the models of providers
- * with configured auth. Divergence: restricted to APIs with a ported
- * implementation, since the agent cannot stream the rest.
+ * pi's getAvailableSnapshot analog: pi's configured-provider availability
+ * restricted to APIs with a ported implementation, since the agent cannot
+ * stream the rest.
  */
-internal suspend fun Models.getAvailableSnapshot(): List<Model> = getProviders()
-    .filter { checkAuth(it.id) }
-    .flatMap { provider -> provider.models.filter { ChatApiRegistry.isSupported(it.api) } }
+internal suspend fun Models.getAvailableSnapshot(): List<Model> = getAvailable()
+    .filter { ChatApiRegistry.isSupported(it.api) }
 
 data class InitialModelResult(val model: Model?, val thinkingLevel: ModelThinkingLevel)
 
@@ -81,7 +80,8 @@ internal suspend fun findInitialModel(
     defaultModelId: String?,
     defaultThinkingLevel: ModelThinkingLevel?,
     modelThinkingLevels: Map<String, ModelThinkingLevel>,
-    models: Models
+    models: Models,
+    hasConfiguredAuth: suspend (String) -> Boolean
 ): InitialModelResult {
     if (scopedModels.isNotEmpty() && !isContinuing) {
         val scoped = scopedModels.first()
@@ -96,7 +96,7 @@ internal suspend fun findInitialModel(
 
     if (defaultProvider != null && defaultModelId != null) {
         val found = models.getModel(defaultProvider, defaultModelId)
-        if (found != null && models.checkAuth(found.provider)) {
+        if (found != null && hasConfiguredAuth(found.provider)) {
             val perModel = modelThinkingLevels["$defaultProvider/$defaultModelId"]
             return InitialModelResult(
                 model = found,

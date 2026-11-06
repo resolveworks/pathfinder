@@ -10,6 +10,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.Provider
 import works.resolve.pathfinder.ai.providers.AuthPrompt as CatalogPrompt
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.ProviderAuth as CatalogProviderAuthMetadata
@@ -114,7 +116,8 @@ class ProviderAuthServiceTest {
                 oauth = if (oauth) {
                     ProviderOAuth(
                         "Acme (subscription)",
-                        loginLabel = "Sign in with Acme"
+                        loginLabel = "Sign in with Acme",
+                        isSubscription = true
                     )
                 } else {
                     null
@@ -138,10 +141,32 @@ class ProviderAuthServiceTest {
         catalog: ProviderCatalog,
         store: CredentialStore = InMemoryCredentialStore(),
         oauth: OAuthAuth? = null
-    ) = ProviderAuthService(
-        catalog,
-        MapCatalogAuthRegistry(if (oauth != null) mapOf("acme" to oauth) else emptyMap()),
-        store
+    ): ProviderAuthService {
+        val registry = MapCatalogAuthRegistry(
+            if (oauth != null) mapOf("acme" to oauth) else emptyMap()
+        )
+        return ProviderAuthService(catalog, models(catalog, store, registry))
+    }
+
+    private fun models(
+        catalog: ProviderCatalog,
+        store: CredentialStore = InMemoryCredentialStore(),
+        registry: CatalogAuthRegistry = MapCatalogAuthRegistry(emptyMap())
+    ): Models = Models(
+        providers = catalog.providers.map { entry ->
+            Provider(
+                id = entry.id,
+                name = entry.name,
+                baseUrl = entry.baseUrl,
+                auth = CatalogProviderAuth(entry, registry),
+                models = entry.models,
+                apis = emptyMap(),
+                filterModels = { available, credential ->
+                    works.resolve.pathfinder.ai.filterCatalogModels(entry, credential)
+                }
+            )
+        },
+        credentials = store
     )
 
     @Test
@@ -173,8 +198,10 @@ class ProviderAuthServiceTest {
         )
         val methods = ProviderAuthService(
             ProviderCatalog(listOf(provider)),
-            ProductionCatalogAuthRegistry(),
-            InMemoryCredentialStore()
+            models(
+                ProviderCatalog(listOf(provider)),
+                registry = ProductionCatalogAuthRegistry()
+            )
         ).authMethods("openrouter")
 
         assertEquals(
@@ -201,8 +228,10 @@ class ProviderAuthServiceTest {
         )
         val methods = ProviderAuthService(
             ProviderCatalog(listOf(provider)),
-            ProductionCatalogAuthRegistry(),
-            InMemoryCredentialStore()
+            models(
+                ProviderCatalog(listOf(provider)),
+                registry = ProductionCatalogAuthRegistry()
+            )
         ).authMethods("anthropic")
 
         assertEquals(
@@ -303,10 +332,8 @@ class ProviderAuthServiceTest {
         val credential = store.read("acme") as ApiKeyCredential
         assertEquals("", credential.key)
         assertEquals(mapOf("ACME_ACCOUNT_ID" to "account-42"), credential.env)
-        // pi's prompts accept blank values; the empty credential later
-        // resolves as unconfigured instead (a whitespace-only key is
-        // truthy in pi and stays configured).
-        assertTrue(!service(catalog(), store).isConfigured("acme"))
+        // pi's prompts accept blank values; the credential is still stored.
+        assertTrue(service(catalog(), store).isConfigured("acme"))
     }
 
     @Test
@@ -323,7 +350,7 @@ class ProviderAuthServiceTest {
         val credential = store.read("acme") as ApiKeyCredential
         assertEquals("sk-test", credential.key)
         assertEquals(mapOf("ACME_ACCOUNT_ID" to ""), credential.env)
-        assertTrue(!service(catalog(), store).isConfigured("acme"))
+        assertTrue(service(catalog(), store).isConfigured("acme"))
     }
 
     @Test
@@ -357,7 +384,7 @@ class ProviderAuthServiceTest {
             fail("expected ModelsError")
         } catch (error: ModelsError) {
             assertEquals(ModelsErrorCode.AUTH, error.code)
-            assertEquals("Acme does not support OAUTH login", error.message)
+            assertEquals("Acme does not support oauth login", error.message)
         }
         // API key on an OAuth-only catalog entry: no prompts -> no handler.
         val oauthOnly = service(catalog(apiKey = false, oauth = true), oauth = FakeOAuthAuth())
@@ -366,7 +393,7 @@ class ProviderAuthServiceTest {
             fail("expected ModelsError")
         } catch (error: ModelsError) {
             assertEquals(ModelsErrorCode.AUTH, error.code)
-            assertEquals("Acme does not support API_KEY login", error.message)
+            assertEquals("Acme does not support api_key login", error.message)
         }
     }
 
@@ -494,15 +521,15 @@ class ProviderAuthServiceTest {
         }
         assertTrue(service.isConfigured("acme"))
 
-        // Incomplete prompt values (missing env slot) leave it unconfigured.
+        // Presence, not resolution: an incomplete credential is still stored.
         store.modify("acme") { ApiKeyCredential(key = "sk") }
-        assertTrue(!service.isConfigured("acme"))
+        assertTrue(service.isConfigured("acme"))
 
-        // A stored OAuth credential is configured only with a registered flow.
+        // A stored OAuth credential is present regardless of a registered flow.
         store.modify("acme") {
             OAuthCredential(access = "a", refresh = "r", expires = Long.MAX_VALUE)
         }
-        assertTrue(!service(catalog(apiKey = false, oauth = true), store).isConfigured("acme"))
+        assertTrue(service(catalog(apiKey = false, oauth = true), store).isConfigured("acme"))
         assertTrue(
             service(
                 catalog(apiKey = false, oauth = true),
@@ -531,31 +558,22 @@ class ProviderAuthServiceTest {
                 )
             )
         }
+        val registry = MapCatalogAuthRegistry(mapOf("github-copilot" to FakeOAuthAuth()))
         val service =
-            ProviderAuthService(copilotCatalog(), MapCatalogAuthRegistry(emptyMap()), store)
+            ProviderAuthService(copilotCatalog(), models(copilotCatalog(), store, registry))
 
         assertEquals(listOf("gpt-4.1"), service.availableModels("github-copilot").map { it.id })
     }
 
-    /**
-     * Divergence from pi's getAvailable (KDoc on
-     * [ProviderAuthService.availableModels]): the configured gate is
-     * composed by callers, so a missing credential still lists the static
-     * catalog models.
-     */
     @Test
-    fun `availableModels lists the full static catalog without a credential`() = runTest {
+    fun `availableModels is empty without a configured credential`() = runTest {
         val service =
             ProviderAuthService(
                 copilotCatalog(),
-                MapCatalogAuthRegistry(emptyMap()),
-                InMemoryCredentialStore()
+                models(copilotCatalog())
             )
 
-        assertEquals(
-            listOf("gpt-4.5", "gpt-4.1", "claude-haiku-4.5"),
-            service.availableModels("github-copilot").map { it.id }
-        )
+        assertEquals(emptyList<Model>(), service.availableModels("github-copilot"))
     }
 
     private fun copilotCatalog(): ProviderCatalog {
@@ -642,6 +660,6 @@ class ProviderAuthServiceTest {
 
         assertEquals(AuthStatus("acme", CredentialType.API_KEY), status)
         assertEquals("", (store.read("acme") as ApiKeyCredential).key)
-        assertTrue(!service(singlePrompt, store).isConfigured("acme"))
+        assertTrue(service(singlePrompt, store).isConfigured("acme"))
     }
 }

@@ -92,12 +92,12 @@ class KimiCodingOAuthAuth(
         val record = json as? JsonObject
         val deviceCode = record.string("device_code")
         val userCode = record.string("user_code")
-        val verificationUri = record.string("verification_uri")
-        val verificationUriComplete = record.string("verification_uri_complete")
+        val verificationUri = trustedHttpUrl(record.string("verification_uri"))
+        val verificationUriComplete = trustedHttpUrl(
+            record.string("verification_uri_complete")
+        )
         if (deviceCode == null || userCode == null || verificationUri == null ||
-            verificationUriComplete == null ||
-            trustedHttpUrl(verificationUriComplete) == null ||
-            trustedHttpUrl(verificationUri) == null
+            verificationUriComplete == null
         ) {
             throw IllegalStateException(
                 "Invalid Kimi Code device authorization response: ${json.jsonString()}"

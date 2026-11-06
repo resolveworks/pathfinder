@@ -125,7 +125,8 @@ suspend fun createAgentSession(
             defaultModelId = settingsManager.getDefaultModel(),
             defaultThinkingLevel = settingsManager.getDefaultThinkingLevel(),
             modelThinkingLevels = settingsManager.getAllModelThinkingLevels(),
-            models = models
+            models = models,
+            hasConfiguredAuth = hasConfiguredAuth
         )
         model = result.model
         // findInitialModel's thinking level is ignored here, as in pi's
@@ -196,6 +197,7 @@ suspend fun createAgentSession(
         customPrompt = customPrompt,
         appendSystemPrompt = appendSystemPrompt,
         models = models,
+        hasConfiguredAuth = hasConfiguredAuth,
         loopDispatcher = loopDispatcher
     )
     return CreateAgentSessionResult(session = session, modelFallback = modelFallback)

@@ -33,7 +33,6 @@ import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
@@ -44,6 +43,7 @@ import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FauxProvider
+import works.resolve.pathfinder.ai.testing.fixedApiKeyAuth
 
 /**
  * pi's abort windows in the session layer: manual compaction, the pre-prompt
@@ -124,7 +124,7 @@ class AgentSessionAbortTest {
                 model.provider,
                 model.provider,
                 "https://faux.test",
-                authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
+                auth = fixedApiKeyAuth("faux-key"),
                 models = listOf(model),
                 apis = mapOf(model.api to api)
             )

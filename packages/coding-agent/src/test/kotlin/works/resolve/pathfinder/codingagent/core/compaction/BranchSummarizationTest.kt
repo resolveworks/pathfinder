@@ -17,7 +17,6 @@ import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
@@ -27,6 +26,7 @@ import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.testing.fixedApiKeyAuth
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.codingagent.core.BRANCH_SUMMARY_PREFIX
 import works.resolve.pathfinder.codingagent.core.BRANCH_SUMMARY_SUFFIX
@@ -300,7 +300,7 @@ class BranchSummarizationTest {
                         providerId,
                         providerId,
                         "https://faux.test",
-                        authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
+                        auth = fixedApiKeyAuth("faux-key"),
                         models = listOf(model),
                         apis = mapOf("faux-api" to api)
                     )

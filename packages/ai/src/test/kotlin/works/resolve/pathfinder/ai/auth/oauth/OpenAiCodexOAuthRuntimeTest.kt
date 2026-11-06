@@ -14,11 +14,11 @@ import okhttp3.mockwebserver.MockWebServer
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.auth.CatalogAuthProviderRef
+import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
 import works.resolve.pathfinder.ai.auth.InMemoryCredentialStore
 import works.resolve.pathfinder.ai.auth.MapCatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.NoopAuthContext
@@ -96,10 +96,15 @@ class OpenAiCodexOAuthRuntimeTest {
 
             val runtimeProvider = provider.toRuntimeProvider(
                 transport = OkHttpTransport(),
-                authResolver = { _, _ -> ResolvedAuth(resolved.auth.apiKey, resolved.env) },
+                auth = CatalogProviderAuth(
+                    provider,
+                    MapCatalogAuthRegistry(
+                        mapOf("openai-codex" to OpenAiCodexOAuthAuth(NoNetwork))
+                    )
+                ),
                 webSocketTransport = NoWebSocketTransport
             )
-            val models = Models(listOf(runtimeProvider))
+            val models = Models(listOf(runtimeProvider), credentials = credentials)
 
             val events = runBlocking {
                 models.stream(
@@ -134,10 +139,24 @@ class OpenAiCodexOAuthRuntimeTest {
         val catalog = ProviderCatalog.parse(
             File("src/main/assets/models-catalog.json").readText()
         )
+        val provider = catalog.getProvider("openai-codex")!!
         val authService = works.resolve.pathfinder.ai.auth.ProviderAuthService(
             catalog,
-            works.resolve.pathfinder.ai.auth.ProductionCatalogAuthRegistry(),
-            InMemoryCredentialStore()
+            Models(
+                listOf(
+                    works.resolve.pathfinder.ai.Provider(
+                        id = provider.id,
+                        name = provider.name,
+                        baseUrl = provider.baseUrl,
+                        auth = CatalogProviderAuth(
+                            provider,
+                            works.resolve.pathfinder.ai.auth.ProductionCatalogAuthRegistry()
+                        ),
+                        models = provider.models,
+                        apis = emptyMap()
+                    )
+                )
+            )
         )
         val methods = authService.authMethods("openai-codex")
         assertEquals(1, methods.size)

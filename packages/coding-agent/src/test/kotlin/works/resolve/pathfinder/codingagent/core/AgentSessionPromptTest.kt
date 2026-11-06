@@ -44,6 +44,25 @@ class AgentSessionPromptTest {
     }
 
     @Test
+    fun `configured auth presence short-circuits resolution`() = runTest {
+        val faux = FauxProvider(configuredAuth = false).apply { setResponses(fauxAssistant()) }
+        val session = AgentSession(
+            agent = Agent(faux.model, streamFn = modelsStreamFn(faux.models)),
+            manager = SessionManager.create(
+                createTempDirectory("prompt-test").toFile(),
+                ioDispatcher = Dispatchers.Unconfined
+            ),
+            settingsManager = SettingsManager.inMemory(),
+            models = faux.models,
+            hasConfiguredAuth = { true }
+        )
+
+        session.prompt("hi")
+
+        assertEquals(3, session.state.value.messages.size)
+    }
+
+    @Test
     fun `prompt runs the loop off the caller dispatcher`() = runTest {
         val faux = FauxProvider().apply { setResponses(fauxAssistant()) }
         val callerThread = Thread.currentThread()

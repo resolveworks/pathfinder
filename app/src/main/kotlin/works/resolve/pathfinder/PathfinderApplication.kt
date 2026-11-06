@@ -101,12 +101,9 @@ class PathfinderApplication : Application() {
         ProductionCatalogAuthRegistry(appForegroundGate)
     }
 
+    /** App-facing facade over the runtime models stack's auth operations. */
     val authService: ProviderAuthService by lazy {
-        ProviderAuthService(
-            catalog = modelCatalog,
-            registry = authRegistry,
-            credentials = credentials
-        )
+        ProviderAuthService(catalog = modelCatalog, models = agentFactory.models)
     }
 
     val searchProviderService: SearchProviderService by lazy {

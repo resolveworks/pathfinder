@@ -5,6 +5,8 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
 import works.resolve.pathfinder.ai.auth.oauth.AnthropicOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.GitHubCopilotOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.KimiCodingOAuthAuth
@@ -56,8 +58,26 @@ class ProductionCatalogAuthRegistryTest {
             copilot.knownModelIdsForTest()
         )
 
+        val copilotEntry = catalog.getProvider("github-copilot")!!
         val service =
-            ProviderAuthService(catalog, ProductionCatalogAuthRegistry(), InMemoryCredentialStore())
+            ProviderAuthService(
+                catalog,
+                Models(
+                    listOf(
+                        works.resolve.pathfinder.ai.Provider(
+                            id = copilotEntry.id,
+                            name = copilotEntry.name,
+                            baseUrl = copilotEntry.baseUrl,
+                            auth = CatalogProviderAuth(
+                                copilotEntry,
+                                ProductionCatalogAuthRegistry()
+                            ),
+                            models = copilotEntry.models,
+                            apis = emptyMap()
+                        )
+                    )
+                )
+            )
         val methods = service.authMethods("github-copilot")
         assertEquals(2, methods.size)
         assertContains(methods.map { it.type }, AuthType.API_KEY)

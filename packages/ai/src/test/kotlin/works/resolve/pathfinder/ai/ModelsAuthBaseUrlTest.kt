@@ -16,6 +16,11 @@ import works.resolve.pathfinder.ai.ModelCost
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
+import works.resolve.pathfinder.ai.auth.AuthResult
+import works.resolve.pathfinder.ai.auth.ModelAuth
+import works.resolve.pathfinder.ai.testing.fixedApiKeyAuth
+import works.resolve.pathfinder.ai.testing.testApiKeyAuth
+import works.resolve.pathfinder.ai.testing.testProviderAuth
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 
@@ -91,13 +96,17 @@ class ModelsAuthBaseUrlTest {
                     id = "github-copilot",
                     name = "GitHub Copilot",
                     baseUrl = catalogServer.url("/").toString(),
-                    authResolver = { _, _ ->
-                        // GitHub Copilot toAuth: API key + per-account base URL.
-                        ResolvedAuth(
-                            apiKey = "copilot-token",
-                            baseUrl = authServer.url("/").toString().trimEnd('/')
-                        )
-                    },
+                    auth = testProviderAuth(
+                        apiKey = testApiKeyAuth { _, _ ->
+                            // GitHub Copilot toAuth: API key + per-account base URL.
+                            AuthResult(
+                                ModelAuth(
+                                    apiKey = "copilot-token",
+                                    baseUrl = authServer.url("/").toString().trimEnd('/')
+                                )
+                            )
+                        }
+                    ),
                     models = listOf(modelOnCatalogServer),
                     apis = mapOf(
                         "anthropic-messages" to
@@ -137,7 +146,7 @@ class ModelsAuthBaseUrlTest {
                     id = "github-copilot",
                     name = "GitHub Copilot",
                     baseUrl = catalogServer.url("/").toString(),
-                    authResolver = { _, _ -> ResolvedAuth(apiKey = "copilot-token") },
+                    auth = fixedApiKeyAuth("copilot-token"),
                     models = listOf(modelOnCatalogServer),
                     apis = mapOf(
                         "anthropic-messages" to

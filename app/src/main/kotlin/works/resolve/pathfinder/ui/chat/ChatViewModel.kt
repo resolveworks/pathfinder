@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import works.resolve.pathfinder.LoginProcessGuard
@@ -1131,6 +1132,15 @@ class ChatViewModel(
                 )
             }
         }
+    }
+
+    /**
+     * Android's closest analogue to pi's process-exit credential settle: a
+     * detached OAuth refresh may have already spent the single-use refresh
+     * token, so wait for its write before this session can be torn down.
+     */
+    override fun onCleared() {
+        runBlocking { authService.settleCredentialWrites() }
     }
 
     // ---- app foreground tracking (Android platform glue for OAuth gating) ----

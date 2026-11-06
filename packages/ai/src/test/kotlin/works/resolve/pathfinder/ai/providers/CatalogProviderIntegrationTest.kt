@@ -17,11 +17,11 @@ import okhttp3.mockwebserver.MockWebServer
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.TestCatalogs
+import works.resolve.pathfinder.ai.testing.fixedApiKeyAuth
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
 
 class CatalogProviderIntegrationTest {
@@ -52,7 +52,7 @@ class CatalogProviderIntegrationTest {
             val testKey = "zai-integration-test-key"
             val provider = TestCatalogs.ZAI.toRuntimeProvider(
                 transport = OkHttpTransport(),
-                authResolver = { _, _ -> ResolvedAuth(testKey) }
+                auth = fixedApiKeyAuth(testKey)
             )
             val models = Models(listOf(provider))
 
@@ -115,8 +115,12 @@ class CatalogProviderIntegrationTest {
             val entry = TestCatalogs.CATALOG.getProvider("cloudflare-ai-gateway")!!
             val provider = entry.toRuntimeProvider(
                 transport = OkHttpTransport(),
-                authResolver = { _, _ ->
-                    entry.toResolvedAuth(
+                auth = works.resolve.pathfinder.ai.auth.CatalogProviderAuth(entry)
+            )
+            val store = works.resolve.pathfinder.ai.auth.InMemoryCredentialStore()
+            runBlocking {
+                store.modify(entry.id) {
+                    works.resolve.pathfinder.ai.auth.ApiKeyCredential(
                         key = testKey,
                         env = mapOf(
                             "CLOUDFLARE_ACCOUNT_ID" to "acct-123",
@@ -124,8 +128,8 @@ class CatalogProviderIntegrationTest {
                         )
                     )
                 }
-            )
-            val models = Models(listOf(provider))
+            }
+            val models = Models(listOf(provider), credentials = store)
 
             val events = runBlocking {
                 models.stream(

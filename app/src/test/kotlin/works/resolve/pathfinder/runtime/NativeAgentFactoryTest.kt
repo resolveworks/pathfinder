@@ -29,6 +29,8 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
+import works.resolve.pathfinder.ai.auth.AuthResolutionOverrides
+import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
 import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.auth.CredentialInfo
 import works.resolve.pathfinder.ai.auth.CredentialStore
@@ -355,10 +357,10 @@ class NativeAgentFactoryTest {
             val transport = RecordingTransport()
             val provider = entry.toRuntimeProvider(
                 transport = transport,
-                authResolver = catalogAuthResolver(entry, store)
+                auth = CatalogProviderAuth(entry)
             )
 
-            val events = Models(listOf(provider)).stream(
+            val events = Models(listOf(provider), credentials = store).stream(
                 entry.model("workers-ai/test-model")!!,
                 works.resolve.pathfinder.ai.Context(messages = emptyList()),
                 SimpleStreamOptions(
@@ -389,10 +391,15 @@ class NativeAgentFactoryTest {
                 )
             )
             val entry = catalog.getProvider("cloudflare-ai-gateway")!!
-
-            val auth = catalogAuthResolver(entry, store)(
-                null,
-                mapOf("CLOUDFLARE_ACCOUNT_ID" to "explicit-acct")
+            val transport = RecordingTransport()
+            val provider = entry.toRuntimeProvider(
+                transport = transport,
+                auth = CatalogProviderAuth(entry)
+            )
+            val models = Models(listOf(provider), credentials = store)
+            val auth = models.getAuth(
+                entry.id,
+                AuthResolutionOverrides(env = mapOf("CLOUDFLARE_ACCOUNT_ID" to "explicit-acct"))
             )!!
 
             assertEquals(
@@ -402,14 +409,9 @@ class NativeAgentFactoryTest {
                 ),
                 auth.env
             )
-            assertEquals("Bearer cf-factory-test-key", auth.headers["cf-aig-authorization"])
+            assertEquals("Bearer cf-factory-test-key", auth.auth.headers["cf-aig-authorization"])
 
-            val transport = RecordingTransport()
-            val provider = entry.toRuntimeProvider(
-                transport = transport,
-                authResolver = catalogAuthResolver(entry, store)
-            )
-            Models(listOf(provider)).stream(
+            models.stream(
                 entry.model("workers-ai/test-model")!!,
                 works.resolve.pathfinder.ai.Context(messages = emptyList()),
                 SimpleStreamOptions(env = mapOf("CLOUDFLARE_ACCOUNT_ID" to "explicit-acct"))
@@ -634,12 +636,11 @@ class NativeAgentFactoryTest {
     }
 
     @Test
-    fun `an incomplete credential is skipped and creation falls back`() {
+    fun `an incomplete credential still restores the saved default`() {
         runBlocking {
-            // Cloudflare requires key + both gateway env values; the key
-            // alone is incomplete, so the resolver must return null
-            // (defense in depth) and the unauthenticated saved default is
-            // skipped for an authenticated provider's preferred model.
+            // hasConfiguredAuth is credential presence, not completeness:
+            // resolution reports the provider unconfigured on the first
+            // request, but the restore path does not re-resolve.
             val store = FakeCredentialStore(ApiKeyCredential("cf-incomplete-key"))
             val transport = RecordingTransport()
             val result = factory(
@@ -652,7 +653,7 @@ class NativeAgentFactoryTest {
             )
                 .create(session())
             assertEquals(
-                "zai/glm-5.3",
+                "cloudflare-ai-gateway/workers-ai/test-model",
                 "${result.session.model.provider}/${result.session.model.id}"
             )
             assertTrue(transport.requests.isEmpty(), "no request must be sent")
@@ -664,7 +665,7 @@ class NativeAgentFactoryTest {
         runBlocking {
             // pi's factory refuses to start without a resolvable model;
             // Pathfinder's Agent requires one (AgentState.model non-null).
-            val store = mapOf("cloudflare-ai-gateway" to ApiKeyCredential("cf-incomplete-key"))
+            val store = emptyMap<String, Credential>()
             val error = runCatching {
                 NativeAgentFactory(
                     credentials = object : CredentialStore {

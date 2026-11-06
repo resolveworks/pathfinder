@@ -55,13 +55,13 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.AuthInteraction
+import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
 import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.auth.CredentialInfo
 import works.resolve.pathfinder.ai.auth.CredentialStore
 import works.resolve.pathfinder.ai.auth.LoginOptions
 import works.resolve.pathfinder.ai.auth.MapCatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.ModelAuth
-import works.resolve.pathfinder.ai.auth.NoopAuthContext
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
@@ -77,7 +77,6 @@ import works.resolve.pathfinder.codingagent.core.createAgentSession
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
-import works.resolve.pathfinder.runtime.catalogAuthResolver
 import works.resolve.pathfinder.tools.websearch.BraveSearchExecutor
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 import works.resolve.pathfinder.tools.websearch.SearchTransport
@@ -209,11 +208,6 @@ internal class ChatHarness(
     val authRegistry = MapCatalogAuthRegistry(
         mapOf("zai" to oauthZai, "oauth-only" to oauthOnly, "github-copilot" to oauthCopilot)
     )
-    val authService = ProviderAuthService(
-        catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
-        registry = authRegistry,
-        credentials = credentials
-    )
     val dataStoreScope = CoroutineScope(SupervisorJob() + testDispatcher)
     val failingDataStore = FailingDataStore(
         PreferenceDataStoreFactory.create(
@@ -307,22 +301,23 @@ internal class ChatHarness(
 
     /**
      * Live-switch model stack built through the real production path
-     * ([CatalogProvider.toRuntimeProvider] + [catalogAuthResolver]), so
-     * setModel's checkAuth resolves stored credentials exactly like
-     * production.
+     * ([CatalogProvider.toRuntimeProvider] + catalog auth), so setModel's
+     * checkAuth resolves stored credentials exactly like production.
      */
     val switchModels = Models(
-        works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG.providers.map { entry ->
-            entry.toRuntimeProvider(
-                transport = transport,
-                authResolver = catalogAuthResolver(
-                    entry,
-                    credentials,
-                    NoopAuthContext,
-                    authRegistry
+        providers = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG.providers
+            .map { entry ->
+                entry.toRuntimeProvider(
+                    transport = transport,
+                    auth = CatalogProviderAuth(entry, authRegistry)
                 )
-            )
-        }
+            },
+        credentials = credentials
+    )
+
+    val authService = ProviderAuthService(
+        catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
+        models = switchModels
     )
 
     private val nativeFactory = NativeAgentFactory(
@@ -357,7 +352,7 @@ internal class ChatHarness(
             tools = listOf(fakeWebSearchTool),
             customPrompt = appSettings.customPrompt,
             // pi's restore presence check, wired like production.
-            hasConfiguredAuth = { providerId -> authService.isConfigured(providerId) },
+            hasConfiguredAuth = { providerId -> switchModels.hasConfiguredAuth(providerId) },
             // Keep the prompt loop inside runTest's virtual clock: the
             // production default (Dispatchers.Default) is invisible to it.
             loopDispatcher = testDispatcher,
