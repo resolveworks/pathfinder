@@ -34,7 +34,9 @@ internal class ModelSettingsController(
     private val availableModels: () -> List<Model>,
     /** Re-projects tree rows after a session-applied model/thinking change. */
     private val onSessionApplied: () -> Unit,
-    private val onError: (message: UiString, cause: Throwable?) -> Unit
+    private val onError: (message: UiString, cause: Throwable?) -> Unit,
+    /** Non-failing notices (pi's resolveModelScope warnings), shown on the same snackbar surface. */
+    private val onWarning: (message: UiString) -> Unit
 ) {
     /** Persisted model settings projection ([ChatUiState.defaultModel] and friends mirror this). */
     data class State(
@@ -224,12 +226,16 @@ internal class ModelSettingsController(
         // pi's updateSessionModels: resolve the stored patterns against the
         // currently available models and update the live session's scoped
         // models; a null/all-enabled or match-free selection clears them.
-        val scoped = if (scope != null && scope.any { it in availableKeys }) {
-            resolveModelScope(scope, availableModels()).scopedModels
+        val resolved = if (scope != null && scope.any { it in availableKeys }) {
+            resolveModelScope(scope, availableModels())
         } else {
-            emptyList()
+            null
         }
-        agent()?.setScopedModels(scoped)
+        agent()?.setScopedModels(resolved?.scopedModels.orEmpty())
+        // pi's resolveModelScope logs its warnings; this edit is user-triggered.
+        resolved?.diagnostics?.forEach { diagnostic ->
+            onWarning(UiString(R.string.warning_model_scope, listOf(diagnostic.message)))
+        }
         projectSettings()
     }
 

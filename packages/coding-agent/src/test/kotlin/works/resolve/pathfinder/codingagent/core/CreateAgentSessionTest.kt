@@ -365,6 +365,25 @@ class CreateAgentSessionTest {
     }
 
     @Test
+    fun `scope resolution diagnostics are forwarded on the result`() = runTest {
+        val result = create(
+            manager = newManager(),
+            settings = Settings(enabledModels = listOf("${model.provider}/nope"))
+        )
+
+        assertEquals(
+            listOf(
+                ModelScopeDiagnostic(
+                    code = ModelScopeDiagnosticCode.NO_MATCH,
+                    message = "No models match pattern \"${model.provider}/nope\"",
+                    pattern = "${model.provider}/nope"
+                )
+            ),
+            result.diagnostics
+        )
+    }
+
+    @Test
     fun `a continuing session ignores the scope and restores from the branch`() = runTest {
         val manager = newManager()
         manager.appendMessage(UserMessage.ofText("hello", 1L))
@@ -728,6 +747,25 @@ class ResolveModelScopeTest {
                 result.diagnostics
             )
         }
+    }
+
+    @Test
+    fun `ambiguous providers are listed in Node collation order`() {
+        val upper = zai.copy(id = "shared", provider = "Zeta")
+        val lower = zai.copy(id = "shared", provider = "alpha")
+        val result = resolveModelScope(listOf("shared"), available + upper + lower)
+
+        assertEquals(
+            listOf(
+                diagnostic(
+                    ModelScopeDiagnosticCode.AMBIGUOUS,
+                    "Pattern \"shared\" matches several providers: alpha, Zeta. " +
+                        "Use provider/id to choose one.",
+                    "shared"
+                )
+            ),
+            result.diagnostics
+        )
     }
 
     @Test

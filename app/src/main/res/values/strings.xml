@@ -123,6 +123,7 @@
     <string name="error_already_at_point">Already at this point</string>
     <string name="error_entry_missing">Message not found</string>
     <string name="error_missing_credentials">Sign-in values are still needed: %1$s</string>
+    <string name="warning_model_scope">%1$s</string>
 
     <string name="search_hint">Search</string>
     <string name="search_clear">Clear search</string>
