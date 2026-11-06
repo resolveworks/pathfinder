@@ -1392,6 +1392,34 @@ class AgentLoopTest {
         }
 
     @Test
+    fun `stream completing without a terminal event materializes partial tool arguments`() =
+        runTest {
+            val scaffold = toolCallAssistant(
+                ToolCall("c1", "my_tool", buildJsonObject {}),
+                stopReason = StopReason.ABORTED
+            )
+            val streamFn = StreamFn { _, _, _ ->
+                flowOf(
+                    AssistantMessageEvent.Start(scaffold),
+                    AssistantMessageEvent.ToolCallDelta(0, "{\"a\":\""),
+                    AssistantMessageEvent.ToolCallDelta(0, "x\"}")
+                )
+            }
+
+            val result = runAgentLoop(
+                listOf(UserMessage.ofText("q")),
+                AgentContext(messages = emptyList()),
+                AgentLoopConfig(model, streamFn = streamFn)
+            ) {}
+
+            val finalized = result.last() as AssistantMessage
+            assertEquals(
+                listOf(ToolCall("c1", "my_tool", buildJsonObject { put("a", "x") })),
+                finalized.content
+            )
+        }
+
+    @Test
     fun `assistant prompt is declared and emitted like any other message`() = runTest {
         val final = assistant("done")
         val streamFn = scriptedStream(final)

@@ -542,6 +542,24 @@ class OpenAiCompletionsStreamTest {
         val events = api(
             transport
         ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        // Each tool-call start is a boundary snapshot of the partial arguments
+        // streamed so far, not just the finished calls.
+        val starts = events.filterIsInstance<AssistantMessageEvent.ToolCallStart>()
+        assertEquals(buildJsonObject {}, assertIs<ToolCall>(starts[0].partial.content[0]).arguments)
+        assertEquals(
+            // The incremental parser holds an unterminated number as a double.
+            buildJsonObject { put("x", 1.0) },
+            assertIs<ToolCall>(starts[1].partial.content[0]).arguments
+        )
+        assertEquals(buildJsonObject {}, assertIs<ToolCall>(starts[1].partial.content[1]).arguments)
+        val ends = events.filterIsInstance<AssistantMessageEvent.ToolCallEnd>()
+        assertEquals(
+            buildJsonObject {
+                put("x", 1)
+                put("z", 3)
+            },
+            assertIs<ToolCall>(ends.single { it.contentIndex == 0 }.partial.content[0]).arguments
+        )
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(
             buildJsonObject {

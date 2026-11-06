@@ -343,6 +343,55 @@ class MistralConversationsApiTest {
         }
 
     @Test
+    fun `tool argument boundary snapshots expose partial arguments across deltas`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"id":"response-1","choices":[{"index":0,"finish_reason":null,
+                   "delta":{"tool_calls":[{"id":"abc123456","index":0,
+                   "function":{"name":"lookup","arguments":"{\"query\":\"p"}}]}}]}""",
+                """{"id":"response-1","choices":[{"index":0,"finish_reason":null,
+                   "delta":{"tool_calls":[{"id":"def123456","index":1,
+                   "function":{"name":"other","arguments":"{}"}}]}}]}""",
+                """{"id":"response-1","choices":[{"index":0,"finish_reason":null,
+                   "delta":{"tool_calls":[{"id":"abc123456","index":0,
+                   "function":{"name":"lookup","arguments":"i\"}"}}]}}]}""",
+                terminalEvent(finishReason = "tool_calls")
+            )
+        )
+
+        val events = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+
+        // The second call's start is a boundary snapshot of the first
+        // call's arguments streamed so far.
+        val starts = events.filterIsInstance<AssistantMessageEvent.ToolCallStart>()
+        assertEquals(
+            buildJsonObject { put("query", "p") },
+            assertIs<ToolCall>(starts[1].partial.content[0]).arguments
+        )
+        assertEquals(
+            JsonObject(emptyMap()),
+            assertIs<ToolCall>(starts[1].partial.content[1]).arguments
+        )
+        val end = events.filterIsInstance<AssistantMessageEvent.ToolCallEnd>()
+            .single { it.contentIndex == 0 }
+        assertEquals(
+            buildJsonObject { put("query", "pi") },
+            assertIs<ToolCall>(end.partial.content[0]).arguments
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(
+            listOf(
+                ToolCall("abc123456", "lookup", buildJsonObject { put("query", "pi") }),
+                ToolCall("def123456", "other", JsonObject(emptyMap()))
+            ),
+            done.message.content
+        )
+    }
+
+    @Test
     fun `indexed chunks sharing an id stay distinct tool calls`() = runTest {
         // pi keys by `toolCall.index ?? callId`, so the index dominates: a
         // shared id across two indexes is two tool calls.

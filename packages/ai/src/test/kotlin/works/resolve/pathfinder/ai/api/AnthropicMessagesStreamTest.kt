@@ -403,6 +403,39 @@ class AnthropicMessagesStreamTest {
     }
 
     @Test
+    fun `tool argument boundary snapshots expose partial arguments across deltas`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            messageStart(),
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_partial","name":"edit"}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"src"}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"/main.kt\"}"}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":1}""",
+            messageDelta(stopReason = "tool_use"),
+            messageStop
+        )
+        val events = api(
+            transport
+        ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList()
+
+        val expected = buildJsonObject { put("path", "src/main.kt") }
+        // The text block starts after both argument deltas, so its boundary
+        // snapshot carries the partial arguments streamed so far.
+        val textStart = events.filterIsInstance<AssistantMessageEvent.TextStart>().single()
+        assertEquals(expected, assertIs<ToolCall>(textStart.partial.content[0]).arguments)
+        val toolEnd = events.filterIsInstance<AssistantMessageEvent.ToolCallEnd>().single()
+        assertEquals(expected, assertIs<ToolCall>(toolEnd.partial.content[0]).arguments)
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(expected, assertIs<ToolCall>(done.message.content[0]).arguments)
+    }
+
+    @Test
     fun `blank tool input buffer finalizes as empty object`() = runTest {
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
