@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.utils
 
+import kotlin.math.ceil
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.random.Random
@@ -14,7 +15,9 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
  * either SDK is upgraded. Honors `retry-after-ms` / `retry-after`, falling
  * back to exponential backoff when either delay is unparseable; a
  * server-requested delay above maxRetryDelayMs fails immediately instead of
- * sleeping. Sleep is injectable so tests never wait.
+ * sleeping. Server delays are validated before any truncation to whole
+ * milliseconds, so a fractional value above the cap still fails. Sleep is
+ * injectable so tests never wait.
  */
 class ProviderRetry(
     private val sleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
@@ -67,7 +70,11 @@ class ProviderRetry(
             error.header("retry-after-ms")?.let { header ->
                 val value = jsParseFloatOrNull(header)
                 if (value != null && value.isFinite()) {
-                    return validateServerDelayMs(value.toLong(), maxRetryDelayMs, error)
+                    return validateRetryDelayMs(
+                        value,
+                        maxRetryDelayMs,
+                        messageSuffix = error.message
+                    )
                 }
             }
             error.header("retry-after")?.let { header ->
@@ -80,19 +87,17 @@ class ProviderRetry(
                     } ?: Double.NaN
                 }
                 if (delayMs.isFinite()) {
-                    return validateServerDelayMs(delayMs.toLong(), maxRetryDelayMs, error)
+                    return validateRetryDelayMs(
+                        delayMs,
+                        maxRetryDelayMs,
+                        messageSuffix = error.message
+                    )
                 }
             }
         }
         val exponential = min(0.5 * 2.0.pow(retryIndex), 8.0) * 1000
         return (exponential * (1 - random() * 0.25)).toLong()
     }
-
-    private fun validateServerDelayMs(
-        delayMs: Long,
-        maxRetryDelayMs: Long,
-        error: Exception
-    ): Long = validateRetryDelayMs(delayMs, maxRetryDelayMs, messageSuffix = error.message)
 }
 
 private inline fun parseDateMsOrNull(value: String, parse: (String) -> java.time.Instant): Long? =
@@ -143,17 +148,17 @@ internal class RetryDelayExceededError(message: String) : Exception(message)
  * text ([messageSuffix]); the codex variant passes none, exactly as upstream.
  */
 internal fun validateRetryDelayMs(
-    delayMs: Long,
+    delayMs: Double,
     maxRetryDelayMs: Long,
     messageSuffix: String? = null
 ): Long {
     if (maxRetryDelayMs > 0 && delayMs > maxRetryDelayMs) {
-        val seconds = (delayMs + 999) / 1000
+        val seconds = ceil(delayMs / 1000).toLong()
         val maxSeconds = (maxRetryDelayMs + 999) / 1000
         val suffix = if (messageSuffix != null) ". $messageSuffix" else ""
         throw RetryDelayExceededError(
             "Server requested ${seconds}s retry delay (max: ${maxSeconds}s)$suffix"
         )
     }
-    return delayMs
+    return delayMs.toLong()
 }

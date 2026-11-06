@@ -34,7 +34,11 @@ private val NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPatte
         "subscription_sharing_usage_limit_exceeded",
         // Sign in with ChatGPT on a ChatGPT Business plan: a usage limit set by the
         // workspace admin. Only the admin can raise it.
-        "subscription_sharing_workplace_individual_usage_limit_exceeded"
+        "subscription_sharing_workplace_individual_usage_limit_exceeded",
+
+        // Zhipu/Z.ai (open.bigmodel.cn) error code 1308: the plan's usage limit is
+        // reached, sent as HTTP 429. It resets after hours, not seconds (#11537).
+        "\"code\"\\s*:\\s*\"?1308(?![0-9])"
     )
 )
 
@@ -106,6 +110,9 @@ private val RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern(
         // Codex CLI mid-stream disconnect, relayed by proxies that wrap the Codex CLI,
         // e.g. "stream disconnected before completion: stream closed before response.completed" (#11057).
         "stream disconnected before completion",
+        // Magpie gateway relaying a dropped upstream Anthropic stream, e.g.
+        // "Claude Code's stream from Anthropic was cut short after the reply had begun" (#11879).
+        "cut short after the reply had begun",
         // Node ERR_HTTP2_STREAM_CANCEL: the HTTP/2 session died before the request was
         // sent, e.g. after the Bedrock SDK's 5-minute session timeout (#10379).
         "pending stream has been canceled",
@@ -256,10 +263,11 @@ class Retry(private val sleep: suspend (Long) -> Unit = { kotlinx.coroutines.del
 
             try {
                 sleep(delayMs)
-            } catch (error: CancellationException) {
+            } catch (error: Throwable) {
                 withContext(NonCancellable) {
                     callbacks?.onRetryFinished?.invoke(false, attempt, errorMessage)
                 }
+                if (error !is CancellationException) throw error
                 return response.copy(stopReason = StopReason.ABORTED, errorMessage = null)
             }
             callbacks?.onRetryAttemptStart?.invoke()

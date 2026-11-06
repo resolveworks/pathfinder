@@ -132,6 +132,19 @@ class OverflowTest {
     }
 
     @Test
+    fun `detects LiteLLM pre-call ContextWindowExceededError`() {
+        // Regression for #11492.
+        val message = createErrorMessage(
+            "400: {\"message\":\"litellm.ContextWindowExceededError: litellm.BadRequestError: " +
+                "litellm._pre_call_checks: Context Window exceeded for given call. " +
+                "No models have context window large enough for this call.\\n" +
+                "Model=Qwen3.8-Flash-Next, Max Input Tokens=262144, Got=265262\\n" +
+                "model=Qwen3.8-Flash-Next. context_window_fallbacks=None. fallbacks=[]\"}"
+        )
+        assertTrue(isContextOverflow(message, 262144))
+    }
+
+    @Test
     fun `detects OpenAI-compatible parenthesized maximum context length errors`() {
         val message = createErrorMessage(
             "Error: 400 Input length (265330) exceeds model's maximum context length (262144)."

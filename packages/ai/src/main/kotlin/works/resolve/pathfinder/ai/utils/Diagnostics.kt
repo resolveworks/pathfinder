@@ -27,8 +27,11 @@ data class AssistantMessageDiagnostic(
 )
 
 fun formatThrownValue(value: Any?): String = when (value) {
-    is Throwable -> value.message ?: value::class.simpleName ?: "Throwable"
+    is Throwable ->
+        value.message.takeUnless { it.isNullOrEmpty() } ?: value::class.simpleName ?: "Throwable"
+
     is String -> value
+
     else -> value.toString()
 }
 
@@ -38,7 +41,8 @@ fun extractDiagnosticError(error: Any?): DiagnosticErrorInfo {
     }
     return DiagnosticErrorInfo(
         name = error::class.simpleName,
-        message = error.message ?: error::class.simpleName ?: "Throwable",
+        message = error.message.takeUnless { it.isNullOrEmpty() } ?: error::class.simpleName
+            ?: "Throwable",
         stack = error.stackTraceToString()
     )
 }

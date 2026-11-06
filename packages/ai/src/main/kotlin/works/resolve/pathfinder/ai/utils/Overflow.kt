@@ -12,6 +12,7 @@ import works.resolve.pathfinder.ai.StopReason
  * - Anthropic: "413 {\"error\":{\"type\":\"request_too_large\",...}}"
  * - OpenAI: "Your input exceeds the context window of this model"
  * - OpenAI/LiteLLM: "Requested token count exceeds the model's maximum context length of 131072 tokens"
+ * - LiteLLM pre-call check: "litellm.ContextWindowExceededError: ... Context Window exceeded for given call."
  * - Google: "The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)"
  * - Together AI: "The input (X tokens) is longer than the model's context length (Y tokens)."
  * - z.ai: `{"code":"1261","message":"Prompt too long"}` or silent overflow via usage.input > contextWindow
@@ -30,6 +31,8 @@ private val OVERFLOW_PATTERNS = listOf(
         "exceeds (?:the )?(?:model'?s )?maximum context length(?: of [\\d,]+ tokens?|\\s*\\([\\d,]+\\))",
         RegexOption.IGNORE_CASE
     ), // OpenAI-compatible proxies (LiteLLM)
+    // LiteLLM pre-call check (ContextWindowExceededError)
+    Regex("context window exceeded", RegexOption.IGNORE_CASE),
     Regex("input token count.*exceeds the maximum", RegexOption.IGNORE_CASE), // Google (Gemini)
     Regex("maximum prompt length is \\d+", RegexOption.IGNORE_CASE), // xAI (Grok)
     Regex("reduce the length of the messages", RegexOption.IGNORE_CASE), // Groq

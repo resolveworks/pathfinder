@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ai.utils
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -173,6 +174,41 @@ class RetryTest {
                 )
             )
         }
+    }
+
+    @Test
+    fun `matches gateway wording for a stream cut short mid-reply`() {
+        // Regression for #11879.
+        val errorMessage =
+            "Claude Code's stream from Anthropic was cut short after the reply had begun"
+        assertTrue(
+            Retry().isRetryableAssistantError(
+                fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = errorMessage)
+            )
+        )
+    }
+
+    @Test
+    fun `keeps the Zhipu usage limit non-retryable`() {
+        // Regression for #11537: HTTP 429 with plan usage limit code 1308.
+        val errorMessage =
+            """429 {"code":"1308","message":"已达到 5 小时的使用上限。"}"""
+        assertFalse(
+            Retry().isRetryableAssistantError(
+                fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = errorMessage)
+            )
+        )
+    }
+
+    @Test
+    fun `retries despite a request id containing 1308`() {
+        val errorMessage =
+            """429 {"message":"too many requests","request_id":"req_1308abc"}"""
+        assertTrue(
+            Retry().isRetryableAssistantError(
+                fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = errorMessage)
+            )
+        )
     }
 
     @Test
@@ -489,4 +525,26 @@ class RetryTest {
             assertEquals(1, calls)
             assertEquals(Triple(false, 1, "terminated"), finished)
         }
+
+    @Test
+    fun `reports onRetryFinished before rethrowing a non-cancellation sleep failure`() = runTest {
+        var calls = 0
+        var finished: Triple<Boolean, Int, String?>? = null
+        val thrown = assertFailsWith<IllegalStateException> {
+            Retry(sleep = { throw IllegalStateException("sleep failed") }).retryAssistantCall(
+                {
+                    calls++
+                    fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "terminated")
+                },
+                RetryPolicy(enabled = true, maxRetries = 5, baseDelayMs = 10_000),
+                RetryCallbacks(onRetryFinished = { success, attempt, finalError ->
+                    finished =
+                        Triple(success, attempt, finalError)
+                })
+            )
+        }
+        assertEquals("sleep failed", thrown.message)
+        assertEquals(1, calls)
+        assertEquals(Triple(false, 1, "terminated"), finished)
+    }
 }

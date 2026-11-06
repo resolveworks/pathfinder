@@ -772,7 +772,7 @@ class OpenAICodexResponsesApi(
                             val delayMs = if (retryAfter == null) {
                                 (BASE_DELAY_MS * Math.pow(2.0, attempt.toDouble())).toLong()
                             } else {
-                                validateRetryDelayMs(retryAfter, options.maxRetryDelayMs)
+                                validateRetryDelayMs(retryAfter.toDouble(), options.maxRetryDelayMs)
                             }
                             sleep(delayMs)
                             continue
