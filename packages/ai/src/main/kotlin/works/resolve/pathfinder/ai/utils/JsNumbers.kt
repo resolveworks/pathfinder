@@ -1,5 +1,9 @@
 package works.resolve.pathfinder.ai.utils
 
+import java.math.BigDecimal
+import java.math.MathContext
+import java.math.RoundingMode
+
 /**
  * JS `Number.MAX_SAFE_INTEGER` (2^53 − 1): the largest integer a JS number
  * holds exactly. pi uses it both as a validation bound (settings token
@@ -9,12 +13,42 @@ const val MAX_SAFE_INTEGER = 9007199254740991L
 
 /**
  * Renders a number the way JavaScript template literals and `String(x)` do
- * (5, not 5.0); null renders as "null" like `${null}`.
+ * (ECMAScript Number::toString): shortest round-trip digits, plain decimal for
+ * 1e-7 <= |x| < 1e21 and `e+`/`e-` notation outside it, `-0` as "0". Null
+ * renders as "null" like `${null}`.
  */
 fun jsNumber(value: Double?): String = when {
     value == null -> "null"
-    value == value.toLong().toDouble() -> value.toLong().toString()
-    else -> value.toString()
+    value.isNaN() -> "NaN"
+    value == 0.0 -> "0"
+    value < 0 -> "-" + jsNumber(-value)
+    value.isInfinite() -> "Infinity"
+    else -> renderFiniteJsNumber(value)
+}
+
+private fun renderFiniteJsNumber(value: Double): String {
+    val rounded = shortestRoundTrip(value)
+    val digits = rounded.unscaledValue().abs().toString()
+    val n = digits.length - rounded.scale()
+    return when {
+        n in digits.length..21 -> digits + "0".repeat(n - digits.length)
+        n in 1..21 -> digits.substring(0, n) + "." + digits.substring(n)
+        n in -5..0 -> "0." + "0".repeat(-n) + digits
+        digits.length == 1 -> digits + "e" + formatExponent(n - 1)
+        else -> digits[0] + "." + digits.substring(1) + "e" + formatExponent(n - 1)
+    }
+}
+
+private fun formatExponent(exponent: Int): String =
+    if (exponent >= 0) "+$exponent" else exponent.toString()
+
+/** Fewest significant digits that still round-trip to [value], ties to even. */
+private fun shortestRoundTrip(value: Double): BigDecimal {
+    for (precision in 1..17) {
+        val candidate = BigDecimal(value).round(MathContext(precision, RoundingMode.HALF_EVEN))
+        if (candidate.toDouble() == value) return candidate
+    }
+    error("no round-trip decimal for $value")
 }
 
 /**

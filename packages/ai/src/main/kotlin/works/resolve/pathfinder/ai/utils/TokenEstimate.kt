@@ -24,8 +24,19 @@ import works.resolve.pathfinder.ai.Usage
 private const val CHARS_PER_TOKEN = 3.5
 private const val ESTIMATED_IMAGE_CHARS = 4800
 
-/** Tokens always reserved for safety when clamping max output tokens. */
 private const val CONTEXT_SAFETY_TOKENS = 4096
+
+/**
+ * Extra input margin for OpenRouter, which counts input with its own tokenizer
+ * and rejects input + maxTokens above the window before routing.
+ */
+private const val CONTEXT_SAFETY_RATIO = 0.15
+
+/**
+ * The ratio margin is kept only while it leaves at least this much output;
+ * otherwise only the fixed margin is kept and output is capped here.
+ */
+private const val MIN_OUTPUT_WITH_RATIO_MARGIN = 32768
 private const val MIN_MAX_TOKENS = 1
 
 data class ContextUsageEstimate(
@@ -161,12 +172,17 @@ fun estimateContextTokens(messages: List<Message>): ContextUsageEstimate =
 
 /**
  * Clamps a requested max output token limit to the room left in the model's
- * context window, keeping [CONTEXT_SAFETY_TOKENS] tokens of headroom and at
- * least [MIN_MAX_TOKENS] for the answer.
+ * context window, keeping input headroom and at least [MIN_MAX_TOKENS] for the
+ * answer.
  */
 fun clampMaxTokensToContext(model: Model, context: TranscriptContext, maxTokens: Int): Int {
     if (model.contextWindow <= 0) return max(MIN_MAX_TOKENS, maxTokens)
-    val available =
-        model.contextWindow - estimateContextTokens(context).tokens - CONTEXT_SAFETY_TOKENS
-    return min(maxTokens, max(MIN_MAX_TOKENS, available))
+    val input = estimateContextTokens(context).tokens
+    val margin = max(CONTEXT_SAFETY_TOKENS, ceil(input * CONTEXT_SAFETY_RATIO).toInt())
+    var room = model.contextWindow - input - margin
+    if (room < MIN_OUTPUT_WITH_RATIO_MARGIN) {
+        room =
+            min(MIN_OUTPUT_WITH_RATIO_MARGIN, model.contextWindow - input - CONTEXT_SAFETY_TOKENS)
+    }
+    return min(maxTokens, max(MIN_MAX_TOKENS, room))
 }

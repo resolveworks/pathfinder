@@ -73,6 +73,16 @@ class JsNumbersTest {
         assertEquals("5.5", jsNumber(5.5))
         assertEquals("1000", jsNumber(1e3))
         assertEquals("null", jsNumber(null))
+        assertEquals("0", jsNumber(-0.0))
+        assertEquals("NaN", jsNumber(Double.NaN))
         assertEquals("Infinity", jsNumber(Double.POSITIVE_INFINITY))
+        assertEquals("-Infinity", jsNumber(Double.NEGATIVE_INFINITY))
+        assertEquals("1.5", jsNumber(1.5))
+        assertEquals("0.30000000000000004", jsNumber(0.1 + 0.2))
+        assertEquals("100000000000000000000", jsNumber(1e20))
+        assertEquals("1e+21", jsNumber(1e21))
+        assertEquals("-1e+21", jsNumber(-1e21))
+        assertEquals("0.000001", jsNumber(1e-6))
+        assertEquals("1e-7", jsNumber(1e-7))
     }
 }
