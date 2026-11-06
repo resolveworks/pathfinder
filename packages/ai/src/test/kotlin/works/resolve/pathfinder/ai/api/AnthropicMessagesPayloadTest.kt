@@ -929,6 +929,27 @@ class AnthropicMessagesPayloadTest {
     }
 
     @Test
+    fun `non-strict tool schemas keep root definitions for refs`() {
+        val refTool = tool.copy(
+            parameters = Json.parseToJsonElement(
+                """{"type":"object","properties":{"path":{"${'$'}ref":"#/${'$'}defs/Path"}},"required":["path"],"${'$'}defs":{"Path":{"type":"string"}},"definitions":{"Legacy":{"type":"string"}},"additionalProperties":false,"title":"RefInput"}"""
+            )
+        )
+        val converted = body(
+            normalizeContext(
+                Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(refTool))
+            )
+        )["tools"]!!.jsonArray[0].jsonObject
+        assertNull(converted["strict"])
+        assertEquals(
+            Json.parseToJsonElement(
+                """{"type":"object","properties":{"path":{"${'$'}ref":"#/${'$'}defs/Path"}},"required":["path"],"${'$'}defs":{"Path":{"type":"string"}},"definitions":{"Legacy":{"type":"string"}}}"""
+            ),
+            converted["input_schema"]
+        )
+    }
+
+    @Test
     fun `require strict tools reject when compat is false`() {
         val requireTool = tool.copy(
             constrainedSampling = ConstrainedSamplingConfig.JsonSchema(
@@ -1092,9 +1113,10 @@ class AnthropicMessagesPayloadTest {
             secondMessages.take(firstMessages.size).map { it.wire() }
         )
         assertEquals(highMarker, secondMessages.last().wire())
-        // Top-level output_config stays "high"; active effort travels per-message.
-        assertEquals("""{"effort":"high"}""", second["output_config"].toString())
-        assertEquals("""{"effort":"high"}""", first["output_config"].toString())
+        // Top-level output_config is always "low" so organizations that cap effort accept it;
+        // the active effort travels per-message.
+        assertEquals("""{"effort":"low"}""", second["output_config"].toString())
+        assertEquals("""{"effort":"low"}""", first["output_config"].toString())
         assertEquals(
             """{"type":"adaptive","display":"summarized","block_binding":{"prefix_mismatch_behavior":"drop_block"}}""",
             second["thinking"].toString()

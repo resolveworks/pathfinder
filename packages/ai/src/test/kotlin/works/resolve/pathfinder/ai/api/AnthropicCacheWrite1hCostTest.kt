@@ -32,10 +32,15 @@ class AnthropicCacheWrite1hCostTest {
 
     private val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
-    private fun eventsWithCacheCreation(cacheCreation: String?): List<Pair<String, String>> {
+    private fun eventsWithCacheCreation(
+        cacheCreation: String?,
+        deltaCacheCreation: String? = null
+    ): List<Pair<String, String>> {
         val baseUsage =
             "\"input_tokens\":100,\"output_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":1000000"
         val startUsage = cacheCreation?.let { "$baseUsage,\"cache_creation\":$it" } ?: baseUsage
+        val deltaUsage =
+            deltaCacheCreation?.let { "$baseUsage,\"cache_creation\":$it" } ?: baseUsage
         return listOf(
             "message_start" to
                 """{"type":"message_start","message":{"id":"msg_test","usage":{$startUsage}}}""",
@@ -45,7 +50,7 @@ class AnthropicCacheWrite1hCostTest {
                 """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
             "message_delta" to
-                """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":100,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":1000000}}""",
+                """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{$deltaUsage}}""",
             "message_stop" to """{"type":"message_stop"}"""
         )
     }
@@ -68,6 +73,19 @@ class AnthropicCacheWrite1hCostTest {
     fun `prices the 1h portion at 2x input and the rest at the 5m rate`() = runTest {
         val usage = streamResult(
             eventsWithCacheCreation(
+                """{"ephemeral_5m_input_tokens":600000,"ephemeral_1h_input_tokens":400000}"""
+            )
+        )
+        assertEquals(1_000_000, usage.cacheWrite)
+        assertEquals(400_000, usage.cacheWrite1h)
+        assertEquals(7.75, usage.cost.cacheWrite, 1e-10)
+    }
+
+    @Test
+    fun `message_delta cache creation breakdown sets the 1h portion`() = runTest {
+        val usage = streamResult(
+            eventsWithCacheCreation(
+                null,
                 """{"ephemeral_5m_input_tokens":600000,"ephemeral_1h_input_tokens":400000}"""
             )
         )

@@ -1223,7 +1223,7 @@ class AnthropicMessagesStreamTest {
             "claude-code-20250219,oauth-2025-04-20",
             request.headers["anthropic-beta"]
         )
-        assertEquals("claude-cli/2.1.251", request.headers["user-agent"])
+        assertEquals("claude-cli/2.1.280", request.headers["user-agent"])
         assertEquals("cli", request.headers["x-app"])
     }
 
