@@ -3,6 +3,7 @@ package works.resolve.pathfinder.codingagent.core.compaction
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -15,6 +16,7 @@ import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.Provider
 import works.resolve.pathfinder.ai.ResolvedAuth
@@ -22,6 +24,7 @@ import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
@@ -33,6 +36,9 @@ import works.resolve.pathfinder.codingagent.core.BRANCH_SUMMARY_SUFFIX
 import works.resolve.pathfinder.codingagent.core.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.COMPACTION_SUMMARY_PREFIX
 import works.resolve.pathfinder.codingagent.core.CompactionEntry
+import works.resolve.pathfinder.codingagent.core.ContextEditEntry
+import works.resolve.pathfinder.codingagent.core.ContextEditReplacement
+import works.resolve.pathfinder.codingagent.core.ContextEditableContent
 import works.resolve.pathfinder.codingagent.core.MessageEntry
 import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
 import works.resolve.pathfinder.codingagent.core.ReadonlySessionManager
@@ -196,9 +202,42 @@ class BranchSummarizationTest {
                 COMPACTION_SUMMARY_PREFIX.trimStart().substringBefore("<")
             )
         )
-        // Entry-level estimates (pi's summary roles): root 2 + branch summary 6
-        // + answer 2 + compaction 3, each ceil(summary.length / 3.5).
-        assertEquals(13, preparation.totalTokens)
+        // Entry-level estimates (pi's summary roles): root 1 + branch summary 5
+        // + answer 2 + compaction 3, each ceil(length / 4).
+        assertEquals(11, preparation.totalTokens)
+    }
+
+    @Test
+    fun `preparation applies context edits to branch entries`() {
+        val root = messageEntry(user("Investigate login"))
+        val failed = messageEntry(assistant("FAILED_ATTEMPT"), root.id)
+        val omit = ContextEditEntry(
+            id = createId(),
+            parentId = failed.id,
+            timestamp = nextId.toLong(),
+            targetId = failed.id,
+            replacement = null
+        )
+        val ok = messageEntry(assistant("ORIGINAL_TEXT"), omit.id)
+        val replace = ContextEditEntry(
+            id = createId(),
+            parentId = ok.id,
+            timestamp = nextId.toLong(),
+            targetId = ok.id,
+            replacement = ContextEditReplacement(ContextEditableContent.Text("REPLACED_TEXT"))
+        )
+
+        val preparation = prepareBranchEntries(listOf(root, failed, omit, ok, replace))
+        val serialized = preparation.messages.joinToString("\n") {
+            (it as? UserMessage)?.content?.joinToString("") { block ->
+                (block as? TextContent)?.text.orEmpty()
+            } ?: ((it as AssistantMessage).content[0] as TextContent).text
+        }
+
+        assertTrue(serialized.contains("Investigate login"))
+        assertFalse(serialized.contains("FAILED_ATTEMPT"))
+        assertFalse(serialized.contains("ORIGINAL_TEXT"))
+        assertTrue(serialized.contains("REPLACED_TEXT"))
     }
 
     @Test
@@ -219,7 +258,7 @@ class BranchSummarizationTest {
 
     @Test
     fun `token budget keeps the newest messages and stops`() {
-        // ~100 tokens per message under estimateMessageTokens' char/4 heuristic.
+        // ~100 tokens per message under the compaction estimator's char/4 heuristic.
         val big = "x".repeat(400)
         val e1 = messageEntry(user(big))
         val e2 = messageEntry(user(big), e1.id)
@@ -279,7 +318,7 @@ class BranchSummarizationTest {
 
     private class Faux(val api: FauxApi, val models: Models, val model: Model)
 
-    private fun createFaux(): Faux {
+    private fun createFaux(reasoning: Boolean = false): Faux {
         val api = FauxApi()
         val providerId = "faux-${++fauxCount}"
         val model = Model(
@@ -288,7 +327,7 @@ class BranchSummarizationTest {
             api = "faux-api",
             provider = providerId,
             baseUrl = "https://faux.test",
-            reasoning = false,
+            reasoning = reasoning,
             contextWindow = 200000,
             maxTokens = 8192
         )
@@ -360,6 +399,47 @@ class BranchSummarizationTest {
             "<conversation>\n[User]: explore the widget\n</conversation>\n\n$BRANCH_SUMMARY_PROMPT"
         assertEquals(expectedPrompt, promptText(faux.api.seenContexts[0]))
         assertEquals(1000, (faux.api.seenContexts[0].messages[1] as UserMessage).timestamp)
+    }
+
+    @Test
+    fun `passes thinking level only for reasoning-capable models`() = runTest {
+        val entries = listOf(messageEntry(user("m")))
+
+        val reasoning = createFaux(reasoning = true)
+        reasoning.api.responses += fauxAssistantMessage("s")
+        generateBranchSummary(
+            entries,
+            GenerateBranchSummaryOptions(
+                models = reasoning.models,
+                model = reasoning.model,
+                thinkingLevel = ModelThinkingLevel.XHIGH
+            )
+        )
+        assertEquals(ThinkingLevel.XHIGH, reasoning.api.seenOptions[0].reasoning)
+
+        val off = createFaux(reasoning = true)
+        off.api.responses += fauxAssistantMessage("s")
+        generateBranchSummary(
+            entries,
+            GenerateBranchSummaryOptions(
+                models = off.models,
+                model = off.model,
+                thinkingLevel = ModelThinkingLevel.OFF
+            )
+        )
+        assertNull(off.api.seenOptions[0].reasoning)
+
+        val nonReasoning = createFaux()
+        nonReasoning.api.responses += fauxAssistantMessage("s")
+        generateBranchSummary(
+            entries,
+            GenerateBranchSummaryOptions(
+                models = nonReasoning.models,
+                model = nonReasoning.model,
+                thinkingLevel = ModelThinkingLevel.XHIGH
+            )
+        )
+        assertNull(nonReasoning.api.seenOptions[0].reasoning)
     }
 
     @Test

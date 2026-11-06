@@ -280,7 +280,7 @@ fun resolveTranscriptTools(
  * parameters, and constrainedSampling only when defined. Shared with token
  * estimation so both compare and measure the same serialization.
  */
-internal fun toolToJson(tool: Tool): JsonObject = buildJsonObject {
+fun toolToJson(tool: Tool): JsonObject = buildJsonObject {
     put("name", tool.name)
     put("description", tool.description)
     put("parameters", tool.parameters)

@@ -6,13 +6,14 @@ import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.utils.contentText
+import works.resolve.pathfinder.codingagent.core.utils.sliceHead
 
 private const val TOOL_RESULT_MAX_CHARS = 2000
 
 private fun truncateForSummary(text: String, maxChars: Int): String {
     if (text.length <= maxChars) return text
     val truncatedChars = text.length - maxChars
-    return "${text.substring(0, maxChars)}\n\n[... $truncatedChars more characters truncated]"
+    return "${sliceHead(text, maxChars)}\n\n[... $truncatedChars more characters truncated]"
 }
 
 /**

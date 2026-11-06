@@ -33,6 +33,7 @@ import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FauxProvider
 import works.resolve.pathfinder.ai.testing.FauxResponseFactory
 import works.resolve.pathfinder.codingagent.core.CompactionSettings
+import works.resolve.pathfinder.codingagent.core.compaction.estimateTokens
 
 class AgentSessionCompactionTest {
 
@@ -153,9 +154,8 @@ class AgentSessionCompactionTest {
 
     @Test
     fun `estimatedTokensAfter uses the compaction-local estimator`() = runTest {
-        // pi's compaction-local estimator counts system messages as prompt
-        // state (0 tokens): the replayed prompt and mid-conversation
-        // patches do not inflate the post-compaction estimate.
+        // The compaction-local estimator counts system prompt content,
+        // sections, and added tools, including mid-conversation patches.
         val faux = FauxProvider()
         faux.setResponses(assistant("4"), assistant("SUMMARY"), assistant("SUMMARY"))
         val manager = SessionManager.create(
@@ -189,9 +189,7 @@ class AgentSessionCompactionTest {
 
         val context = manager.buildSessionContext().messages
         assertTrue(context.any { it is SystemMessage })
-        val expected = context
-            .filterNot { it is SystemMessage }
-            .sumOf { works.resolve.pathfinder.ai.utils.estimateMessageTokens(it) }
+        val expected = context.sumOf { estimateTokens(it) }
         assertEquals(expected, result.estimatedTokensAfter)
     }
 

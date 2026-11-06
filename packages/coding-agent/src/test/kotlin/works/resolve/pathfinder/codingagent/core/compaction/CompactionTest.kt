@@ -176,7 +176,7 @@ class CompactionTest {
     }
 
     @Test
-    fun `system messages contribute zero tokens and are never cut points`() {
+    fun `system messages count tokens but are never cut points`() {
         val system = createMessageEntry(
             SystemMessage(content = listOf(TextContent("x".repeat(4000))))
         )
@@ -187,16 +187,15 @@ class CompactionTest {
 
         val result = findCutPoint(entries, 0, entries.size, 100)
 
-        // The system entry estimates 0 (pi's estimator has no system case) and
-        // is not a cut candidate (pi's cut-point switch omits system), so the
-        // walk never crosses the budget and the cut stays at the first cut
-        // point; a counted system entry would have pulled it to index 0.
+        // The system entry is counted by pi's estimator but is not a cut
+        // candidate (pi's cut-point switch omits system), so the cut stays at
+        // the first cut point rather than the system entry.
         assertEquals(1, result.firstKeptEntryIndex)
         assertEquals(user0.id, entries[result.firstKeptEntryIndex].id)
     }
 
     @Test
-    fun `summary entries estimate summary length over 3_5`() {
+    fun `summary entries estimate summary length over 4`() {
         val summary = "x".repeat(401)
         val compaction = works.resolve.pathfinder.codingagent.core.CompactionEntry(
             id = createId(),
@@ -213,16 +212,16 @@ class CompactionTest {
             fromId = "branch",
             summary = summary
         )
-        assertEquals(115, estimateEntryTokens(compaction))
-        assertEquals(115, estimateEntryTokens(branch))
+        assertEquals(101, estimateEntryTokens(compaction))
+        assertEquals(101, estimateEntryTokens(branch))
         // The wrapped user-message projection overestimates both.
-        assertTrue(estimateTokens(createBranchSummaryMessage(summary, "from", 1L)) > 115)
-        assertTrue(estimateTokens(createCompactionSummaryMessage(summary, 0, 1L)) > 115)
+        assertTrue(estimateTokens(createBranchSummaryMessage(summary, "from", 1L)) > 101)
+        assertTrue(estimateTokens(createCompactionSummaryMessage(summary, 0, 1L)) > 101)
     }
 
     @Test
-    fun `cut walk counts summary entries at summary length over 3_5`() {
-        val summary = "x".repeat(400) // 115 tokens at summary/3.5
+    fun `cut walk counts summary entries at summary length over 4`() {
+        val summary = "x".repeat(400) // 100 tokens at summary/4
         val wrappedTokens = estimateTokens(createBranchSummaryMessage(summary, "from", 1L))
         val user0 = createMessageEntry(createUserMessage("a"))
         val branch = works.resolve.pathfinder.codingagent.core.BranchSummaryEntry(
@@ -236,7 +235,7 @@ class CompactionTest {
         val entries = listOf<SessionEntry>(user0, branch, user1)
 
         // Budget set to the wrapped projection's estimate: the entry-level
-        // summary/3.5 count keeps the walk (1 + 115 + 1) under budget, so the
+        // summary/4 count keeps the walk (1 + 100 + 1) under budget, so the
         // cut stays at the first cut point instead of landing on the summary
         // entry as the wrapped estimate would.
         val result = findCutPoint(entries, 0, entries.size, wrappedTokens)
@@ -270,13 +269,13 @@ class CompactionTest {
         assertTrue(estimateTokens(UserMessage.ofText("plain user")) > 0)
         assertTrue(estimateTokens(assistantWithThinkingAndTool) > 0)
         assertTrue(estimateTokens(toolResultWithImage) > 1000)
-        // pi's estimator has no system case, so system messages estimate 0
-        // (see estimateTokens in Compaction.kt); custom roles have no
-        // pathfinder counterpart, and the summary roles are estimated from
-        // their entries (estimateEntryTokens) — the wrapped user-message
-        // projections asserted here keep the message-level chars/4 estimate.
+        // System content is counted at chars/4 (see estimateTokens in
+        // Compaction.kt); custom roles have no pathfinder counterpart, and the
+        // summary roles are estimated from their entries (estimateEntryTokens)
+        // — the wrapped user-message projections asserted here keep the
+        // message-level chars/4 estimate.
         assertEquals(
-            0,
+            1000,
             estimateTokens(SystemMessage(content = listOf(TextContent("x".repeat(4000)))))
         )
         assertTrue(estimateTokens(createBranchSummaryMessage("branch", "x", timestamp = 1L)) > 0)
@@ -346,6 +345,24 @@ class CompactionTest {
         val result = serializeConversation(messages)
         assertTrue("[Tool result]:" in result)
         assertTrue("[... 3000 more characters truncated]" in result)
+    }
+
+    @Test
+    fun `truncates tool results without splitting a surrogate pair`() {
+        val prefix = "x".repeat(1999)
+        val messages = listOf(
+            ToolResultMessage(
+                toolCallId = "tc1",
+                toolName = "read",
+                content = listOf(TextContent(prefix + "\uD83D\uDE00" + "y".repeat(3000)))
+            )
+        )
+
+        val result = serializeConversation(messages)
+
+        assertTrue(
+            result.startsWith("[Tool result]: $prefix\n\n[... 3001 more characters truncated]")
+        )
     }
 
     @Test
