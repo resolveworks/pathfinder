@@ -160,11 +160,13 @@ class JsonlCodecTest {
     }
 
     @Test
-    fun `malformed context edit replacements are skipped`() {
+    fun `malformed typed payloads fall back to raw entries`() {
         val line = "{\"type\":\"context_edit\",\"id\":\"e1\",\"parentId\":null," +
             "\"timestamp\":\"1970-01-01T00:00:00.001Z\",\"targetId\":\"m0\"," +
             "\"replacement\":{\"content\":1}}"
-        assertNull(JsonlCodec.parseLine(line))
+        val entry =
+            assertIs<RawEntry>(assertIs<JsonlCodec.Line.Entry>(JsonlCodec.parseLine(line)).entry)
+        assertEquals("e1", entry.id)
     }
 
     @Test
@@ -231,16 +233,20 @@ class JsonlCodecTest {
         assertEquals(StopReason.ABORTED, message.stopReason)
         assertEquals(0, message.usage.reasoning)
         // Only pi's wire strings decode; old Pathfinder shapes ("ABORTED",
-        // "tool_use") are invalid data and reject.
-        assertNull(
-            JsonlCodec.parseLine(
-                piLine.replace("\"stopReason\":\"aborted\"", "\"stopReason\":\"ABORTED\"")
-            )
+        // "tool_use") are invalid data and stay raw rather than joining the tree.
+        assertIs<RawEntry>(
+            assertIs<JsonlCodec.Line.Entry>(
+                JsonlCodec.parseLine(
+                    piLine.replace("\"stopReason\":\"aborted\"", "\"stopReason\":\"ABORTED\"")
+                )
+            ).entry
         )
-        assertNull(
-            JsonlCodec.parseLine(
-                piLine.replace("\"stopReason\":\"aborted\"", "\"stopReason\":\"tool_use\"")
-            )
+        assertIs<RawEntry>(
+            assertIs<JsonlCodec.Line.Entry>(
+                JsonlCodec.parseLine(
+                    piLine.replace("\"stopReason\":\"aborted\"", "\"stopReason\":\"tool_use\"")
+                )
+            ).entry
         )
 
         // pi's wire value for TOOL_USE is camelCase.
@@ -363,13 +369,22 @@ class JsonlCodecTest {
     }
 
     @Test
-    fun `header requires string id and iso timestamp`() {
+    fun `header requires string id and the current version`() {
         assertNull(
             JsonlCodec.parseLine(
                 """{"type":"session","version":3,"timestamp":"2026-09-05T19:03:40.386Z"}"""
             )
         )
-        assertNull(JsonlCodec.parseLine("""{"type":"session","version":3,"id":"a"}"""))
+        assertNull(JsonlCodec.parseLine("""{"type":"session","version":2,"id":"a"}"""))
+        assertNull(JsonlCodec.parseLine("""{"type":"session","id":"a"}"""))
+
+        // The timestamp is not part of header identity: a missing one still
+        // decodes the header.
+        val header = assertIs<JsonlCodec.Line.Header>(
+            JsonlCodec.parseLine("""{"type":"session","version":3,"id":"a"}""")
+        )
+        assertEquals("a", header.header.id)
+        assertNull(header.header.timestamp)
     }
 
     @Test
