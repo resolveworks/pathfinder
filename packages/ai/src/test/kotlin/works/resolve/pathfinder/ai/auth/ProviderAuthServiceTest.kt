@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -332,8 +333,13 @@ class ProviderAuthServiceTest {
         val credential = store.read("acme") as ApiKeyCredential
         assertEquals("", credential.key)
         assertEquals(mapOf("ACME_ACCOUNT_ID" to "account-42"), credential.env)
-        // pi's prompts accept blank values; the credential is still stored.
-        assertTrue(service(catalog(), store).isConfigured("acme"))
+        // pi's prompts accept blank values; the empty credential is stored
+        // but does not resolve as configured.
+        assertFalse(service(catalog(), store).isConfigured("acme"))
+        assertEquals(
+            CredentialType.API_KEY,
+            service(catalog(), store).authStatus("acme").storedType
+        )
     }
 
     @Test
@@ -350,7 +356,11 @@ class ProviderAuthServiceTest {
         val credential = store.read("acme") as ApiKeyCredential
         assertEquals("sk-test", credential.key)
         assertEquals(mapOf("ACME_ACCOUNT_ID" to ""), credential.env)
-        assertTrue(service(catalog(), store).isConfigured("acme"))
+        assertFalse(service(catalog(), store).isConfigured("acme"))
+        assertEquals(
+            CredentialType.API_KEY,
+            service(catalog(), store).authStatus("acme").storedType
+        )
     }
 
     @Test
@@ -521,15 +531,19 @@ class ProviderAuthServiceTest {
         }
         assertTrue(service.isConfigured("acme"))
 
-        // Presence, not resolution: an incomplete credential is still stored.
+        // An incomplete credential is stored but does not resolve.
         store.modify("acme") { ApiKeyCredential(key = "sk") }
-        assertTrue(service.isConfigured("acme"))
+        assertFalse(service.isConfigured("acme"))
+        assertEquals(CredentialType.API_KEY, service.authStatus("acme").storedType)
 
-        // A stored OAuth credential is present regardless of a registered flow.
+        // A stored OAuth credential counts configured only with a handler;
+        // its stored type is independent of resolvability.
         store.modify("acme") {
             OAuthCredential(access = "a", refresh = "r", expires = Long.MAX_VALUE)
         }
-        assertTrue(service(catalog(apiKey = false, oauth = true), store).isConfigured("acme"))
+        val noFlow = service(catalog(apiKey = false, oauth = true), store)
+        assertFalse(noFlow.isConfigured("acme"))
+        assertEquals(CredentialType.OAUTH, noFlow.authStatus("acme").storedType)
         assertTrue(
             service(
                 catalog(apiKey = false, oauth = true),
@@ -660,6 +674,10 @@ class ProviderAuthServiceTest {
 
         assertEquals(AuthStatus("acme", CredentialType.API_KEY), status)
         assertEquals("", (store.read("acme") as ApiKeyCredential).key)
-        assertTrue(service(singlePrompt, store).isConfigured("acme"))
+        assertFalse(service(singlePrompt, store).isConfigured("acme"))
+        assertEquals(
+            CredentialType.API_KEY,
+            service(singlePrompt, store).authStatus("acme").storedType
+        )
     }
 }

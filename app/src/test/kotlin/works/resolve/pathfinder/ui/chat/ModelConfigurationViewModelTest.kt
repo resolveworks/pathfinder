@@ -252,13 +252,13 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             val sessionId = vm.uiState.value.activeSessionId!!
             val entriesBefore = h.createdAgents.single().sessionManager.getEntries().size
 
-            // A key-only credential is present but incomplete for Cloudflare
-            // (account/gateway ids required): the provider counts as
-            // configured, its availability list is empty, and checkAuth
-            // rejects the live switch — nothing appended, model unchanged.
+            // A key-only credential is incomplete for Cloudflare (account/gateway
+            // ids required): the provider is unconfigured, its availability
+            // list is empty, and checkAuth rejects the live switch — nothing
+            // appended, model unchanged.
             h.credentials.creds["cloudflare-ai-gateway"] = ApiKeyCredential("cf", emptyMap())
             vm.refreshProviderStatus()
-            assertTrue(
+            assertFalse(
                 vm.uiState.value.providerOptions.first { o ->
                     o.id == "cloudflare-ai-gateway"
                 }.configured

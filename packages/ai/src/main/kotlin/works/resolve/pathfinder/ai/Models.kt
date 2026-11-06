@@ -36,6 +36,7 @@ import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.auth.CredentialInfo
 import works.resolve.pathfinder.ai.auth.CredentialStore
+import works.resolve.pathfinder.ai.auth.CredentialType
 import works.resolve.pathfinder.ai.auth.InMemoryCredentialStore
 import works.resolve.pathfinder.ai.auth.LoginOptions
 import works.resolve.pathfinder.ai.auth.ModelsError
@@ -233,17 +234,21 @@ class Models(
     }
 
     /**
-     * Cheap configured-provider presence for restore/preflight paths: the
-     * stored credential exists, without resolving it (no OAuth refresh). A
-     * store read failure reports unconfigured.
+     * pi's configured-provider snapshot: whether [checkAuth] finds usable auth
+     * without refreshing OAuth. A store or check failure reports
+     * unconfigured, like a snapshot entry that never resolved.
      */
     suspend fun hasConfiguredAuth(providerId: String): Boolean = try {
-        serverCredentialWrites.read(providerId) != null
+        checkAuth(providerId) != null
     } catch (error: CancellationException) {
         throw error
     } catch (_: Exception) {
         false
     }
+
+    /** Stored credential type as persisted, independent of whether it resolves. */
+    suspend fun storedCredentialType(providerId: String): CredentialType? =
+        readCredential(providerId)?.type
 
     /** pi ModelRuntime.isUsingOAuth, derived from the stored/resolved credential type. */
     suspend fun isUsingOAuth(providerId: String): Boolean =

@@ -101,6 +101,7 @@ internal val testModel = Model(
 internal class FakeCredentialStore : CredentialStore {
     val creds = mutableMapOf<String, Credential>()
     var failWrites = false
+    var beforeModify: (suspend () -> Unit)? = null
     private fun check() {
         if (failWrites) throw java.io.IOException("credential store failed")
     }
@@ -116,6 +117,7 @@ internal class FakeCredentialStore : CredentialStore {
         providerId: String,
         update: suspend (Credential?) -> Credential?
     ): Credential? {
+        beforeModify?.invoke()
         check()
         val next = update(creds[providerId])
         if (next != null) creds[providerId] = next
@@ -175,6 +177,9 @@ internal class ChatHarness(
     private val testDispatcher: TestDispatcher
 ) {
     val viewModels = CopyOnWriteArrayList<ChatViewModel>()
+
+    /** Process-wide teardown scope; cancelled after each test. */
+    val processScope = CoroutineScope(SupervisorJob() + testDispatcher)
 
     val credentials = FakeCredentialStore()
 
@@ -381,6 +386,7 @@ internal class ChatHarness(
         sessionIdFactory = sessionIdFactory,
         sessionIoDispatcher = sessionIoDispatcher,
         agentFactory = factory,
+        processScope = processScope,
         modelResolver = modelResolver,
         searchProviderService = searchProviders,
         webSearchTool = webSearchTool,
@@ -487,6 +493,21 @@ internal abstract class ChatHarnessTest {
     protected fun harness(): ChatHarness =
         ChatHarness(tmpFolder, mainDispatcherRule.testDispatcher).also { harnesses += it }
 
+    /** Invokes [ChatViewModel.onCleared] through its owner store. */
+    protected fun clearViewModel(vm: ChatViewModel) {
+        val store = androidx.lifecycle.ViewModelStore()
+        val provider = androidx.lifecycle.ViewModelProvider(
+            store,
+            object : androidx.lifecycle.ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T =
+                    vm as T
+            }
+        )
+        provider[ChatViewModel::class.java]
+        store.clear()
+    }
+
     /** Safety net: passing tests join via [closeForTest]; a test that failed first leaves live ViewModel scopes to cancel and join here. */
     @After
     fun disposeHarnesses() {
@@ -498,6 +519,7 @@ internal abstract class ChatHarnessTest {
                 }
             }
             harness.dataStoreScope.cancel()
+            harness.processScope.cancel()
         }
         harnesses.clear()
     }

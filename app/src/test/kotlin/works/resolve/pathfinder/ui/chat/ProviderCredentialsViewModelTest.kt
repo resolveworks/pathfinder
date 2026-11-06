@@ -546,8 +546,8 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
     fun storedOAuthCredential_configuresProvider_onlyWithRegisteredFlow() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
-            // Presence marks both providers configured; only the one with a
-            // registered flow has a resolvable credential type/models.
+            // Only the registered flow makes a provider configured; stored
+            // types stay visible for sign-out regardless.
             h.credentials.creds["zai"] =
                 OAuthCredential("access-token-9", "refresh-token-9", Long.MAX_VALUE)
             h.credentials.creds["cloudflare-ai-gateway"] =
@@ -557,8 +557,11 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             val state = vm.awaitState { it.status == ChatStatus.Ready }
             assertTrue(state.providerOptions.first { it.id == "zai" }.configured)
             assertEquals(AuthType.OAUTH, state.providerOptions.first { it.id == "zai" }.authType)
-            assertTrue(state.providerOptions.first { it.id == "cloudflare-ai-gateway" }.configured)
-            assertNull(state.providerOptions.first { it.id == "cloudflare-ai-gateway" }.authType)
+            assertFalse(state.providerOptions.first { it.id == "cloudflare-ai-gateway" }.configured)
+            assertEquals(
+                AuthType.OAUTH,
+                state.providerOptions.first { it.id == "cloudflare-ai-gateway" }.authType
+            )
             assertTrue(state.modelOptions.all { it.providerId == "zai" })
             assertTrue(state.modelOptions.isNotEmpty())
             assertFalse(state.toString().contains("access-token-9"))

@@ -296,11 +296,11 @@ class NativeAgentFactoryTest {
             assertTrue(last is works.resolve.pathfinder.ai.AssistantMessage)
             assertEquals("Hi", (last.content.single() as TextContent).text)
 
-            // Three resolutions, as in pi: createAgentSession's restore
-            // auth check, then the prompt() preflight, then the request
-            // itself resolves lazily again — so a rotated key is still
+            // Five reads, as in pi: checkAuth reads the credential and then
+            // resolves it (two each) on the restore and preflight checks, and
+            // the request resolves lazily again — so a rotated key is still
             // observed at prompt time.
-            assertEquals(3, store.readCalls)
+            assertEquals(5, store.readCalls)
             val request = transport.requests.single()
             assertEquals("https://api.z.ai/api/coding/paas/v4/chat/completions", request.url)
             assertEquals("factory-test-key-2", request.bearerToken)
@@ -636,11 +636,11 @@ class NativeAgentFactoryTest {
     }
 
     @Test
-    fun `an incomplete credential still restores the saved default`() {
+    fun `an incomplete credential is skipped and creation falls back`() {
         runBlocking {
-            // hasConfiguredAuth is credential presence, not completeness:
-            // resolution reports the provider unconfigured on the first
-            // request, but the restore path does not re-resolve.
+            // Cloudflare requires key + both gateway env values; the key
+            // alone does not resolve, so the saved default is skipped for an
+            // authenticated provider's preferred model.
             val store = FakeCredentialStore(ApiKeyCredential("cf-incomplete-key"))
             val transport = RecordingTransport()
             val result = factory(
@@ -653,7 +653,7 @@ class NativeAgentFactoryTest {
             )
                 .create(session())
             assertEquals(
-                "cloudflare-ai-gateway/workers-ai/test-model",
+                "zai/glm-5.3",
                 "${result.session.model.provider}/${result.session.model.id}"
             )
             assertTrue(transport.requests.isEmpty(), "no request must be sent")

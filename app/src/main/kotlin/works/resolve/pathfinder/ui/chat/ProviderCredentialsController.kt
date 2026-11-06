@@ -141,13 +141,10 @@ internal class ProviderCredentialsController(
             catalog.providers
                 .map { provider ->
                     val configured = authService.isConfigured(provider.id)
-                    // The stored kind labels the sign-out action ("Log out"
-                    // vs "Forget provider"); read only when configured.
-                    val authType = if (configured) {
-                        authService.authStatus(provider.id).storedType
-                    } else {
-                        null
-                    }
+                    // The stored kind is independent of resolvability: it
+                    // labels the sign-out action ("Log out" vs "Forget
+                    // provider") even for an incomplete or unhandled credential.
+                    val authType = authService.authStatus(provider.id).storedType
                     ProviderOption(
                         id = provider.id,
                         name = provider.name,

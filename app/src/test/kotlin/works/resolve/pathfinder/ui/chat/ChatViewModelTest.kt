@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -1427,6 +1428,44 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             // Let the stream finish so teardown never abandons it.
             gate.complete(Unit)
             vm.awaitState { !it.isStreaming }
+
+            vm.closeForTest()
+        }
+
+    @Test
+    fun onCleared_dispatchesCredentialSettleWithoutBlocking() =
+        runTest(mainDispatcherRule.scheduler) {
+            val h = harness()
+            val vm = h.newViewModel()
+            vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
+
+            val modifyStarted = CompletableDeferred<Unit>()
+            val releaseModify = CompletableDeferred<Unit>()
+            h.credentials.beforeModify = {
+                modifyStarted.complete(Unit)
+                releaseModify.await()
+            }
+            val interaction = object : AuthInteraction {
+                override suspend fun prompt(prompt: AuthInteractionPrompt): String = "k"
+
+                override suspend fun notify(event: AuthEvent) = Unit
+            }
+            val login = launch {
+                h.authService.login("zai", AuthType.API_KEY, interaction)
+            }
+            modifyStarted.await()
+
+            clearViewModel(vm)
+            mainDispatcherRule.scheduler.runCurrent()
+
+            val teardown = h.processScope.coroutineContext[Job]!!
+            assertTrue(teardown.children.any { it.isActive })
+            assertFalse(releaseModify.isCompleted)
+
+            releaseModify.complete(Unit)
+            login.join()
+            mainDispatcherRule.scheduler.advanceUntilIdle()
+            assertTrue(teardown.children.none { it.isActive })
 
             vm.closeForTest()
         }

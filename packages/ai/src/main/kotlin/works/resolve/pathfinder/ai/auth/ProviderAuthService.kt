@@ -45,15 +45,10 @@ class ProviderAuthService(private val catalog: ProviderCatalog, private val mode
         return methods
     }
 
-    /** Stored/resolved credential type, without resolving or refreshing OAuth. */
+    /** Stored credential type, independent of whether it currently resolves. */
     suspend fun authStatus(providerId: String): AuthStatus {
         requireProvider(providerId)
-        val type = when (models.checkAuth(providerId)?.type) {
-            AuthType.API_KEY -> CredentialType.API_KEY
-            AuthType.OAUTH -> CredentialType.OAUTH
-            null -> null
-        }
-        return AuthStatus(providerId, type)
+        return AuthStatus(providerId, models.storedCredentialType(providerId))
     }
 
     /** Present stored credential, without resolving or refreshing it. */

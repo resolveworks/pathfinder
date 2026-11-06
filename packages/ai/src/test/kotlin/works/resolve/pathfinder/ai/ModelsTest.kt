@@ -29,6 +29,7 @@ import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
 import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.auth.CredentialInfo
 import works.resolve.pathfinder.ai.auth.CredentialStore
+import works.resolve.pathfinder.ai.auth.CredentialType
 import works.resolve.pathfinder.ai.auth.InMemoryCredentialStore
 import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.ModelsError
@@ -197,6 +198,7 @@ class ModelsTest {
             "Credential store read failed for prov: store unavailable",
             error.message
         )
+        assertFalse(registry.hasConfiguredAuth("prov"))
     }
 
     @Test
@@ -220,6 +222,30 @@ class ModelsTest {
             "API key auth check failed for provider prov: check refused",
             error.message
         )
+    }
+
+    @Test
+    fun incompleteApiKeyIsStoredButNotConfigured() = runTest {
+        val store = InMemoryCredentialStore()
+        store.modify("prov") { ApiKeyCredential(key = "sk") }
+        val registry = Models(
+            listOf(
+                provider(
+                    auth = testProviderAuth(
+                        apiKey = testApiKeyAuth { _, credential ->
+                            credential?.env?.get("ACCOUNT")?.let {
+                                AuthResult(ModelAuth(apiKey = credential.key))
+                            }
+                        }
+                    )
+                )
+            ),
+            credentials = store
+        )
+
+        assertNull(registry.checkAuth("prov"))
+        assertFalse(registry.hasConfiguredAuth("prov"))
+        assertEquals(CredentialType.API_KEY, registry.storedCredentialType("prov"))
     }
 
     @Test

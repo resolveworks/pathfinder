@@ -7,6 +7,9 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import works.resolve.pathfinder.ai.auth.CatalogAuthRegistry
@@ -106,6 +109,15 @@ class PathfinderApplication : Application() {
         ProviderAuthService(catalog = modelCatalog, models = agentFactory.models)
     }
 
+    /**
+     * Process-wide scope for best-effort cleanup that must outlive a
+     * ViewModel. Android has no deterministic process-exit hook, so teardown
+     * only starts the work; the OS may end the process before it completes.
+     */
+    val processScope: CoroutineScope by lazy {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    }
+
     val searchProviderService: SearchProviderService by lazy {
         SearchProviderService(settingsRepository, credentials)
     }
@@ -185,6 +197,7 @@ class PathfinderApplication : Application() {
                 sessionsDir = File(filesDir, SESSIONS_DIRECTORY),
                 shareCacheDir = File(cacheDir, EXPORTS_DIRECTORY),
                 agentFactory = agentFactory,
+                processScope = processScope,
                 searchProviderService = searchProviderService,
                 webSearchTool = webSearchTool,
                 modelResolver = agentFactory::resolveModel,

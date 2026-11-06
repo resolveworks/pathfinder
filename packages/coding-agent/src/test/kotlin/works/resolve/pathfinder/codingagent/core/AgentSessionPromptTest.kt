@@ -19,10 +19,18 @@ import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.Provider
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.auth.ApiKeyCredential
+import works.resolve.pathfinder.ai.auth.AuthResult
+import works.resolve.pathfinder.ai.auth.InMemoryCredentialStore
+import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.testing.FauxProvider
+import works.resolve.pathfinder.ai.testing.testApiKeyAuth
+import works.resolve.pathfinder.ai.testing.testProviderAuth
 
 class AgentSessionPromptTest {
 
@@ -37,6 +45,44 @@ class AgentSessionPromptTest {
             ),
             settingsManager = SettingsManager.inMemory(),
             models = faux.models
+        )
+
+        val error = runCatching { session.prompt("hi") }.exceptionOrNull()
+        assertEquals("No API key found for ${faux.model.provider}.", error?.message)
+    }
+
+    @Test
+    fun `throws when a stored api key is incomplete`() = runTest {
+        val faux = FauxProvider(configuredAuth = false)
+        val store = InMemoryCredentialStore()
+        store.modify(faux.model.provider) { ApiKeyCredential(key = "k") }
+        val models = Models(
+            listOf(
+                Provider(
+                    id = faux.model.provider,
+                    name = faux.model.provider,
+                    baseUrl = faux.model.baseUrl,
+                    auth = testProviderAuth(
+                        apiKey = testApiKeyAuth { _, credential ->
+                            credential?.env?.get("ACCOUNT")?.let {
+                                AuthResult(ModelAuth(apiKey = credential.key))
+                            }
+                        }
+                    ),
+                    models = listOf(faux.model),
+                    apis = emptyMap()
+                )
+            ),
+            credentials = store
+        )
+        val session = AgentSession(
+            agent = Agent(faux.model, streamFn = modelsStreamFn(models)),
+            manager = SessionManager.create(
+                createTempDirectory("prompt-test").toFile(),
+                ioDispatcher = Dispatchers.Unconfined
+            ),
+            settingsManager = SettingsManager.inMemory(),
+            models = models
         )
 
         val error = runCatching { session.prompt("hi") }.exceptionOrNull()
