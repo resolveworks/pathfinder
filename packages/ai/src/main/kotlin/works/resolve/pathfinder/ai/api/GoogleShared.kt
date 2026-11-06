@@ -3,6 +3,7 @@ package works.resolve.pathfinder.ai.api
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -223,7 +224,11 @@ object GoogleShared {
                                 // signature. Gemini attaches the signature to a part whose
                                 // visible text is empty and requires it echoed back; dropping
                                 // it breaks the reasoning chain.
-                                if (block.text.isBlank() && thoughtSignature == null) continue
+                                if (trimJsWhitespace(block.text).isEmpty() &&
+                                    thoughtSignature == null
+                                ) {
+                                    continue
+                                }
                                 parts.add(
                                     buildJsonObject {
                                         put("text", sanitizeSurrogates(block.text))
@@ -238,7 +243,7 @@ object GoogleShared {
                                     val thoughtSignature =
                                         resolveThoughtSignature(true, block.thinkingSignature)
                                     // Same empty-block rule as text blocks.
-                                    if (block.thinking.isBlank() &&
+                                    if (trimJsWhitespace(block.thinking).isEmpty() &&
                                         thoughtSignature == null
                                     ) {
                                         continue
@@ -253,7 +258,7 @@ object GoogleShared {
                                 } else {
                                     // Cross-provider/model: the signature is unusable; convert
                                     // to plain text (no tags to avoid the model mimicking them).
-                                    if (block.thinking.isBlank()) continue
+                                    if (trimJsWhitespace(block.thinking).isEmpty()) continue
                                     parts.add(
                                         buildJsonObject {
                                             put("text", sanitizeSurrogates(block.thinking))
@@ -471,6 +476,78 @@ object GoogleShared {
         )
     }
 
+    /** Schema keywords whose values map names to subschemas, so their keys are not schema keywords. */
+    private val JSON_SCHEMA_NAME_MAPS = setOf(
+        "properties",
+        "patternProperties",
+        "${'$'}defs",
+        "definitions",
+        "dependentSchemas",
+        "dependencies"
+    )
+
+    /** Keywords containing a subschema or an array of subschemas, not literal data. */
+    private val JSON_SCHEMA_SUBSCHEMAS = setOf(
+        "additionalProperties",
+        "unevaluatedProperties",
+        "propertyNames",
+        "items",
+        "prefixItems",
+        "additionalItems",
+        "unevaluatedItems",
+        "contains",
+        "allOf",
+        "anyOf",
+        "oneOf",
+        "not",
+        "if",
+        "then",
+        "else",
+        "contentSchema"
+    )
+
+    /**
+     * Rewrite string and number `const` values to single-value `enum`s; Gemini
+     * ignores `const` in `parametersJsonSchema` but honors `enum`. Literal data
+     * under `default`, `examples`, `enum`, and custom keys is left untouched.
+     */
+    private fun rewriteConstAsEnum(schema: JsonElement, isNameMap: Boolean = false): JsonElement =
+        when (schema) {
+            is JsonArray -> JsonArray(schema.map { rewriteConstAsEnum(it) })
+
+            is JsonObject -> {
+                val result = buildJsonObject {
+                    for ((key, value) in schema) {
+                        when {
+                            isNameMap || key in JSON_SCHEMA_SUBSCHEMAS ->
+                                put(key, rewriteConstAsEnum(value))
+
+                            key in JSON_SCHEMA_NAME_MAPS ->
+                                put(key, rewriteConstAsEnum(value, isNameMap = true))
+
+                            else -> put(key, value)
+                        }
+                    }
+                }
+                val const = result["const"]
+                if (!isNameMap && const != null && "enum" !in result &&
+                    const is JsonPrimitive &&
+                    (const.isString || const.content.toDoubleOrNull() != null)
+                ) {
+                    buildJsonObject {
+                        for ((key, value) in result) {
+                            if (key != "const") put(key, value)
+                        }
+                        put("enum", buildJsonArray { add(const) })
+                    }
+                } else {
+                    result
+                }
+            }
+
+            else -> schema
+        }
+
     /**
      * Convert tools to Gemini function declarations. By default uses
      * `parametersJsonSchema` (full JSON Schema); `useParameters` selects the
@@ -499,7 +576,10 @@ object GoogleShared {
                                     if (useParameters) {
                                         put("parameters", sanitizeForOpenApi(parameters))
                                     } else {
-                                        put("parametersJsonSchema", parameters)
+                                        put(
+                                            "parametersJsonSchema",
+                                            rewriteConstAsEnum(parameters)
+                                        )
                                     }
                                 }
                             }
