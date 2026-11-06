@@ -30,6 +30,7 @@ import works.resolve.pathfinder.ai.MessageRole
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.OpenAiCompletionsCompat
+import works.resolve.pathfinder.ai.PromptCacheKeyMode
 import works.resolve.pathfinder.ai.ProviderAuthException
 import works.resolve.pathfinder.ai.ProviderResponse
 import works.resolve.pathfinder.ai.ProviderStreamException
@@ -968,8 +969,20 @@ object OpenAiCompletionsPayload {
         body["stream"] = JsonPrimitive(true)
 
         val sendPromptCacheKey =
-            (model.baseUrl.contains("api.openai.com") && cacheRetention != CacheRetention.NONE) ||
-                (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention)
+            (
+                compat.promptCacheKeyMode == PromptCacheKeyMode.ENABLED ||
+                    (
+                        compat.promptCacheKeyMode == PromptCacheKeyMode.AUTO &&
+                            (
+                                model.baseUrl.contains("api.openai.com") ||
+                                    (
+                                        cacheRetention == CacheRetention.LONG &&
+                                            compat.supportsLongCacheRetention
+                                        )
+                                )
+                        )
+                ) &&
+                cacheRetention != CacheRetention.NONE
         if (sendPromptCacheKey) {
             clampOpenAIPromptCacheKey(options.sessionId)?.let {
                 body["prompt_cache_key"] = JsonPrimitive(it)

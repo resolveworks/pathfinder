@@ -28,6 +28,7 @@ import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.GrammarFormat
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.PromptCacheKeyMode
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.StrictJsonSchemaMode
 import works.resolve.pathfinder.ai.SystemMessage
@@ -1539,6 +1540,59 @@ class OpenAiCompletionsPayloadTest {
         )
         assertEquals("session-proxy", b["prompt_cache_key"]!!.jsonPrimitive.content)
         assertEquals("24h", b["prompt_cache_retention"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `prompt cache key mode disabled omits the key with retention on`() {
+        val openai = openaiModel.copy(
+            compat = openaiModel.compat.copy(
+                promptCacheKeyMode = PromptCacheKeyMode.DISABLED
+            )
+        )
+        val b = body(
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
+            OpenAiCompletionsOptions(
+                apiKey = "k",
+                sessionId = "session-disabled",
+                cacheRetention = CacheRetention.LONG
+            ),
+            openai
+        )
+        assertFalse(b.containsKey("prompt_cache_key"))
+    }
+
+    @Test
+    fun `prompt cache key mode enabled sends the key for a proxy`() {
+        val proxy = openaiModel.copy(
+            baseUrl = "https://proxy.example.com/v1",
+            compat = openaiModel.compat.copy(
+                promptCacheKeyMode = PromptCacheKeyMode.ENABLED,
+                supportsLongCacheRetention = false
+            )
+        )
+        val b = body(
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-enabled"),
+            proxy
+        )
+        assertEquals("session-enabled", b["prompt_cache_key"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `prompt cache key auto omits the key for a short-lived proxy cache`() {
+        val proxy = openaiModel.copy(
+            baseUrl = "https://proxy.example.com/v1",
+            compat = openaiModel.compat.copy(
+                promptCacheKeyMode = PromptCacheKeyMode.AUTO,
+                supportsLongCacheRetention = false
+            )
+        )
+        val b = body(
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-auto"),
+            proxy
+        )
+        assertFalse(b.containsKey("prompt_cache_key"))
     }
 
     private val openrouterAnthropic = works.resolve.pathfinder.ai.Model(
