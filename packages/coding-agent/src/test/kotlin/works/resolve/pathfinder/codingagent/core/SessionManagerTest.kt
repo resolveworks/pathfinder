@@ -398,6 +398,124 @@ class SessionManagerTest {
         assertEquals(1788635022000L, info.modified)
     }
 
+    @Test
+    fun `failed append keeps memory in line with the file`() = runTest {
+        val dir = createTempDirectory()
+        val m = manager(dir)
+        m.appendMessage(user("hello"))
+        val file = jsonlFiles(dir).single()
+        val written = file.readText()
+        val userEntryId = m.getLeafId()
+        assertTrue(file.delete())
+        assertTrue(file.mkdir())
+
+        assertFailsWith<SessionError> {
+            m.appendMessage(assistant())
+        }.let { assertEquals(SessionErrorCode.STORAGE, it.code) }
+        assertEquals(userEntryId, m.getLeafId())
+        assertEquals(listOf("e0"), m.getEntries().map { it.id })
+
+        assertTrue(file.delete())
+        file.writeText(written)
+        clock.advanceMillis(10)
+        m.appendMessage(assistant())
+        assertEquals(userEntryId, m.getLeafEntry()!!.parentId)
+
+        val reopened = SessionManager.open(file, clock, ioDispatcher = testDispatcher())
+        assertContentEquals(m.getEntries().map { it.id }, reopened.getEntries().map { it.id })
+    }
+
+    @Test
+    fun `a failed first write leaves no entry or conversation`() = runTest {
+        val dir = createTempDirectory()
+        val m = manager(dir)
+        val file = m.getSessionFile()!!
+        assertTrue(file.mkdirs())
+
+        assertFailsWith<SessionError> {
+            m.appendMessage(user("hello"))
+        }.let { assertEquals(SessionErrorCode.STORAGE, it.code) }
+        assertNull(m.getLeafId())
+        assertTrue(m.getEntries().isEmpty())
+
+        assertTrue(file.delete())
+        m.appendMessage(user("hello"))
+        assertEquals(2, file.readText().trimEnd().split("\n").size)
+    }
+
+    @Test
+    fun `a known-type entry failing typed decode is retained raw and chains`() = runTest {
+        val dir = createTempDirectory()
+        val header = JsonlCodec.encodeHeaderLine(JsonlCodec.SessionHeader("sess", 0L))
+        val rawLine =
+            """{"type":"message","id":"m0","parentId":null,"timestamp":"2026-09-05T19:03:40.000Z","message":{"role":"user","content":42}}"""
+        val file = File(dir, "raw.jsonl").apply { writeText(header + rawLine + "\n") }
+
+        val m = SessionManager.open(
+            file,
+            clock,
+            ioDispatcher = testDispatcher(),
+            entryIdFactory = { "e0" }
+        )
+        val raw = assertIs<RawEntry>(m.getEntry("m0"))
+        assertEquals("m0", raw.id)
+
+        m.appendMessage(user("after"))
+        val appended = assertIs<MessageEntry>(m.getLeafEntry())
+        assertEquals("m0", appended.parentId)
+        assertTrue(file.readText().contains(rawLine))
+
+        val reopened = SessionManager.open(file, clock, ioDispatcher = testDispatcher())
+        assertEquals("m0", reopened.getEntry(appended.id)!!.parentId)
+    }
+
+    @Test
+    fun `open rejects old or missing session versions`() = runTest {
+        val dir = createTempDirectory()
+        val oldHeaders = listOf(
+            """{"type":"session","version":1,"id":"s","timestamp":"2026-09-05T19:03:40.000Z"}""",
+            """{"type":"session","version":2,"id":"s","timestamp":"2026-09-05T19:03:40.000Z"}""",
+            """{"type":"session","id":"s","timestamp":"2026-09-05T19:03:40.000Z"}"""
+        )
+        for (header in oldHeaders) {
+            val file = File(dir, "v.jsonl").apply { writeText(header + "\n") }
+            assertFailsWith<SessionError> {
+                SessionManager.open(file, clock, ioDispatcher = testDispatcher())
+            }.let { assertEquals(SessionErrorCode.INVALID_ENTRY, it.code) }
+            assertTrue(file.delete())
+        }
+
+        val current = File(dir, "current.jsonl").apply {
+            writeText(JsonlCodec.encodeHeaderLine(JsonlCodec.SessionHeader("s", 0L)))
+        }
+        assertEquals(
+            "s",
+            SessionManager.open(current, clock, ioDispatcher = testDispatcher()).getSessionId()
+        )
+    }
+
+    @Test
+    fun `a missing or junk header timestamp falls back to the file mtime`() = runTest {
+        val dir = createTempDirectory()
+        val headers = listOf(
+            """{"type":"session","version":3,"id":"s","timestamp":"not-a-date"}""",
+            """{"type":"session","version":3,"id":"s"}"""
+        )
+        for ((index, header) in headers.withIndex()) {
+            val sessionDir = File(dir, "s$index").apply { mkdirs() }
+            val file = File(sessionDir, "session.jsonl").apply { writeText(header + "\n") }
+            assertTrue(file.setLastModified(1_500_000_000_000L))
+            val mtime = file.lastModified()
+
+            val opened = SessionManager.open(file, clock, ioDispatcher = testDispatcher())
+            assertEquals("s", opened.getSessionId())
+
+            val info = SessionManager.list(sessionDir, ioDispatcher = testDispatcher()).single()
+            assertEquals(mtime, info.modified)
+            assertEquals(mtime, info.createdAt)
+        }
+    }
+
     private class DispatcherSpy : kotlinx.coroutines.CoroutineDispatcher() {
         var dispatched = false
         override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {

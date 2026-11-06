@@ -372,7 +372,7 @@ fun buildContextEntries(
  * it as text for assistant/tool-result content; the typed port always
  * projects the [Content] list.
  */
-private fun projectContextEntry(entry: SessionEntry, edit: ContextEditEntry?): List<Message> {
+internal fun projectContextEntry(entry: SessionEntry, edit: ContextEditEntry?): List<Message> {
     val messages = sessionEntryToContextMessages(entry)
     if (edit == null) return messages
     val replacement = edit.replacement ?: return emptyList()
@@ -432,16 +432,18 @@ fun buildSessionContext(
 /**
  * Read-only session summary for listing, ported from pi's buildSessionInfo.
  * `path` (pi's SessionInfo field) lets a resume open the file directly,
- * with no id discovery. `modified` derives from message timestamps, never
- * file mtime, so merely opening a session cannot reorder the list.
+ * with no id discovery. `modified` derives from message timestamps rather
+ * than file mtime, so merely opening a session cannot reorder the list; it
+ * falls back to the header timestamp and then the file mtime.
  */
 data class SessionInfo(
     val id: String,
     val path: File,
-    /** Header timestamp. */
+    /** Header timestamp, or the file mtime when that is missing/unparseable. */
     val createdAt: Long,
     /** Max user/assistant message timestamp (the entry's when the message
-     * lacks its own), when positive; else the header timestamp. */
+     * lacks its own), when positive; else the header timestamp, else the
+     * file mtime. */
     val modified: Long,
     /** Count of message entries (all roles). */
     val messageCount: Int,
@@ -462,17 +464,23 @@ data class SessionInfo(
  *
  * Divergences from pi:
  * - Decode is permissive like pi's parseSessionEntryLine but entry payloads
- *   decode into typed [SessionEntry]s: any line that fails typed decode is
- *   skipped. Unported entry `type`s decode as [RawEntry]s retained verbatim
- *   like pi's raw objects; a raw line must carry a string `id` and a
- *   parseable `timestamp` to index into the typed tree.
- * - Old "v4" files are unreadable (their first line is not a `session`
- *   header) and no migration exists, per AGENTS.md.
+ *   decode into typed [SessionEntry]s: lines that fail JSON parsing are
+ *   skipped, while a known type whose payload fails typed decode falls back
+ *   to a [RawEntry] retained verbatim, so its parent chain survives.
+ *   Unported entry `type`s decode the same way; a raw line must carry a
+ *   string `id` and a parseable `timestamp` to index into the typed tree.
+ * - Only the current session version is readable. pi migrates old versions;
+ *   here any other (or missing) header `version` rejects the file, per
+ *   AGENTS.md.
+ * - A header without a parseable `timestamp` still decodes; its id is
+ *   independent of it. Old "v4" files are unreadable (their first line is
+ *   not a `session` header).
  */
 internal object JsonlCodec {
     const val SESSION_VERSION = 3
 
-    data class SessionHeader(val id: String, val timestamp: Long)
+    /** [timestamp] is null when the header's is missing or unparseable. */
+    data class SessionHeader(val id: String, val timestamp: Long?)
 
     /** Header or entry produced by one line. */
     sealed interface Line {
@@ -556,7 +564,7 @@ internal object JsonlCodec {
         put("type", "session")
         put("version", SESSION_VERSION)
         put("id", header.id)
-        put("timestamp", formatIso(header.timestamp))
+        put("timestamp", formatIso(requireNotNull(header.timestamp)))
     }.toString() + "\n"
 
     fun encodeEntryLine(entry: SessionEntry): String {
@@ -620,7 +628,7 @@ internal object JsonlCodec {
         }.toString() + "\n"
     }
 
-    /** One parsed line; null for blank, malformed, and unknown/skipped lines. */
+    /** One parsed line; null for blank, malformed, and unusable lines. */
     fun parseLine(line: String): Line? {
         if (line.isBlank()) return null
         val obj = try {
@@ -628,21 +636,21 @@ internal object JsonlCodec {
         } catch (_: Exception) {
             return null
         } as? JsonObject ?: return null
-        return try {
-            when (obj.string("type")) {
-                "session" -> {
-                    val id = obj.string("id") ?: return null
-                    val timestamp = obj.string("timestamp")?.let(::parseIso) ?: return null
-                    Line.Header(SessionHeader(id, timestamp))
-                }
-
-                "message", "compaction", "model_change", "thinking_level_change",
-                "branch_summary", "context_edit" -> Line.Entry(decodeEntry(obj))
-
-                else -> Line.Entry(decodeRawEntry(obj))
+        return when (obj.string("type")) {
+            "session" -> {
+                val id = obj.string("id") ?: return null
+                if (obj.strictDouble("version") != SESSION_VERSION.toDouble()) return null
+                Line.Header(SessionHeader(id, obj.string("timestamp")?.let(::parseIso)))
             }
-        } catch (_: Exception) {
-            null
+
+            "message", "compaction", "model_change", "thinking_level_change",
+            "branch_summary", "context_edit" -> try {
+                Line.Entry(decodeEntry(obj))
+            } catch (_: Exception) {
+                decodeRawEntry(obj)?.let { Line.Entry(it) }
+            }
+
+            else -> decodeRawEntry(obj)?.let { Line.Entry(it) }
         }
     }
 
@@ -727,12 +735,13 @@ internal object JsonlCodec {
 
     /**
      * Any other well-formed entry object, pi's raw retention: only the tree
-     * keys are typed; the rest of the line stays opaque.
+     * keys are typed; the rest of the line stays opaque. Null when those keys
+     * are unusable, since the entry could not join the tree.
      */
-    private fun decodeRawEntry(obj: JsonObject): SessionEntry {
-        val id = obj.string("id") ?: invalid()
+    private fun decodeRawEntry(obj: JsonObject): RawEntry? {
+        val id = obj.string("id") ?: return null
         val parentId = (obj["parentId"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-        val timestamp = obj.string("timestamp")?.let(::parseIso) ?: invalid()
+        val timestamp = obj.string("timestamp")?.let(::parseIso) ?: return null
         return RawEntry(id, parentId, timestamp, obj)
     }
 
@@ -1118,9 +1127,11 @@ internal object JsonlCodec {
  * here every public suspend operation is serialized through an internal
  * [Mutex] and file IO runs on [ioDispatcher], while reads capture an
  * immutable published snapshot lock-free. Like pi's `_appendEntry`, an
- * append commits in-memory state first and persists second, so a storage
- * failure throws [SessionError] with code [SessionErrorCode.STORAGE]
- * while the entry stays committed in memory.
+ * append commits in-memory state first and persists second; on a storage
+ * failure it restores the entry index, leaf, conversation presence, and
+ * published snapshot before rethrowing [SessionError] with code
+ * [SessionErrorCode.STORAGE], so an unwritten entry never parents later
+ * entries.
  */
 class SessionManager private constructor(
     private val dir: File,
@@ -1224,21 +1235,36 @@ class SessionManager private constructor(
         }
     }
 
-    /** pi's _appendEntry: commit in memory, then persist. */
+    /** pi's _appendEntry: commit in memory, then persist, rolling back on failure. */
+    private fun commitEntryLocked(entry: SessionEntry, previousLeafId: String?) {
+        val previousState = state
+        val previousHasConversation = hasConversationLocked
+        byId[entry.id] = entry
+        if (entry is MessageEntry &&
+            (entry.message is UserMessage || entry.message is AssistantMessage)
+        ) {
+            hasConversationLocked = true
+        }
+        leafIdLocked = entry.id
+        rebuildSnapshot()
+        try {
+            persistLocked(entry)
+        } catch (e: Exception) {
+            byId.remove(entry.id)
+            leafIdLocked = previousLeafId
+            hasConversationLocked = previousHasConversation
+            state = previousState
+            throw e
+        }
+    }
+
     private suspend fun appendEntry(
         build: (id: String, parentId: String?, timestamp: Long) -> SessionEntry
     ): SessionEntry = withContext(ioDispatcher) {
         mutex.withLock {
+            val previousLeafId = leafIdLocked
             val entry = build(generateId(), leafIdLocked, now())
-            byId[entry.id] = entry
-            if (entry is MessageEntry &&
-                (entry.message is UserMessage || entry.message is AssistantMessage)
-            ) {
-                hasConversationLocked = true
-            }
-            leafIdLocked = entry.id
-            rebuildSnapshot()
-            persistLocked(entry)
+            commitEntryLocked(entry, previousLeafId)
             entry
         }
     }
@@ -1371,8 +1397,8 @@ class SessionManager private constructor(
                 if (branchFromId != null && !byId.containsKey(branchFromId)) {
                     throw SessionError(SessionErrorCode.NOT_FOUND, "Entry $branchFromId not found")
                 }
+                val previousLeafId = leafIdLocked
                 val fromId = leafIdLocked ?: "root"
-                leafIdLocked = branchFromId
                 val entry = BranchSummaryEntry(
                     id = generateId(),
                     parentId = branchFromId,
@@ -1381,10 +1407,7 @@ class SessionManager private constructor(
                     summary = summary,
                     usage = usage
                 )
-                byId[entry.id] = entry
-                leafIdLocked = entry.id
-                rebuildSnapshot()
-                persistLocked(entry)
+                commitEntryLocked(entry, previousLeafId)
                 entry.id
             }
         }
@@ -1720,15 +1743,14 @@ class SessionManager private constructor(
                 }
             }
             val sessionHeader = header ?: return null
-            // pi falls back to the file mtime when the header timestamp is
-            // unreadable; that is unreachable here — the header decode
-            // requires a parseable timestamp — so modified bottoms out at
-            // the header time.
+            val fileModified = file.lastModified()
             return SessionInfo(
                 id = sessionHeader.id,
                 path = file,
-                createdAt = sessionHeader.timestamp,
-                modified = lastActivity?.takeIf { it > 0 } ?: sessionHeader.timestamp,
+                createdAt = sessionHeader.timestamp ?: fileModified,
+                modified = lastActivity?.takeIf { it > 0 }
+                    ?: sessionHeader.timestamp
+                    ?: fileModified,
                 messageCount = messageCount,
                 firstMessage = firstMessage ?: "(no messages)",
                 allMessagesText = allMessages.joinToString(" ")
@@ -1795,9 +1817,9 @@ class SessionManager private constructor(
          * line: null keeps scanning (blank or non-JSON), NotASession rejects
          * the file (a parsed line that is not a session header), Header
          * accepts. Divergence: pi accepts a session line on type and id
-         * alone even when the rest fails to decode; here a session line
-         * that fails the codec's strict decode (e.g. a junk timestamp)
-         * also rejects the file, so discovery agrees with [open].
+         * alone even when the rest fails to decode; here the header must
+         * also carry the current version, so discovery agrees with [open].
+         * A missing or unparseable timestamp does not gate discovery.
          */
         private fun parseSessionHeaderCandidate(line: String): SessionHeaderCandidate? {
             if (line.isBlank()) return null
