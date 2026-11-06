@@ -693,23 +693,8 @@ internal fun processSseEvent(
     return state.onEvent(parsed)
 }
 
-/**
- * Divergence from pi: on a blank error body pi composes
- * `"prefix (status): <SDK message>"`, but the SDK message does not exist
- * here ([ProviderHttpException.message] is just "Provider returned HTTP N"),
- * so a blank body yields only `"prefix (status)"`.
- */
 internal fun formatResponsesProviderError(error: Exception, prefix: String): String = when (error) {
-    is ProviderHttpException -> {
-        val norm = normalizeProviderError(error)
-        if (norm.body != null) {
-            formatProviderError(norm, prefix)
-        } else {
-            "$prefix (${error.status})"
-        }
-    }
-
+    is ProviderHttpException -> formatProviderError(normalizeProviderError(error), prefix)
     is ProviderStreamException -> error.message ?: "Provider stream error"
-
     else -> error.message ?: error::class.simpleName ?: "Unknown error"
 }

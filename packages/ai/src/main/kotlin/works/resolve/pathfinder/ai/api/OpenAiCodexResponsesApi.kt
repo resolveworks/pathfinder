@@ -29,6 +29,7 @@ import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.ProviderAuthException
@@ -37,6 +38,7 @@ import works.resolve.pathfinder.ai.ProviderStreamException
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Transport
+import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.headersToRecord
 import works.resolve.pathfinder.ai.toModelThinkingLevel
 import works.resolve.pathfinder.ai.toToolChoice
@@ -49,12 +51,13 @@ import works.resolve.pathfinder.ai.transport.WebSocketConnection
 import works.resolve.pathfinder.ai.transport.WebSocketEvent
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ClientIdentity
+import works.resolve.pathfinder.ai.utils.ClientIdentityTarget
 import works.resolve.pathfinder.ai.utils.RetryDelayExceededError
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.decodeJwtPayload
 import works.resolve.pathfinder.ai.utils.formatProviderError
-import works.resolve.pathfinder.ai.utils.formatUserAgent
 import works.resolve.pathfinder.ai.utils.getDeclaredTools
+import works.resolve.pathfinder.ai.utils.getIdentityHeaders
 import works.resolve.pathfinder.ai.utils.getInitialSystemMessage
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.jsParseNumberOrNull
@@ -309,7 +312,7 @@ class OpenAICodexResponsesApi(
                 grammarToolInputProperties = grammarToolInputProperties,
                 resolveServiceTier = ::resolveCodexServiceTier,
                 applyServiceTierPricing = { usage, tier ->
-                    applyServiceTierPricing(usage, tier, model.id)
+                    applyCodexServiceTierPricing(usage, tier, model.id)
                 }
             )
         )
@@ -370,6 +373,7 @@ class OpenAICodexResponsesApi(
             // WebSocket transport failure reuses them.
             val websocketRequestId = codexSessionId ?: uuidv7()
             val headers = buildCodexSSEHeaders(
+                model,
                 model.headers,
                 options.headers,
                 accountId,
@@ -379,6 +383,7 @@ class OpenAICodexResponsesApi(
             )
                 .toMutableMap()
             val websocketHeaders = buildCodexWebSocketHeaders(
+                model,
                 model.headers,
                 options.headers,
                 accountId,
@@ -388,10 +393,7 @@ class OpenAICodexResponsesApi(
             )
             val transportOption = options.transport ?: Transport.AUTO
             val websocketDisabledForSession = transportOption != Transport.SSE &&
-                webSocketSessions.isSseFallbackActive(cacheSessionId)
-            if (websocketDisabledForSession) {
-                webSocketSessions.recordSseFallback(cacheSessionId)
-            }
+                webSocketSessions.recordSseFallbackIfActive(cacheSessionId)
 
             if (transportOption != Transport.SSE && !websocketDisabledForSession) {
                 var startEmitted = false
@@ -642,23 +644,24 @@ class OpenAICodexResponsesApi(
         } else {
             fullBody
         }
-        val stats = cacheSessionId?.let { webSocketSessions.getOrCreateStats(it) }
-        if (stats != null) {
-            stats.requests++
-            if (acquired.reused) stats.connectionsReused++ else stats.connectionsCreated++
-            if (useCachedContext) stats.cachedContextRequests++
-            if (requestBody.strictBoolean("store") == true) stats.storeTrueRequests++
-            val inputItems = (requestBody["input"] as? JsonArray)?.size ?: 0
-            stats.lastInputItems = inputItems
-            val previousResponseId = requestBody.str("previous_response_id")
-            if (previousResponseId != null) {
-                stats.deltaRequests++
-                stats.lastDeltaInputItems = inputItems
-                stats.lastPreviousResponseId = previousResponseId
-            } else {
-                stats.fullContextRequests++
-                stats.lastDeltaInputItems = null
-                stats.lastPreviousResponseId = null
+        if (cacheSessionId != null) {
+            webSocketSessions.updateStats(cacheSessionId) { stats ->
+                stats.requests++
+                if (acquired.reused) stats.connectionsReused++ else stats.connectionsCreated++
+                if (useCachedContext) stats.cachedContextRequests++
+                if (requestBody.strictBoolean("store") == true) stats.storeTrueRequests++
+                val inputItems = (requestBody["input"] as? JsonArray)?.size ?: 0
+                stats.lastInputItems = inputItems
+                val previousResponseId = requestBody.str("previous_response_id")
+                if (previousResponseId != null) {
+                    stats.deltaRequests++
+                    stats.lastDeltaInputItems = inputItems
+                    stats.lastPreviousResponseId = previousResponseId
+                } else {
+                    stats.fullContextRequests++
+                    stats.lastDeltaInputItems = null
+                    stats.lastPreviousResponseId = null
+                }
             }
         }
         try {
@@ -977,6 +980,34 @@ internal fun resolveCodexServiceTier(responseTier: String?, requestTier: String?
         responseTier ?: requestTier
     }
 
+internal fun getCodexServiceTierCostMultiplier(modelId: String, serviceTier: String?): Double =
+    when (serviceTier) {
+        "flex" -> 0.5
+        "priority" -> if (modelId == "gpt-5.5") 2.5 else 2.0
+        else -> 1.0
+    }
+
+private fun applyCodexServiceTierPricing(
+    usage: Usage,
+    serviceTier: String?,
+    modelId: String
+): Usage {
+    val multiplier = getCodexServiceTierCostMultiplier(modelId, serviceTier)
+    val cost = usage.cost
+    if (multiplier == 1.0) return usage
+    val scaled = Cost(
+        input = cost.input * multiplier,
+        output = cost.output * multiplier,
+        cacheRead = cost.cacheRead * multiplier,
+        cacheWrite = cost.cacheWrite * multiplier
+    )
+    return usage.copy(
+        cost = scaled.copy(
+            total = scaled.input + scaled.output + scaled.cacheRead + scaled.cacheWrite
+        )
+    )
+}
+
 internal fun resolveCodexUrl(baseUrl: String?): String {
     val raw =
         if (baseUrl != null && trimJsWhitespace(baseUrl).isNotEmpty()) {
@@ -1143,51 +1174,78 @@ class OpenAICodexWebSocketSessions(val clock: Clock = Clock.System) {
         val release: suspend (keep: Boolean) -> Unit
     )
 
-    fun isSseFallbackActive(sessionId: String?): Boolean =
+    suspend fun isSseFallbackActive(sessionId: String?): Boolean = mutex.withLock {
         sessionId != null && sessionId in sseFallbackSessions
+    }
 
-    fun recordSseFallback(sessionId: String?) {
-        if (sessionId == null) return
-        val stats = getOrCreateStats(sessionId)
+    /**
+     * Atomically reports whether SSE is sticky for the session and, when it
+     * is, records the fallback. The stream's check-then-record must not be
+     * split by a concurrent reset.
+     */
+    suspend fun recordSseFallbackIfActive(sessionId: String?): Boolean = mutex.withLock {
+        if (sessionId == null || sessionId !in sseFallbackSessions) return@withLock false
+        val stats = getOrCreateStatsLocked(sessionId)
         stats.sseFallbacks++
-        stats.websocketFallbackActive = isSseFallbackActive(sessionId)
+        stats.websocketFallbackActive = true
+        true
+    }
+
+    suspend fun recordSseFallback(sessionId: String?) {
+        if (sessionId == null) return
+        mutex.withLock {
+            val stats = getOrCreateStatsLocked(sessionId)
+            stats.sseFallbacks++
+            stats.websocketFallbackActive = sessionId in sseFallbackSessions
+        }
     }
 
     /** Makes SSE sticky for the session until reset. */
-    fun recordWebSocketFailure(sessionId: String?, error: Throwable) {
+    suspend fun recordWebSocketFailure(sessionId: String?, error: Throwable) {
         if (sessionId == null) return
-        sseFallbackSessions.add(sessionId)
-        val stats = getOrCreateStats(sessionId)
-        stats.websocketFailures++
-        stats.lastWebSocketError = error.message ?: error::class.simpleName ?: "unknown"
-        stats.websocketFallbackActive = true
+        mutex.withLock {
+            sseFallbackSessions.add(sessionId)
+            val stats = getOrCreateStatsLocked(sessionId)
+            stats.websocketFailures++
+            stats.lastWebSocketError = error.message ?: error::class.simpleName ?: "unknown"
+            stats.websocketFallbackActive = true
+        }
     }
 
-    fun getOrCreateStats(sessionId: String): OpenAICodexWebSocketDebugStats =
+    private fun getOrCreateStatsLocked(sessionId: String): OpenAICodexWebSocketDebugStats =
         debugStats.getOrPut(sessionId) { OpenAICodexWebSocketDebugStats() }
 
-    fun getStats(sessionId: String): OpenAICodexWebSocketDebugStats? = debugStats[sessionId]?.copy()
-
-    fun resetStats(sessionId: String?) {
-        if (sessionId != null) {
-            debugStats.remove(sessionId)
-            sseFallbackSessions.remove(sessionId)
-            return
-        }
-        debugStats.clear()
-        sseFallbackSessions.clear()
+    /** Applies one request's metrics under the pool lock. */
+    internal suspend fun updateStats(
+        sessionId: String,
+        update: (OpenAICodexWebSocketDebugStats) -> Unit
+    ) {
+        mutex.withLock { update(getOrCreateStatsLocked(sessionId)) }
     }
 
-    fun closeSessions(sessionId: String?) {
-        timerScope.launch {
-            mutex.withLock {
-                if (sessionId != null) {
-                    sessionCache[sessionId]?.values?.forEach(::closeEntry)
-                    sessionCache.remove(sessionId)
-                } else {
-                    sessionCache.values.forEach { entries -> entries.values.forEach(::closeEntry) }
-                    sessionCache.clear()
-                }
+    suspend fun getStats(sessionId: String): OpenAICodexWebSocketDebugStats? =
+        mutex.withLock { debugStats[sessionId]?.copy() }
+
+    suspend fun resetStats(sessionId: String?) {
+        mutex.withLock {
+            if (sessionId != null) {
+                debugStats.remove(sessionId)
+                sseFallbackSessions.remove(sessionId)
+            } else {
+                debugStats.clear()
+                sseFallbackSessions.clear()
+            }
+        }
+    }
+
+    suspend fun closeSessions(sessionId: String?) {
+        mutex.withLock {
+            if (sessionId != null) {
+                sessionCache[sessionId]?.values?.forEach(::closeEntry)
+                sessionCache.remove(sessionId)
+            } else {
+                sessionCache.values.forEach { entries -> entries.values.forEach(::closeEntry) }
+                sessionCache.clear()
             }
         }
     }
@@ -1316,10 +1374,11 @@ class OpenAICodexWebSocketSessions(val clock: Clock = Clock.System) {
         if (accountEntries.isEmpty()) sessionCache.remove(sessionId)
     }
 
-    fun getOpenAICodexWebSocketDebugStats(sessionId: String): OpenAICodexWebSocketDebugStats? =
-        getStats(sessionId)
+    suspend fun getOpenAICodexWebSocketDebugStats(
+        sessionId: String
+    ): OpenAICodexWebSocketDebugStats? = getStats(sessionId)
 
-    fun resetOpenAICodexWebSocketDebugStats(sessionId: String? = null) {
+    suspend fun resetOpenAICodexWebSocketDebugStats(sessionId: String? = null) {
         resetStats(sessionId)
     }
 
@@ -1328,7 +1387,7 @@ class OpenAICodexWebSocketSessions(val clock: Clock = Clock.System) {
      * does NOT clear the SSE-fallback set here (only
      * [resetOpenAICodexWebSocketDebugStats] does); preserved.
      */
-    fun closeOpenAICodexWebSocketSessions(sessionId: String? = null) {
+    suspend fun closeOpenAICodexWebSocketSessions(sessionId: String? = null) {
         closeSessions(sessionId)
     }
 }
@@ -1459,6 +1518,7 @@ internal fun extractAccountId(token: String): String {
 }
 
 internal fun buildBaseCodexHeaders(
+    target: ClientIdentityTarget,
     modelHeaders: Map<String, String>,
     optionsHeaders: Map<String, String?>,
     accountId: String,
@@ -1483,7 +1543,7 @@ internal fun buildBaseCodexHeaders(
     // deliberate divergence, consistent with the OAuth authorize URL's
     // originator default. Model and caller headers may override both.
     setHeader("originator", "pathfinder")
-    setHeader("User-Agent", formatUserAgent(identity))
+    for ((key, value) in getIdentityHeaders(target, identity)) setHeader(key, value)
     for ((key, value) in modelHeaders) setHeader(key, value)
     for ((key, value) in optionsHeaders) setHeader(key, value)
     headers["Authorization"] = "Bearer $token"
@@ -1492,6 +1552,7 @@ internal fun buildBaseCodexHeaders(
 }
 
 internal fun buildCodexSSEHeaders(
+    target: ClientIdentityTarget,
     modelHeaders: Map<String, String>,
     optionsHeaders: Map<String, String?>,
     accountId: String,
@@ -1499,7 +1560,8 @@ internal fun buildCodexSSEHeaders(
     sessionId: String?,
     identity: ClientIdentity? = null
 ): Map<String, String> {
-    val headers = buildBaseCodexHeaders(modelHeaders, optionsHeaders, accountId, token, identity)
+    val headers =
+        buildBaseCodexHeaders(target, modelHeaders, optionsHeaders, accountId, token, identity)
     headers["OpenAI-Beta"] = "responses=experimental"
     headers["accept"] = "text/event-stream"
     headers["content-type"] = "application/json"
@@ -1523,6 +1585,7 @@ internal fun buildCodexSSEHeaders(
  * here are passed to the transport verbatim.
  */
 internal fun buildCodexWebSocketHeaders(
+    target: ClientIdentityTarget,
     modelHeaders: Map<String, String>,
     optionsHeaders: Map<String, String?>,
     accountId: String,
@@ -1530,7 +1593,8 @@ internal fun buildCodexWebSocketHeaders(
     requestId: String,
     identity: ClientIdentity? = null
 ): Map<String, String> {
-    val headers = buildBaseCodexHeaders(modelHeaders, optionsHeaders, accountId, token, identity)
+    val headers =
+        buildBaseCodexHeaders(target, modelHeaders, optionsHeaders, accountId, token, identity)
     // Headers.delete is case-insensitive: accept/content-type drop in any
     // casing, as do both OpenAI-Beta spellings.
     headers.keys.filter { it.lowercase() == "accept" || it.lowercase() == "content-type" }

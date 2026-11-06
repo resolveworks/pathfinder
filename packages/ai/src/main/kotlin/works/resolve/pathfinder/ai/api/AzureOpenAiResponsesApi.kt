@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Model
@@ -49,6 +50,20 @@ private val AZURE_TOOL_CALL_PROVIDERS =
 
 // OpenAI Responses rejects max_output_tokens below 16.
 private const val OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16
+
+/**
+ * The SDK appends `/responses` to the base path and merges `api-version` into
+ * the base query, so a base URL that already carries a query stays valid.
+ */
+internal fun buildAzureResponsesUrl(baseUrl: String, apiVersion: String): String {
+    val parsed = baseUrl.toHttpUrlOrNull()
+        ?: throw IllegalArgumentException("Invalid Azure OpenAI base URL: $baseUrl")
+    return parsed.newBuilder()
+        .addPathSegment("responses")
+        .setQueryParameter("api-version", apiVersion)
+        .build()
+        .toString()
+}
 
 data class AzureOpenAiResponsesOptions(
     val apiKey: String? = null,
@@ -215,7 +230,7 @@ class AzureOpenAiResponsesApi(
             headers["api-key"] = apiKey
             headers["Accept"] = "text/event-stream"
             val request = TransportRequest(
-                url = config.baseUrl.trimEnd('/') + "/responses?api-version=" + config.apiVersion,
+                url = buildAzureResponsesUrl(config.baseUrl, config.apiVersion),
                 bearerToken = null,
                 headers = headers.filterValues { it != null }.mapValues { it.value!! },
                 body = params.toString().toByteArray(Charsets.UTF_8),

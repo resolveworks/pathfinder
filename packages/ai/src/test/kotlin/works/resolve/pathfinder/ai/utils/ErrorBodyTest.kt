@@ -163,9 +163,8 @@ class ErrorBodyTest {
                 "OpenAI API error"
             )
         )
-        // Documented divergence: a blank body emits only "prefix (status)".
         assertEquals(
-            "OpenAI API error (429)",
+            "OpenAI API error (429): 429 status code (no body)",
             formatResponsesProviderError(httpError(429, "  "), "OpenAI API error")
         )
     }
