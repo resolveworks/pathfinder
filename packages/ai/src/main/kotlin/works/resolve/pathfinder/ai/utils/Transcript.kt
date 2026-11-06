@@ -146,9 +146,9 @@ fun toToolDeclaration(tool: Tool): Tool = Tool(
  * Whether two tools declare the same interface to the model.
  *
  * Both sides go through [toToolDeclaration] first: the JSON round-trip drops the
- * typebox symbol keys and absent fields a structural comparison would see, and builds
- * both objects with the same key order, so comparing the serialized declarations is
- * exact. This avoids deep-equality over provider-shaped schemas.
+ * schema metadata keys (TypeBox's non-enumerable kind marks) and absent fields a
+ * structural comparison would see, and builds both objects with the same key order,
+ * so comparing the serialized declarations is exact. This avoids deep-equality over provider-shaped schemas.
  */
 fun declarationsEqual(left: Tool, right: Tool): Boolean =
     lenientJson.encodeToString(JsonElement.serializer(), toolToJson(toToolDeclaration(left))) ==
@@ -187,7 +187,8 @@ fun getDeclaredTools(messages: List<Message>): List<Tool> {
  * only reference previously declared tools by name cannot replay such a history.
  *
  * Deprecated: no built-in transport needs this anymore; Anthropic expresses redefinitions
- * with inline `tool_definition` blocks. Kept for API compatibility.
+ * with inline `tool_definition` blocks. Kept for API compatibility and will be removed in a
+ * future release.
  */
 fun hasToolRedefinitions(messages: List<Message>): Boolean {
     val declared = LinkedHashMap<String, Tool>()
