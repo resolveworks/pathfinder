@@ -50,6 +50,7 @@ internal val DEFAULT_MODEL_PER_PROVIDER: List<Pair<String, String>> = listOf(
     "qwen-token-plan" to "qwen3.7-max",
     "qwen-token-plan-cn" to "qwen3.7-max",
     "qwen-token-plan-individual" to "qwen3.8-max",
+    "qwen-token-plan-individual-cn" to "qwen3.8-max",
     "xiaomi" to "mimo-v2.6-pro",
     "xiaomi-token-plan-cn" to "mimo-v2.6-pro",
     "xiaomi-token-plan-ams" to "mimo-v2.6-pro",

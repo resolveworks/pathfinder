@@ -231,8 +231,9 @@ class ProviderCatalogTest {
 
     @Test
     fun `openrouter anthropic models keep anthropic cache control format from the real asset`() {
-        // The ~anthropic/*-latest aliases carry explicit catalog compat; the
-        // anthropic/* models go through openrouter detection.
+        // The ~anthropic/*-latest aliases now use the Messages API, where cache
+        // control is not a completions compat concern; completions models go
+        // through explicit catalog compat and openrouter detection.
         val catalog = realAsset()
         for (id in listOf(
             "~anthropic/claude-fable-latest",
@@ -240,18 +241,17 @@ class ProviderCatalogTest {
             "~anthropic/claude-opus-latest",
             "~anthropic/claude-sonnet-latest"
         )) {
+            assertEquals("anthropic-messages", catalog.getModel("openrouter", id)!!.api)
+        }
+        for (id in listOf(
+            "anthropic/claude-sonnet-4.5",
+            "anthropic/claude-sonnet-4.5:batch"
+        )) {
             assertEquals(
                 CacheControlFormat.ANTHROPIC,
                 catalog.getModel("openrouter", id)!!.compat.cacheControlFormat
             )
         }
-        assertEquals(
-            CacheControlFormat.ANTHROPIC,
-            catalog.getModel(
-                "openrouter",
-                "anthropic/claude-sonnet-4.5"
-            )!!.compat.cacheControlFormat
-        )
         assertNull(catalog.getModel("openrouter", "aion-labs/aion-2.0")!!.compat.cacheControlFormat)
     }
 
@@ -797,7 +797,7 @@ class ProviderCatalogTest {
     @Test
     fun `real asset contains the full generated provider set`() {
         val catalog = realAsset()
-        assertEquals(37, catalog.providers.size)
+        assertEquals(38, catalog.providers.size)
         // Model counts drift with every upstream pi refresh; assert structure
         // and known entries instead of pinning totals.
         assertTrue(catalog.providers.all { it.models.isNotEmpty() })
