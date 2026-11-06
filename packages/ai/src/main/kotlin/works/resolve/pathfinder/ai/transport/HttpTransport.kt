@@ -36,9 +36,13 @@ data class TransportRequest(
         other.body.contentEquals(body) &&
         other.timeoutMs == timeoutMs
 
-    override fun hashCode(): Int =
-        31 * (31 * (31 * url.hashCode() + bearerToken.hashCode()) + headers.hashCode()) +
-            body.contentHashCode()
+    override fun hashCode(): Int {
+        var result = url.hashCode()
+        result = 31 * result + bearerToken.hashCode()
+        result = 31 * result + headers.hashCode()
+        result = 31 * result + body.contentHashCode()
+        return 31 * result + timeoutMs.hashCode()
+    }
 }
 
 /** One complete SSE data event; framing/UTF-8/multiline handling lives below this boundary. */

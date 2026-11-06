@@ -179,6 +179,26 @@ class ProviderRetryTest {
     }
 
     @Test
+    fun `fractional server delay above cap fails instead of truncating`() = runTest {
+        for (headers in listOf(
+            mapOf("retry-after-ms" to listOf("60000.9")),
+            mapOf("retry-after" to listOf("60.0009"))
+        )) {
+            val h = Harness()
+            var calls = 0
+            val error = assertFailsWith<RetryDelayExceededError> {
+                h.retry.retryProviderRequest(maxRetries = 3, maxRetryDelayMs = 60_000) {
+                    calls++
+                    throw httpError(429, headers)
+                }
+            }
+            assertEquals(1, calls)
+            assertTrue(h.sleeps.isEmpty())
+            assertTrue("61s retry delay" in (error.message ?: ""))
+        }
+    }
+
+    @Test
     fun `cap of zero disables the limit`() = runTest {
         val h = Harness()
         var calls = 0
