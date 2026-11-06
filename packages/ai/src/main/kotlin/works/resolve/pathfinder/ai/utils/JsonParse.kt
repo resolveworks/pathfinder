@@ -173,6 +173,9 @@ fun parseToolCallArguments(json: String?): ParsedToolCallArguments {
 /**
  * Attempts to parse potentially incomplete JSON during streaming.
  * Always returns a valid object, even if the JSON is incomplete.
+ *
+ * One-shot callers use this; a caller that receives the text in pieces keeps a [StreamingJsonParser]
+ * instead and parses the finished text once with [parseToolCallArguments].
  */
 inline fun <reified T : JsonElement> parseStreamingJson(partialJson: String?): T {
     if (partialJson == null || trimJsWhitespace(partialJson).isEmpty()) {
