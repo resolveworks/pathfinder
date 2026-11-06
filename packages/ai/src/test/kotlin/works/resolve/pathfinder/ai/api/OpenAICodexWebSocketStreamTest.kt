@@ -27,21 +27,26 @@ import kotlinx.serialization.json.putJsonObject
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
+import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelCost
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
+import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Transport
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
+import works.resolve.pathfinder.ai.testing.fixedApiKeyAuth
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.WebSocketCloseException
 import works.resolve.pathfinder.ai.transport.WebSocketConnection
 import works.resolve.pathfinder.ai.transport.WebSocketEvent
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
+import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class OpenAICodexWebSocketStreamTest {
@@ -282,6 +287,115 @@ class OpenAICodexWebSocketStreamTest {
         val stats = sessions.getOpenAICodexWebSocketDebugStats("session-auto")!!
         assertEquals(1, stats.cachedContextRequests)
         assertEquals(1, stats.fullContextRequests)
+    }
+
+    private fun runtimeStack(
+        http: FakeTransport,
+        ws: WebSocketStreamingTransport,
+        sessions: OpenAICodexWebSocketSessions
+    ): ChatApi {
+        val provider = CatalogProvider(
+            id = model.provider,
+            name = "OpenAI Codex",
+            baseUrl = model.baseUrl,
+            models = listOf(model)
+        )
+        return provider.toRuntimeProvider(
+            transport = http,
+            auth = fixedApiKeyAuth(jwt("acc_test")),
+            retry = ProviderRetry(),
+            webSocketTransport = ws,
+            webSocketSessions = sessions
+        ).apis.getValue(ChatApiRegistry.OPENAI_CODEX_RESPONSES)
+    }
+
+    @Test
+    fun `runtime stacks with the same injected pool reuse connections and stats`() = runTest {
+        val sessions = cleanSlate()
+        val ws = FakeWebSocketTransport()
+        val http = FakeTransport()
+        var responseCount = 0
+        ws.onConnect = { connection ->
+            connection.onSend = { _ ->
+                responseCount++
+                connection.serverAll(textEvents("resp_$responseCount"))
+            }
+        }
+        val firstContext = normalizeContext(
+            Context(
+                systemPrompt = "You are a helpful assistant.",
+                messages = listOf(UserMessage.ofText("Say hello"))
+            )
+        )
+
+        val first = messageOf(
+            runtimeStack(http, ws, sessions).streamSimple(
+                model,
+                firstContext,
+                SimpleStreamOptions(
+                    apiKey = jwt("acc_test"),
+                    sessionId = "shared-pool",
+                    transport = Transport.WEBSOCKET_CACHED
+                )
+            ).toList()
+        )
+        val second = messageOf(
+            runtimeStack(http, ws, sessions).streamSimple(
+                model,
+                normalizeContext(
+                    Context(
+                        messages =
+                            firstContext.messages + first + UserMessage.ofText("Now finish")
+                    )
+                ),
+                SimpleStreamOptions(
+                    apiKey = jwt("acc_test"),
+                    sessionId = "shared-pool",
+                    transport = Transport.WEBSOCKET_CACHED
+                )
+            ).toList()
+        )
+
+        assertEquals(StopReason.STOP, second.stopReason)
+        assertEquals(1, ws.connections.size)
+        val stats = sessions.getOpenAICodexWebSocketDebugStats("shared-pool")!!
+        assertEquals(2, stats.requests)
+        assertEquals(1, stats.connectionsCreated)
+        assertEquals(1, stats.connectionsReused)
+    }
+
+    @Test
+    fun `runtime stacks with separately injected pools stay isolated`() = runTest {
+        val firstPool = cleanSlate()
+        val secondPool = cleanSlate()
+        val ws = FakeWebSocketTransport()
+        val http = FakeTransport()
+        var responseCount = 0
+        ws.onConnect = { connection ->
+            connection.onSend = { _ ->
+                responseCount++
+                connection.serverAll(textEvents("resp_$responseCount"))
+            }
+        }
+        val context = normalizeContext(
+            Context(messages = listOf(UserMessage.ofText("Say hello")))
+        )
+        val options = SimpleStreamOptions(
+            apiKey = jwt("acc_test"),
+            sessionId = "isolated-pool",
+            transport = Transport.WEBSOCKET_CACHED
+        )
+
+        runtimeStack(http, ws, firstPool).streamSimple(model, context, options).toList()
+        runtimeStack(http, ws, secondPool).streamSimple(model, context, options).toList()
+
+        assertEquals(2, ws.connections.size)
+        val firstStats = firstPool.getOpenAICodexWebSocketDebugStats("isolated-pool")!!
+        assertEquals(1, firstStats.connectionsCreated)
+        assertEquals(0, firstStats.connectionsReused)
+        val secondStats = secondPool.getOpenAICodexWebSocketDebugStats("isolated-pool")!!
+        assertEquals(1, secondStats.connectionsCreated)
+        assertEquals(0, secondStats.connectionsReused)
     }
 
     @Test

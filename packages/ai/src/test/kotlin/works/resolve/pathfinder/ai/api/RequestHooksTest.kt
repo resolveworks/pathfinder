@@ -478,7 +478,8 @@ class RequestHooksTest {
             val events = OpenAICodexResponsesApi(
                 transport,
                 clock = FakeClock(0L),
-                webSocketTransport = NoWebSocketTransport
+                webSocketTransport = NoWebSocketTransport,
+                webSocketSessions = OpenAICodexWebSocketSessions(FakeClock(0L))
             ).streamSimple(
                 model,
                 normalizeContext(

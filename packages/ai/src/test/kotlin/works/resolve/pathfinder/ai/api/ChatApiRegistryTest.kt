@@ -59,7 +59,8 @@ class ChatApiRegistryTest {
                 "openai-codex-responses",
                 transport,
                 retry,
-                webSocketTransport = NoWebSocketTransport
+                webSocketTransport = NoWebSocketTransport,
+                webSocketSessions = OpenAICodexWebSocketSessions()
             )
         )
         assertIs<AzureOpenAiResponsesApi>(

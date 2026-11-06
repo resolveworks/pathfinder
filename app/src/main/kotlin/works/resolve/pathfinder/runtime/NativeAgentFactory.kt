@@ -10,6 +10,7 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
+import works.resolve.pathfinder.ai.api.OpenAICodexWebSocketSessions
 import works.resolve.pathfinder.ai.auth.AuthContext
 import works.resolve.pathfinder.ai.auth.CatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
@@ -65,6 +66,8 @@ class NativeAgentFactory(
     private val retry: ProviderRetry = ProviderRetry(),
     /** WebSocket transport for the Codex adapter; null disables the WebSocket path. */
     private val webSocketTransport: WebSocketStreamingTransport? = null,
+    /** App-process Codex WebSocket pool, shared by every runtime provider stack. */
+    private val webSocketSessions: OpenAICodexWebSocketSessions,
     /** Android has no ambient env; tests inject real [AuthContext]s. */
     private val authContext: AuthContext = NoopAuthContext,
     private val authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
@@ -87,7 +90,8 @@ class NativeAgentFactory(
                 transport = transport,
                 auth = CatalogProviderAuth(entry, authRegistry),
                 retry = retry,
-                webSocketTransport = webSocketTransport
+                webSocketTransport = webSocketTransport,
+                webSocketSessions = webSocketSessions
             )
         },
         credentials = credentials,

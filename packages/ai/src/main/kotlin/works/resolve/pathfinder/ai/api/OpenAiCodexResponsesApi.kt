@@ -287,8 +287,8 @@ class OpenAICodexResponsesApi(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     /** WebSocket transport seam; required on Android. */
     private val webSocketTransport: WebSocketStreamingTransport,
-    private val webSocketSessions: OpenAICodexWebSocketSessions =
-        OpenAICodexWebSocketSessions(clock)
+    /** The app-process pool shared by every runtime provider stack. */
+    private val webSocketSessions: OpenAICodexWebSocketSessions
 ) : ChatApi {
 
     private fun nowMs(): Long = clock.now().toEpochMilliseconds()
@@ -1125,7 +1125,10 @@ internal fun mapCodexEvent(
  *
  * Divergences from pi:
  * - pi keeps this state in module-level variables on the single-threaded JS
- *   event loop; here it is a process-wide singleton guarded by a [Mutex], and
+ *   event loop; here one instance is owned by the app composition root for
+ *   the whole process and injected into every runtime provider stack, so a
+ *   restored or re-created session keeps its pooled connections and cached
+ *   `previous_response_id` continuation. State is guarded by a [Mutex], and
  *   idle expiry uses a timer coroutine instead of `setTimeout` (pi's
  *   `scheduleSessionWebSocketExpiry`).
  * - pi registers cleanup through `registerSessionResourceCleanup` (a Node

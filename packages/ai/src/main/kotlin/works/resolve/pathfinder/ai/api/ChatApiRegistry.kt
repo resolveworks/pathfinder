@@ -37,7 +37,8 @@ object ChatApiRegistry {
         apiId: String,
         transport: HttpStreamingTransport,
         retry: ProviderRetry,
-        webSocketTransport: WebSocketStreamingTransport? = null
+        webSocketTransport: WebSocketStreamingTransport? = null,
+        webSocketSessions: OpenAICodexWebSocketSessions? = null
     ): ChatApi? = when (apiId) {
         OPENAI_COMPLETIONS -> OpenAiCompletionsApi(transport, retry)
 
@@ -53,7 +54,9 @@ object ChatApiRegistry {
         OPENAI_CODEX_RESPONSES -> OpenAICodexResponsesApi(
             transport,
             webSocketTransport = webSocketTransport
-                ?: error("openai-codex-responses requires a WebSocket streaming transport")
+                ?: error("openai-codex-responses requires a WebSocket streaming transport"),
+            webSocketSessions = webSocketSessions
+                ?: error("openai-codex-responses requires the shared WebSocket session pool")
         )
 
         AZURE_OPENAI_RESPONSES -> AzureOpenAiResponsesApi(transport, retry)

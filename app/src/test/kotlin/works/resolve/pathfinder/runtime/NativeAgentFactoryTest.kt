@@ -28,6 +28,7 @@ import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.api.OpenAICodexWebSocketSessions
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.AuthResolutionOverrides
 import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
@@ -62,6 +63,8 @@ class NativeAgentFactoryTest {
     private fun session(): SessionManager = runBlocking {
         SessionManager.create(tmpFolder.newFolder())
     }
+
+    private val codexWebSocketSessions = OpenAICodexWebSocketSessions()
 
     /** Compaction off: URL/auth tests are single-request and not about compaction. */
     private val compactOff = CompactionSettings(
@@ -129,6 +132,7 @@ class NativeAgentFactoryTest {
         credentials = store,
         catalog = catalog,
         transport = transport,
+        webSocketSessions = codexWebSocketSessions,
         settingsManager = runBlocking { SettingsManager.inMemory(settings) },
         promptConfig = promptConfig
     )
@@ -217,6 +221,7 @@ class NativeAgentFactoryTest {
             credentials = FakeCredentialStore(ApiKeyCredential("k")),
             catalog = catalog,
             transport = RecordingTransport(),
+            webSocketSessions = codexWebSocketSessions,
             settingsManager = SettingsManager.inMemory(settings()),
             tools = mutableListOf(tool)
         ).create(session()).session
@@ -256,6 +261,7 @@ class NativeAgentFactoryTest {
                 credentials = FakeCredentialStore(ApiKeyCredential("k")),
                 catalog = catalog,
                 transport = RecordingTransport(),
+                webSocketSessions = codexWebSocketSessions,
                 settingsManager = runBlocking { SettingsManager.inMemory(settings()) },
                 tools = configured
             ).create(session()).session
@@ -457,6 +463,7 @@ class NativeAgentFactoryTest {
                 FakeCredentialStore(ApiKeyCredential("k")),
                 catalog,
                 transport,
+                webSocketSessions = codexWebSocketSessions,
                 settingsManager = runBlocking {
                     SettingsManager.inMemory(
                         Settings(
@@ -520,6 +527,7 @@ class NativeAgentFactoryTest {
                 credentials = store,
                 catalog = openRouterCatalog,
                 transport = transport,
+                webSocketSessions = codexWebSocketSessions,
                 settingsManager = runBlocking {
                     SettingsManager.inMemory(
                         Settings(
@@ -548,6 +556,7 @@ class NativeAgentFactoryTest {
                 FakeCredentialStore(ApiKeyCredential("k")),
                 catalog,
                 RecordingTransport(),
+                webSocketSessions = codexWebSocketSessions,
                 settingsManager = runBlocking { SettingsManager.inMemory() }
             )
         val resolved = factory.resolveModel("github-copilot", "gpt-4.1")
@@ -569,6 +578,7 @@ class NativeAgentFactoryTest {
                 credentials = store,
                 catalog = catalog,
                 transport = transport,
+                webSocketSessions = codexWebSocketSessions,
                 settingsManager = SettingsManager.inMemory(settings())
             )
             val agent = native.create(session()).session
@@ -617,6 +627,7 @@ class NativeAgentFactoryTest {
                     credentials = store,
                     catalog = catalog,
                     transport = RecordingTransport(),
+                    webSocketSessions = codexWebSocketSessions,
                     settingsManager = SettingsManager.inMemory(settings())
                 )
             val agent = native.create(session()).session
@@ -681,6 +692,7 @@ class NativeAgentFactoryTest {
                         listOf(catalog.getProvider("cloudflare-ai-gateway")!!)
                     ),
                     transport = RecordingTransport(),
+                    webSocketSessions = codexWebSocketSessions,
                     settingsManager = runBlocking {
                         SettingsManager.inMemory(
                             settings(

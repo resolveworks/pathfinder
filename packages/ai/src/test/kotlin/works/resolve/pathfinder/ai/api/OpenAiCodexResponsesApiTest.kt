@@ -89,7 +89,8 @@ class OpenAiCodexResponsesApiTest {
         sleep = { calls.add(it) },
         compressRequestBody = compressRequestBody,
         ioDispatcher = ioDispatcher,
-        webSocketTransport = NoWebSocketTransport
+        webSocketTransport = NoWebSocketTransport,
+        webSocketSessions = OpenAICodexWebSocketSessions(FakeClock(0L))
     )
 
     private fun requestBodyText(transport: FakeTransport, index: Int = 0): String {
@@ -689,7 +690,8 @@ class OpenAiCodexResponsesApiTest {
             transport,
             clock = FakeClock(1_445_412_475_000L),
             sleep = { delays.add(it) },
-            webSocketTransport = NoWebSocketTransport
+            webSocketTransport = NoWebSocketTransport,
+            webSocketSessions = OpenAICodexWebSocketSessions(FakeClock(0L))
         ).stream(
             model,
             context,
