@@ -1628,8 +1628,7 @@ object OpenAiCompletionsPayload {
             // some models mirror the structure literally.
             assistant["content"] = JsonPrimitive(text)
         } else {
-            // Some providers reject null content; absent content is only valid
-            // alongside tool calls.
+            assistant["content"] = JsonNull
         }
 
         // The raw reasoning field is replayed only when no structured
@@ -1704,10 +1703,12 @@ object OpenAiCompletionsPayload {
             assistant["reasoning_content"] = JsonPrimitive("")
         }
 
-        // Content here is always either a primitive string we set above or a
-        // block array, never JSON null, so the lenient read is equivalent.
-        val hasContent = assistant["content"].strOrNull()?.isNotEmpty() == true ||
-            assistant["content"] is JsonArray
+        val content = assistant["content"]
+        val hasContent = when (content) {
+            is JsonPrimitive -> content.isString && content.content.isNotEmpty()
+            is JsonArray -> content.isNotEmpty()
+            else -> false
+        }
         if (!hasContent && !assistant.containsKey("tool_calls")) {
             return null
         }

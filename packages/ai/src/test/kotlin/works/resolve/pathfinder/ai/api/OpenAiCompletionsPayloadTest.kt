@@ -9,6 +9,7 @@ import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
@@ -373,6 +374,7 @@ class OpenAiCompletionsPayloadTest {
             "assistant",
             messages[1].jsonObject["role"]!!.jsonPrimitive.content
         )
+        assertEquals(JsonNull, messages[1].jsonObject["content"])
         val toolCalls = messages[1].jsonObject["tool_calls"]!!.jsonArray
         assertEquals("call_1", toolCalls[0].jsonObject["id"]!!.jsonPrimitive.content)
         assertEquals(

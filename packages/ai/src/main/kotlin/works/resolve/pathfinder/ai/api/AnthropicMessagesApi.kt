@@ -102,7 +102,7 @@ internal fun getCacheControl(model: Model, options: AnthropicMessagesOptions): J
 }
 
 // Stealth mode: on OAuth requests, tool names mimic Claude Code's exactly.
-internal const val CLAUDE_CODE_VERSION = "2.1.251"
+internal const val CLAUDE_CODE_VERSION = "2.1.280"
 
 private val CLAUDE_CODE_TOOLS = listOf(
     "Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion",
@@ -972,7 +972,10 @@ internal fun buildAnthropicParams(
             put("display", options.thinkingDisplay.name.lowercase())
             put("block_binding", buildJsonObject { put("prefix_mismatch_behavior", "drop_block") })
         }
-        body["output_config"] = buildJsonObject { put("effort", "high") }
+        // Effort markers set the level for every reply. The top-level effort is part of the cached
+        // prompt, so it stays fixed. It is "low" because organizations can cap effort and reject
+        // requests containing any level above the cap.
+        body["output_config"] = buildJsonObject { put("effort", "low") }
     } else if (model.reasoning && options.thinkingEnabled == true) {
         // Default to "summarized" so Opus 4.7 and Mythos Preview behave like
         // older Claude 4 models (whose API default is also "summarized").
@@ -1480,10 +1483,14 @@ internal fun convertTools(
         }
     val parameters = getJsonSchemaToolParameters(tool, strict)
     val schema = parameters as? JsonObject ?: JsonObject(emptyMap())
+    // Keep shared definitions so property $refs still resolve. Other root keywords stay out:
+    // Anthropic rejects root anyOf/oneOf/allOf with a 400.
     val legacyInputSchema = buildJsonObject {
         put("type", "object")
         put("properties", schema["properties"] ?: JsonObject(emptyMap()))
         put("required", schema["required"] ?: JsonArray(emptyList()))
+        schema["\$defs"]?.let { put("\$defs", it) }
+        schema["definitions"]?.let { put("definitions", it) }
     }
     // Legacy type/properties/required override the schema's own keys.
     val inputSchema = if (strict == true) {
@@ -1769,6 +1776,10 @@ internal class AnthropicStreamState(
                 output = eventUsage.int("output_tokens") ?: usage.output,
                 cacheRead = eventUsage.int("cache_read_input_tokens") ?: usage.cacheRead,
                 cacheWrite = eventUsage.int("cache_creation_input_tokens") ?: usage.cacheWrite,
+                // Gateways include the TTL breakdown in deltas, though the SDK only types it
+                // on message_start.
+                cacheWrite1h = eventUsage.obj("cache_creation")
+                    ?.int("ephemeral_1h_input_tokens") ?: usage.cacheWrite1h,
                 reasoning = eventUsage.obj("output_tokens_details")
                     ?.int("thinking_tokens") ?: usage.reasoning
             )
