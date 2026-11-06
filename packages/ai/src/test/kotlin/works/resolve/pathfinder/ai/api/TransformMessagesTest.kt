@@ -120,6 +120,31 @@ class TransformMessagesTest {
     }
 
     @Test
+    fun `drops thinking blocks containing only js whitespace`() {
+        val model = makeCopilotClaudeModel()
+        val messages: List<Message> = listOf(
+            UserMessage.ofText("hello"),
+            AssistantMessage(
+                content = listOf(
+                    ThinkingContent("\u00A0", thinkingSignature = ""),
+                    ThinkingContent("\uFEFF"),
+                    TextContent("Hi there!")
+                ),
+                api = model.api,
+                provider = model.provider,
+                model = model.id,
+                stopReason = StopReason.STOP
+            )
+        )
+
+        val assistantMsg = transformMessages(messages, model)
+            .filterIsInstance<AssistantMessage>()
+            .single()
+
+        assertEquals(listOf(TextContent("Hi there!")), assistantMsg.content)
+    }
+
+    @Test
     fun `drops foreign thinking from an assistant turn that also carries a tool call`() {
         // pi #10995: readable foreign thinking must not become text, and the
         // surviving text and tool call keep the turn replayable.
@@ -196,6 +221,38 @@ class TransformMessagesTest {
         val toolCall = assistantMsg.content.filterIsInstance<ToolCall>().single()
 
         assertNull(toolCall.thoughtSignature)
+    }
+
+    @Test
+    fun `keeps empty-string tool call signatures when migrating between models`() {
+        val model = makeCopilotClaudeModel()
+        val messages: List<Message> = listOf(
+            UserMessage.ofText("run a command"),
+            makeAssistantMessage(
+                listOf(
+                    ToolCall(
+                        id = "call_123",
+                        name = "bash",
+                        arguments = buildJsonObject { put("command", "ls") },
+                        thoughtSignature = ""
+                    )
+                )
+            ),
+            ToolResultMessage(
+                toolCallId = "call_123",
+                toolName = "bash",
+                content = listOf(TextContent("output"))
+            )
+        )
+
+        val result = transformMessages(messages, model, anthropicNormalizeToolCallId)
+        val toolCall = result.filterIsInstance<AssistantMessage>()
+            .single()
+            .content
+            .filterIsInstance<ToolCall>()
+            .single()
+
+        assertEquals("", toolCall.thoughtSignature)
     }
 
     @Test

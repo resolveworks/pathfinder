@@ -10,6 +10,7 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 
 /**
  * Normalizes a replayed history into a shape the target provider accepts:
@@ -158,7 +159,7 @@ internal fun transformMessages(
                                 // Keep redacted and signed blocks even if the thinking text
                                 // is empty (OpenAI encrypted reasoning); they are needed for replay.
                                 listOf(block)
-                            } else if (block.thinking.isBlank()) {
+                            } else if (trimJsWhitespace(block.thinking).isEmpty()) {
                                 emptyList()
                             } else {
                                 listOf(block)
@@ -176,7 +177,9 @@ internal fun transformMessages(
                             }
 
                         is ToolCall -> {
-                            var normalized = if (!isSameModel && block.thoughtSignature != null) {
+                            var normalized = if (!isSameModel &&
+                                !block.thoughtSignature.isNullOrEmpty()
+                            ) {
                                 block.copy(thoughtSignature = null)
                             } else {
                                 block

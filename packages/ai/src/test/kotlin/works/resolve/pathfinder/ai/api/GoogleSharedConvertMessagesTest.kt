@@ -128,6 +128,26 @@ class GoogleSharedConvertMessagesTest {
     }
 
     @Test
+    fun `drops blocks containing only js whitespace`() {
+        val model = model()
+        val turns = contents(
+            model,
+            contextFor(
+                model,
+                listOf(
+                    ThinkingContent("\u00A0"),
+                    TextContent("\uFEFF"),
+                    ToolCall("call_1", "bash", argsOf("ls"))
+                )
+            )
+        )
+        val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
+        val parts = partsOf(modelTurn)
+        assertEquals(1, parts.size)
+        assertTrue(parts[0].containsKey("functionCall"))
+    }
+
+    @Test
     fun `still drops signed empty blocks from a different model`() {
         val model = model()
         val turns = contents(
@@ -597,6 +617,91 @@ class GoogleSharedConvertToolsTest {
         assertNull(parameters["schema"])
         assertNull(parameters["defs"])
         assertTrue(parameters.containsKey("properties"))
+    }
+
+    @Test
+    fun `parametersJsonSchema rewrites string and number const as single-value enum`() {
+        val schema = kotlinx.serialization.json.Json.parseToJsonElement(
+            """
+            {
+              "type": "object",
+              "properties": {
+                "mode": {"const": "fast"},
+                "count": {"type": "number", "const": 3},
+                "nested": {"type": "object", "properties": {"flag": {"const": "yes"}}},
+                "list": {"type": "array", "items": {"const": "item"}},
+                "choice": {"anyOf": [{"const": "a"}, {"const": 1}, {"const": true}, {"const": null}]},
+                "existing": {"const": "x", "enum": ["x", "y"]}
+              },
+              "${'$'}defs": {"def": {"type": "object", "properties": {"k": {"const": "v"}}}},
+              "definitions": {"legacy": {"const": "l"}},
+              "default": {"const": "keep"},
+              "examples": [{"const": "keep"}],
+              "custom": {"const": "keep"},
+              "${'$'}schema": "https://example.com/schema",
+              "${'$'}ref": "#/${'$'}defs/def"
+            }
+            """.trimIndent()
+        )
+        val constTool = tool.copy(parameters = schema)
+        val declaration = GoogleShared.convertTools(listOf(constTool))!!
+            .let { it[0].jsonObject["functionDeclarations"]!!.jsonArray[0].jsonObject }
+        val parameters = declaration["parametersJsonSchema"]!!.jsonObject
+
+        assertEquals(
+            """{"enum":["fast"]}""",
+            parameters["properties"]!!.jsonObject["mode"].toString()
+        )
+        assertEquals(
+            """{"type":"number","enum":[3]}""",
+            parameters["properties"]!!.jsonObject["count"].toString()
+        )
+        assertEquals(
+            """{"type":"object","properties":{"flag":{"enum":["yes"]}}}""",
+            parameters["properties"]!!.jsonObject["nested"].toString()
+        )
+        assertEquals(
+            """{"type":"array","items":{"enum":["item"]}}""",
+            parameters["properties"]!!.jsonObject["list"].toString()
+        )
+        assertEquals(
+            """{"anyOf":[{"enum":["a"]},{"enum":[1]},{"const":true},{"const":null}]}""",
+            parameters["properties"]!!.jsonObject["choice"].toString()
+        )
+        assertEquals(
+            """{"const":"x","enum":["x","y"]}""",
+            parameters["properties"]!!.jsonObject["existing"].toString()
+        )
+        assertEquals(
+            """{"type":"object","properties":{"k":{"enum":["v"]}}}""",
+            parameters["${'$'}defs"]!!.jsonObject["def"].toString()
+        )
+        assertEquals(
+            """{"enum":["l"]}""",
+            parameters["definitions"]!!.jsonObject["legacy"].toString()
+        )
+        assertEquals("""{"const":"keep"}""", parameters["default"].toString())
+        assertEquals("""[{"const":"keep"}]""", parameters["examples"].toString())
+        assertEquals("""{"const":"keep"}""", parameters["custom"].toString())
+        assertEquals(
+            "https://example.com/schema",
+            parameters["${'$'}schema"]!!.jsonPrimitive.content
+        )
+        assertEquals("#/${'$'}defs/def", parameters["${'$'}ref"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `legacy parameters branch leaves const untouched`() {
+        val schema = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"type":"object","properties":{"mode":{"const":"fast"}}}"""
+        )
+        val constTool = tool.copy(parameters = schema)
+        val declaration = GoogleShared.convertTools(listOf(constTool), useParameters = true)!!
+            .let { it[0].jsonObject["functionDeclarations"]!!.jsonArray[0].jsonObject }
+        assertEquals(
+            """{"const":"fast"}""",
+            declaration["parameters"]!!.jsonObject["properties"]!!.jsonObject["mode"].toString()
+        )
     }
 
     @Test
