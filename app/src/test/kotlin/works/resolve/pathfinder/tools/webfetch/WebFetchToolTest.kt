@@ -64,7 +64,7 @@ class WebFetchToolTest {
             validateArguments(args())
         }
         assertTrue(error.message!!.startsWith("Validation failed for tool \"web_fetch\""))
-        assertTrue(error.message!!.contains("must have required properties url"))
+        assertTrue(error.message!!.contains("url: missing"))
     }
 
     @Test

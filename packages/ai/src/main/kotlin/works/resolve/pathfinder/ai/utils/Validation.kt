@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ai.utils
 
-import kotlin.math.floor
+import java.util.Collections
+import java.util.WeakHashMap
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -10,22 +11,36 @@ import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 
 /**
+ * One compiled validator per schema, as pi's `getValidator` WeakMap: tool
+ * schemas are long-lived, so entries disappear with their tools. pi-ai
+ * compiles with `formats`, `coerce: true` and `unresolvedRefs: "reject"`.
+ */
+private val validatorCache = Collections.synchronizedMap(
+    WeakHashMap<JsonElement, SchemaValidator>()
+)
+
+private fun getValidator(schema: JsonElement): SchemaValidator {
+    synchronized(validatorCache) {
+        validatorCache[schema]?.let { return it }
+    }
+    val validator = SchemaValidator(schema, SchemaFormats.checks, UnresolvedRefs.REJECT)
+    synchronized(validatorCache) { validatorCache[schema] = validator }
+    return validator
+}
+
+/** A pi-schema error path (a JSON Pointer) as the dotted path the model sees. */
+private fun formatValidationPath(pointer: String): String {
+    if (pointer.isEmpty()) return "root"
+    return pointer
+        .substring(1)
+        .split("/")
+        .joinToString(".") { it.replace("~1", "/").replace("~0", "~") }
+}
+
+/**
  * Validates parsed tool-call arguments against the tool's JSON Schema
- * `parameters`, coercing primitive mismatches before checking — the port of
- * pi's `validateToolArguments` (packages/ai/src/utils/validation.ts), which
- * the agent loop applies to every tool call.
- *
- * pi's pipeline is `normalizeOptionalNulls` → typebox `Value.Convert` →
- * JSON-Schema coercion → compiled-schema validation. `Value.Convert` only
- * acts on TypeBox-annotated schemas; pathfinder tool parameters are plain
- * JSON Schema, so the port is exactly the branch pi applies to those:
- * optional nulls are dropped, then AJV-style primitive coercion runs, then
- * the arguments must validate against the schema. Supported schemas are
- * limited to the keywords pi's tool schemas use — `type` (including type
- * arrays), `properties`, `required`, `items` (single or tuple), `enum`, and
- * `additionalProperties: true`; annotation keywords are ignored like in pi.
- * Any other constraint keyword throws rather than silently validating less
- * than pi would.
+ * `parameters`, coercing them first — the port of pi's
+ * `validateToolArguments` (packages/ai/src/utils/validation.ts).
  *
  * @return the coerced, schema-valid arguments
  * @throws IllegalArgumentException with pi's multi-line message when
@@ -37,379 +52,46 @@ fun validateToolArguments(tool: Tool, toolCall: ToolCall): JsonObject {
             "Invalid arguments for tool \"${toolCall.name}\": $it"
         )
     }
-    val schema =
-        tool.parameters as? JsonObject
-            ?: throw IllegalArgumentException(
-                "Tool \"${tool.name}\" parameters must be a JSON Schema object"
-            )
-    requireSupportedSchema(tool.name, schema)
-    val normalized = normalizeOptionalNulls(toolCall.arguments, schema)
-    val coerced = coerceWithJsonSchema(normalized, schema) as JsonObject
-    val errors = collectSchemaErrors(coerced, schema, path = "")
-    if (errors.isEmpty()) return coerced
-    val errorLines = errors.joinToString("\n") { "  - ${it.formattedPath}: ${it.message}" }
-    throw IllegalArgumentException(
-        "Validation failed for tool \"${toolCall.name}\":\n$errorLines\n\nReceived arguments:" +
-            "\n${renderReceivedArguments(toolCall.arguments)}"
-    )
-}
-
-// --- Schema support check (pi compiles the schema up front) ---
-
-private val CONSTRAINT_KEYWORDS = setOf("type", "properties", "required", "items", "enum")
-
-private val IGNORED_KEYWORDS =
-    setOf(
-        "description",
-        "title",
-        "default",
-        "examples",
-        // No registered formats in pi's typebox setup, so format is unconstrained there too.
-        "format",
-        "${'$'}defs",
-        "definitions"
-    )
-
-private fun unsupportedKeyword(toolName: String, keyword: String): Nothing =
-    throw IllegalArgumentException(
-        "Unsupported schema keyword \"$keyword\" in tool \"$toolName\" parameters"
-    )
-
-private fun requireSupportedSchema(toolName: String, schema: JsonObject) {
-    for (key in schema.keys) {
-        if (key in CONSTRAINT_KEYWORDS || key in IGNORED_KEYWORDS) continue
-        if (key == "additionalProperties" && schema.getValue(key) == JsonPrimitive(true)) continue
-        unsupportedKeyword(toolName, key)
-    }
-    if (schemaTypes(schema) == null) unsupportedKeyword(toolName, "type")
-    when (schema["enum"]) {
-        null, is JsonArray -> {}
-        else -> unsupportedKeyword(toolName, "enum")
-    }
-    (schema["required"] as? JsonArray)?.forEach {
-        if (it !is JsonPrimitive || !it.isString) unsupportedKeyword(toolName, "required")
-    }
-    (schema["properties"] as? JsonObject)?.forEach { (_, propertySchema) ->
-        if (propertySchema !is JsonObject) {
-            unsupportedKeyword(toolName, "properties")
-        } else {
-            requireSupportedSchema(toolName, propertySchema)
-        }
-    }
-    when (val items = schema["items"]) {
-        null, is JsonArray, is JsonObject -> {}
-        else -> unsupportedKeyword(toolName, "items")
-    }
-    (schema["items"] as? JsonArray)?.forEach {
-        if (it !is JsonObject) {
-            unsupportedKeyword(toolName, "items")
-        } else {
-            requireSupportedSchema(toolName, it)
-        }
-    }
-    (schema["items"] as? JsonObject)?.let { requireSupportedSchema(toolName, it) }
-}
-
-/** Declared type names; null when `type` is present but malformed. */
-private fun schemaTypes(schema: JsonObject): List<String>? = when (val type = schema["type"]) {
-    null, is JsonNull -> emptyList()
-
-    is JsonPrimitive -> if (type.isString) listOf(type.content) else null
-
-    is JsonArray ->
-        if (type.all { it is JsonPrimitive && it.isString }) {
-            type.map { (it as JsonPrimitive).content }
-        } else {
-            null
-        }
-
-    else -> null
-}
-
-// --- JSON type matching (pi's matchesJsonType) ---
-
-private fun matchesJsonType(value: JsonElement, type: String): Boolean = when (type) {
-    "number" -> value.strictDoubleOrNull() != null
-    "integer" -> value.strictDoubleOrNull()?.let { it.isFinite() && it == floor(it) } == true
-    "boolean" -> value.strictBooleanOrNull() != null
-    "string" -> value is JsonPrimitive && value.isString
-    "null" -> value is JsonNull
-    "array" -> value is JsonArray
-    "object" -> value is JsonObject
-    else -> false
-}
-
-// --- Primitive coercion (pi's coercePrimitiveByType, AJV-compatible rules) ---
-
-private fun coercePrimitiveByType(value: JsonElement, type: String): JsonElement = when (type) {
-    "number" -> when {
-        value is JsonNull -> JsonPrimitive(0)
-
-        value is JsonPrimitive && value.isString ->
-            value.content.toCoercedJsNumberOrNull()?.takeIf { it.isFinite() }?.let {
-                JsonPrimitive(it)
-            }
-                ?: value
-
-        value.strictBooleanOrNull() == true -> JsonPrimitive(1)
-
-        value.strictBooleanOrNull() == false -> JsonPrimitive(0)
-
-        else -> value
-    }
-
-    "integer" -> when {
-        value is JsonNull -> JsonPrimitive(0)
-
-        value is JsonPrimitive && value.isString ->
-            value.content.toCoercedJsNumberOrNull()
-                ?.takeIf { it.isFinite() && it == floor(it) }
-                ?.let { JsonPrimitive(it) }
-                ?: value
-
-        value.strictBooleanOrNull() == true -> JsonPrimitive(1)
-
-        value.strictBooleanOrNull() == false -> JsonPrimitive(0)
-
-        else -> value
-    }
-
-    "boolean" -> when {
-        value is JsonNull -> JsonPrimitive(false)
-        value is JsonPrimitive && value.isString && value.content == "true" -> JsonPrimitive(true)
-        value is JsonPrimitive && value.isString && value.content == "false" -> JsonPrimitive(false)
-        value.strictDoubleOrNull() == 1.0 -> JsonPrimitive(true)
-        value.strictDoubleOrNull() == 0.0 -> JsonPrimitive(false)
-        else -> value
-    }
-
-    "string" -> when {
-        value is JsonNull -> JsonPrimitive("")
-        value.strictDoubleOrNull() != null -> JsonPrimitive(jsNumber(value.strictDoubleOrNull()))
-        value.strictBooleanOrNull() != null -> JsonPrimitive(value.strictBooleanOrNull().toString())
-        else -> value
-    }
-
-    "null" -> when {
-        value is JsonPrimitive && value.isString && value.content.isEmpty() -> JsonNull
-        value.strictDoubleOrNull() == 0.0 -> JsonNull
-        value.strictBooleanOrNull() == false -> JsonNull
-        else -> value
-    }
-
-    else -> value
-}
-
-/**
- * pi's coercion guard is `value.trim() !== "" && Number.isFinite(Number(value))`:
- * a JS-blank string stays uncoerced (the blank check is call-site policy,
- * not JS `Number()` semantics, which map blank to 0).
- */
-private fun String.toCoercedJsNumberOrNull(): Double? =
-    if (trimJsWhitespace(this).isEmpty()) null else jsParseNumberOrNull(this)
-
-// --- JSON-Schema-driven coercion (pi's coerceWithJsonSchema) ---
-
-private fun coerceWithJsonSchema(value: JsonElement, schema: JsonObject): JsonElement {
-    val types = schemaTypes(schema) ?: emptyList()
-    var next = value
-    val matchesUnionMember = types.size > 1 && types.any { matchesJsonType(next, it) }
-    if (types.isNotEmpty() && !matchesUnionMember) {
-        for (type in types) {
-            val candidate = coercePrimitiveByType(next, type)
-            if (candidate != next) {
-                next = candidate
-                break
-            }
-        }
-    }
-    if ("object" in types && next is JsonObject) next = coerceSchemaObject(next, schema)
-    if ("array" in types && next is JsonArray) next = coerceSchemaArray(next, schema)
-    return next
-}
-
-private fun coerceSchemaObject(value: JsonObject, schema: JsonObject): JsonObject {
-    val properties = schema["properties"] as? JsonObject ?: return value
-    val coerced = JsonObject(
-        value.mapValues { (key, child) ->
-            val propertySchema = properties[key]
-            if (propertySchema is JsonObject) coerceWithJsonSchema(child, propertySchema) else child
-        }
-    )
-    return if (coerced == value) value else coerced
-}
-
-private fun coerceSchemaArray(value: JsonArray, schema: JsonObject): JsonArray {
-    val items = schema["items"]
-    return when {
-        items is JsonArray -> JsonArray(
-            value.mapIndexed { index, element ->
-                (items.getOrNull(index) as? JsonObject)
-                    ?.let { coerceWithJsonSchema(element, it) }
-                    ?: element
-            }
+    val schema = tool.parameters
+    if (!isSchema(schema)) {
+        throw IllegalArgumentException(
+            "Tool \"${tool.name}\" parameters must be a JSON Schema object"
         )
+    }
+    val validator = getValidator(schema)
+    // A copy, so tools that modify their arguments never modify the tool call in the transcript.
+    return when (val result = validator.parse(structuredClone(toolCall.arguments))) {
+        is SchemaParseResult.Valid ->
+            result.value as? JsonObject
+                ?: throw IllegalArgumentException(
+                    "Tool \"${tool.name}\" parameters must describe the argument object"
+                )
 
-        items is JsonObject -> JsonArray(value.map { coerceWithJsonSchema(it, items) })
-
-        else -> value
+        is SchemaParseResult.Invalid -> {
+            val errorLines = result.errors.joinToString("\n") {
+                "  - ${formatValidationPath(it.path)}: ${it.message}"
+            }
+            val message = "Validation failed for tool \"${toolCall.name}\":\n$errorLines\n\n" +
+                "Received arguments:\n${renderReceivedArguments(toolCall.arguments)}"
+            throw IllegalArgumentException(message)
+        }
     }
 }
 
-// --- Optional-null normalization (pi's normalizeOptionalNulls) ---
+/** A JSON Schema is an object or a boolean, as pi's `JsonSchema` type. */
+private fun isSchema(value: JsonElement): Boolean = value is JsonObject ||
+    (value is JsonPrimitive && !value.isString && value.content in setOf("true", "false"))
 
-private fun normalizeOptionalNulls(value: JsonElement, schema: JsonObject): JsonElement =
-    when (value) {
-        is JsonArray -> {
-            val items = schema["items"]
-            when {
-                items is JsonArray -> JsonArray(
-                    value.mapIndexed { index, element ->
-                        (items.getOrNull(index) as? JsonObject)
-                            ?.let { normalizeOptionalNulls(element, it) }
-                            ?: element
-                    }
-                )
-
-                items is JsonObject -> JsonArray(value.map { normalizeOptionalNulls(it, items) })
-
-                else -> value
-            }
-        }
-
-        is JsonObject -> {
-            val properties = schema["properties"] as? JsonObject ?: return value
-            val required =
-                (schema["required"] as? JsonArray)
-                    ?.map { (it as JsonPrimitive).content }
-                    ?.toSet()
-                    ?: emptySet()
-            JsonObject(
-                buildMap {
-                    for ((key, child) in value) {
-                        val propertySchema = properties[key]
-                        if (propertySchema is JsonObject &&
-                            child is JsonNull &&
-                            key !in required &&
-                            !schemaAcceptsNull(propertySchema)
-                        ) {
-                            continue
-                        }
-                        put(
-                            key,
-                            if (propertySchema is JsonObject) {
-                                normalizeOptionalNulls(child, propertySchema)
-                            } else {
-                                child
-                            }
-                        )
-                    }
-                }
-            )
-        }
-
-        else -> value
-    }
-
-/** Whether null already satisfies the schema (pi compiles the subschema and checks it). */
-private fun schemaAcceptsNull(schema: JsonObject): Boolean =
-    collectSchemaErrors(JsonNull, schema, path = "").isEmpty()
-
-// --- Validation errors (pi's compiled-validator errors + en_US messages) ---
-
-private class SchemaError(
-    val keyword: String,
-    val path: String,
-    val message: String,
-    firstMissing: String? = null
-) {
-    /** pi's formatValidationPath: required errors address the first missing property. */
-    val formattedPath: String =
-        if (keyword == "required" && firstMissing != null) {
-            if (path.isEmpty()) firstMissing else "$path.$firstMissing"
-        } else {
-            path.ifEmpty { "root" }
-        }
-}
-
-private fun collectSchemaErrors(
-    value: JsonElement,
-    schema: JsonObject,
-    path: String
-): List<SchemaError> {
-    val errors = mutableListOf<SchemaError>()
-    val types = schemaTypes(schema) ?: emptyList()
-    if (types.isNotEmpty() && types.none { matchesJsonType(value, it) }) {
-        errors.add(SchemaError("type", path, typeMessage(types)))
-        return errors
-    }
-    val enum = schema["enum"] as? JsonArray
-    if (enum != null && enum.none { jsonEquals(it, value) }) {
-        errors.add(SchemaError("enum", path, "must be equal to one of the allowed values"))
-    }
-    when (value) {
-        is JsonObject -> {
-            val required =
-                (schema["required"] as? JsonArray)?.map { (it as JsonPrimitive).content }
-                    ?: emptyList()
-            val missing = required.filter { it !in value }
-            if (missing.isNotEmpty()) {
-                errors.add(
-                    SchemaError(
-                        keyword = "required",
-                        path = path,
-                        message = "must have required properties ${missing.joinToString(", ")}",
-                        firstMissing = missing.first()
-                    )
-                )
-            }
-            val properties = schema["properties"] as? JsonObject
-            for ((key, propertySchema) in properties.orEmpty()) {
-                val child = value[key] ?: continue
-                errors.addAll(
-                    collectSchemaErrors(child, propertySchema as JsonObject, childPath(path, key))
-                )
-            }
-        }
-
-        is JsonArray -> {
-            val items = schema["items"]
-            when {
-                items is JsonObject -> value.forEachIndexed { index, element ->
-                    errors.addAll(collectSchemaErrors(element, items, childPath(path, "$index")))
-                }
-
-                items is JsonArray -> value.forEachIndexed { index, element ->
-                    (items.getOrNull(index) as? JsonObject)?.let {
-                        errors.addAll(collectSchemaErrors(element, it, childPath(path, "$index")))
-                    }
-                }
-            }
-        }
-
-        else -> {}
-    }
-    return errors
-}
-
-private fun childPath(path: String, segment: String): String =
-    if (path.isEmpty()) segment else "$path.$segment"
-
-private fun typeMessage(types: List<String>): String = if (types.size ==
-    1
-) {
-    "must be ${types.single()}"
-} else {
-    "must be either ${types.joinToString(" or ")}"
+/** The schema is never modified, but coercion may return the input; clone at the boundary. */
+private fun structuredClone(value: JsonElement): JsonElement = when (value) {
+    is JsonObject -> JsonObject(value.mapValues { structuredClone(it.value) })
+    is JsonArray -> JsonArray(value.map(::structuredClone))
+    else -> value
 }
 
 // --- Received-arguments echo (pi: JSON.stringify(arguments, null, 2)) ---
 
-/**
- * JSON.stringify formatting with JS number-to-string rendering, so "5.0" and
- * "1e3" tokens echo as 5 and 1000; kotlinx would print the raw token or a
- * string primitive.
- */
+/** JSON.stringify formatting with JS number rendering, so "5.0" and "1e3" echo as 5 and 1000. */
 private fun renderReceivedArguments(arguments: JsonObject): String =
     buildString { appendJsonLikeJs(arguments, depth = 0) }
 
@@ -457,9 +139,7 @@ private fun StringBuilder.appendJsonLikeJs(value: JsonElement, depth: Int) {
                 append(value.content)
             } else {
                 append(
-                    value.content.toCoercedJsNumberOrNull()?.let {
-                        jsNumber(it)
-                    } ?: value.content
+                    value.strictDoubleOrNull()?.let { jsNumber(it) } ?: value.content
                 )
             }
     }
