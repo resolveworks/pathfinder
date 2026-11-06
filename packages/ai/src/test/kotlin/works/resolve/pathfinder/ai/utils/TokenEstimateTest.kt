@@ -255,10 +255,66 @@ class TokenEstimateTest {
     }
 
     @Test
+    fun `clamping keeps the fixed margin when the ratio margin is smaller`() {
+        val model = TestCatalogs.GLM_5_2.copy(contextWindow = 100_000, maxTokens = 100_000)
+        // ceil(10_000 * 0.15) = 1500, so the fixed 4096 margin applies.
+        assertEquals(
+            85_904,
+            clampMaxTokensToContext(model, contextWithInputTokens(10_000), model.maxTokens)
+        )
+    }
+
+    @Test
+    fun `clamping keeps the ratio margin when it exceeds the fixed margin`() {
+        val model = TestCatalogs.GLM_5_2.copy(contextWindow = 200_000, maxTokens = 200_000)
+        // 40_000 * 0.15 = 6000 keeps the room above the output floor.
+        assertEquals(
+            154_000,
+            clampMaxTokensToContext(model, contextWithInputTokens(40_000), model.maxTokens)
+        )
+    }
+
+    @Test
+    fun `clamping rounds the ratio margin up`() {
+        val model = TestCatalogs.GLM_5_2.copy(contextWindow = 200_000, maxTokens = 200_000)
+        // 27_307 * 0.15 = 4096.05, so the margin is 4097.
+        assertEquals(
+            168_596,
+            clampMaxTokensToContext(model, contextWithInputTokens(27_307), model.maxTokens)
+        )
+    }
+
+    @Test
+    fun `clamping falls back to the fixed margin and caps output when the ratio leaves too little`() {
+        val model = TestCatalogs.GLM_5_2.copy(contextWindow = 350_000, maxTokens = 100_000)
+        // The ratio margin 45_000 leaves 5000; the fixed margin leaves 45_904, capped at 32_768.
+        assertEquals(
+            32_768,
+            clampMaxTokensToContext(model, contextWithInputTokens(300_000), model.maxTokens)
+        )
+    }
+
+    @Test
     fun `non-positive context window skips clamping`() {
         val model = TestCatalogs.GLM_5_2.copy(contextWindow = 0)
         val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
         assertEquals(5000, clampMaxTokensToContext(model, context, 5000))
         assertEquals(1, clampMaxTokensToContext(model, context, 0))
     }
+
+    private fun contextWithInputTokens(tokens: Int) = normalizeContext(
+        Context(
+            messages = listOf(
+                AssistantMessage(
+                    content = listOf(TextContent("kept")),
+                    api = "openai-completions",
+                    provider = "zai",
+                    model = "glm",
+                    usage = Usage(totalTokens = tokens),
+                    stopReason = StopReason.STOP,
+                    timestamp = 1L
+                )
+            )
+        )
+    )
 }
