@@ -25,13 +25,12 @@ import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.calculateCost
+import works.resolve.pathfinder.ai.utils.ToolCallArgumentsStream
 import works.resolve.pathfinder.ai.utils.TranscriptToolSupport
 import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
-import works.resolve.pathfinder.ai.utils.parseStreamingJson
-import works.resolve.pathfinder.ai.utils.parseToolCallArguments
 import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
 import works.resolve.pathfinder.ai.utils.resolveTranscript
 import works.resolve.pathfinder.ai.utils.resolveTranscriptTools
@@ -299,13 +298,12 @@ object OpenAiResponsesShared {
                 }
             )
         }
-        val initialSystemMessage = transformedMessages.firstOrNull() as? SystemMessage
+        var msgIndex = 0
+        var sourceIndex = 0
         var systemIndex = 0
 
-        transformedMessages.forEachIndexed { index, msg ->
-            val isLeadingSystemMessage = index == 0 && msg is SystemMessage
-            // The leading system message is not counted as a conversation message.
-            val msgIndex = if (initialSystemMessage != null) index - 1 else index
+        transformedMessages.forEach { msg ->
+            val isLeadingSystemMessage = sourceIndex++ == 0 && msg is SystemMessage
             when (msg) {
                 is SystemMessage -> {
                     // transformMessages keeps system messages in order, so their position matches the transcript.
@@ -498,7 +496,7 @@ object OpenAiResponsesShared {
                             else -> {}
                         }
                     }
-                    if (output.isEmpty()) return@forEachIndexed
+                    if (output.isEmpty()) return@forEach
                     if (options.configurationUpdateEffort != null &&
                         isSameModel &&
                         msg.providerThinkingLevel != null
@@ -527,6 +525,7 @@ object OpenAiResponsesShared {
                     )
                 }
             }
+            if (!isLeadingSystemMessage) msgIndex++
         }
         if (options.configurationUpdateEffort != null) {
             pushConfigurationUpdate(options.configurationUpdateEffort)
@@ -654,43 +653,71 @@ object OpenAiResponsesShared {
             /** Parsed arguments; kept current with every streamed fragment. */
             var arguments: JsonObject = JsonObject(emptyMap())
 
-            /** Scratch buffer of streamed fragments; null for custom tool calls. */
-            var partialJson: String? = ""
+            /** Live tool-call input; null once the item is finalized. */
+            var input: ToolCallInput? = null
             var namespace: String? = null
             var argumentsError: String? = null
-            var customInput: CustomToolInput? = null
             override var built: Content? = null
         }
     }
 
-    /** Grammar input property and JSON buffer for `custom_tool_call` items. */
-    private class CustomToolInput(
-        val property: String,
-        val jsonBuffer: GrammarToolInputJsonBuffer = GrammarToolInputJsonBuffer()
-    )
+    /**
+     * Stream state of a tool call, kept in its slot and never on the content block, so it never
+     * reaches partials: the JSON arguments of a function call, or the input of a custom (grammar)
+     * tool call.
+     */
+    private sealed interface ToolCallInput {
+        class Json(val arguments: ToolCallArgumentsStream) : ToolCallInput
 
-    /** Last accepted custom-tool input, stored as the sole arguments property. */
-    private fun getCustomToolCallInput(slot: Block.Tool): String {
-        val customInput = slot.customInput ?: return ""
-        val value = slot.arguments[customInput.property]
-        return (value as? JsonPrimitive)?.takeIf { it.isString }?.content ?: ""
+        class Custom(
+            val property: String,
+            val buffer: GrammarToolInputJsonBuffer = GrammarToolInputJsonBuffer()
+        ) : ToolCallInput {
+            /** JSON text of the item's initial input, sent with the first delta. */
+            var unsent: String = ""
+        }
     }
 
-    private fun appendCustomToolCallInput(
-        slot: Block.Tool,
-        nextInput: String,
-        close: Boolean
+    /** Stream state of a custom tool call that starts with [initialInput]. */
+    private fun customInput(property: String, initialInput: String): ToolCallInput.Custom {
+        val input = ToolCallInput.Custom(property)
+        input.unsent =
+            appendGrammarToolInputJsonDelta(input.buffer, property, initialInput) ?: ""
+        return input
+    }
+
+    /** Append to a streaming custom tool input; returns the matching piece of its JSON arguments text. */
+    private fun appendCustomInput(
+        block: Block.Tool,
+        input: ToolCallInput.Custom,
+        delta: String
+    ): String? = sendCustomInput(
+        block,
+        input,
+        appendGrammarToolInputJsonDelta(input.buffer, input.property, delta)
+    )
+
+    /** Close a custom tool input with the provider's complete input, if it sent one. */
+    private fun closeCustomInput(
+        block: Block.Tool,
+        input: ToolCallInput.Custom,
+        finalInput: String?
+    ): String? = sendCustomInput(
+        block,
+        input,
+        closeGrammarToolInputJson(input.buffer, input.property, finalInput)
+    )
+
+    private fun sendCustomInput(
+        block: Block.Tool,
+        input: ToolCallInput.Custom,
+        jsonDelta: String?
     ): String? {
-        val customInput = slot.customInput ?: return null
-        val delta =
-            appendGrammarToolInputJsonDelta(
-                customInput.jsonBuffer,
-                customInput.property,
-                nextInput,
-                close
-            )
-        slot.arguments = buildJsonObject { put(customInput.property, nextInput) }
-        return delta
+        block.arguments = buildJsonObject { put(input.property, input.buffer.input) }
+        if (input.unsent.isEmpty()) return jsonDelta
+        val sent = input.unsent + (jsonDelta ?: "")
+        input.unsent = ""
+        return sent
     }
 
     /** Event-ordered stream state machine; adapters feed events to [onEvent]. */
@@ -705,6 +732,9 @@ object OpenAiResponsesShared {
         // output_index -> live block. JS Map accepts undefined, so index-less
         // events all share the null key instead of being dropped.
         private val slots = mutableMapOf<Int?, Block>()
+
+        // Tool calls whose output_item.done has not arrived yet.
+        private val unfinishedToolCalls = linkedSetOf<Block.Tool>()
         private val reasoningBlocksById = mutableMapOf<String, Block.Thinking>()
 
         var responseId: String? = null
@@ -790,46 +820,37 @@ object OpenAiResponsesShared {
 
             "response.function_call_arguments.delta" -> {
                 val slot = getSlot<Block.Tool>(event) ?: return emptyList()
+                val input = slot.input as? ToolCallInput.Json ?: return emptyList()
                 val delta = event.string("delta") ?: return emptyList()
-                val partialJson = slot.partialJson ?: return emptyList()
-                val next = partialJson + delta
-                slot.partialJson = next
-                slot.arguments = parseStreamingJson(next)
+                slot.arguments = input.arguments.append(delta)
                 slot.built = null
                 listOf(AssistantMessageEvent.ToolCallDelta(slot.index, delta))
             }
 
             "response.function_call_arguments.done" -> {
-                // The complete arguments replace the buffer; any tail beyond the
-                // streamed prefix is emitted as one final delta.
                 val slot = getSlot<Block.Tool>(event) ?: return emptyList()
-                val previous = slot.partialJson ?: return emptyList()
-                val arguments = event.string("arguments") ?: return emptyList()
-                slot.partialJson = arguments
-                slot.arguments = parseStreamingJson(arguments)
+                val input = slot.input as? ToolCallInput.Json ?: return emptyList()
+                val replaced = input.arguments.replace(event.string("arguments").orEmpty())
+                slot.arguments = replaced.arguments
                 slot.built = null
-                if (!arguments.startsWith(previous)) return emptyList()
-                val delta = arguments.substring(previous.length)
-                if (delta.isEmpty()) return emptyList()
+                val delta = replaced.delta?.takeIf { it.isNotEmpty() } ?: return emptyList()
                 listOf(AssistantMessageEvent.ToolCallDelta(slot.index, delta))
             }
 
             "response.custom_tool_call_input.delta" -> {
                 val slot = getSlot<Block.Tool>(event) ?: return emptyList()
-                if (slot.customInput == null) return emptyList()
+                val input = slot.input as? ToolCallInput.Custom ?: return emptyList()
                 val delta = event.string("delta") ?: return emptyList()
-                val out =
-                    appendCustomToolCallInput(slot, getCustomToolCallInput(slot) + delta, false)
-                        ?: return emptyList()
+                val out = appendCustomInput(slot, input, delta) ?: return emptyList()
                 slot.built = null
                 listOf(AssistantMessageEvent.ToolCallDelta(slot.index, out))
             }
 
             "response.custom_tool_call_input.done" -> {
                 val slot = getSlot<Block.Tool>(event) ?: return emptyList()
-                if (slot.customInput == null) return emptyList()
-                val input = event.string("input") ?: return emptyList()
-                val out = appendCustomToolCallInput(slot, input, true) ?: return emptyList()
+                val input = slot.input as? ToolCallInput.Custom ?: return emptyList()
+                val out = closeCustomInput(slot, input, event.string("input"))
+                    ?: return emptyList()
                 slot.built = null
                 listOf(AssistantMessageEvent.ToolCallDelta(slot.index, out))
             }
@@ -881,25 +902,33 @@ object OpenAiResponsesShared {
                 "function_call" -> Block.Tool(blocks.size).also { tool ->
                     tool.id = "${item.string("call_id")}|${item.string("id")}"
                     tool.name = item.string("name") ?: ""
-                    tool.partialJson = item.string("arguments").orEmpty()
+                    val arguments = ToolCallArgumentsStream()
+                    val initial = item.string("arguments").orEmpty()
+                    tool.arguments =
+                        if (initial.isEmpty()) JsonObject(emptyMap()) else arguments.append(initial)
+                    tool.input = ToolCallInput.Json(arguments)
                     tool.namespace = item.string("namespace")
                 }
 
                 "custom_tool_call" -> {
                     val name = item.string("name") ?: ""
                     val inputProperty = options.grammarToolInputProperties[name] ?: "input"
-                    val input = item.string("input") ?: ""
+                    val input = item.string("input").orEmpty()
                     Block.Tool(blocks.size).also { tool ->
                         tool.id = "${item.string("call_id")}|${item.string("id")}"
                         tool.name = name
-                        tool.arguments = buildJsonObject { put(inputProperty, input) }
+                        val custom = customInput(inputProperty, input)
+                        tool.arguments = buildJsonObject {
+                            put(inputProperty, custom.buffer.input)
+                        }
+                        tool.input = custom
                         tool.namespace = item.string("namespace")
-                        tool.customInput = CustomToolInput(inputProperty)
                     }
                 }
 
                 else -> return emptyList()
             }
+            if (block is Block.Tool) unfinishedToolCalls.add(block)
             blocks.add(block)
             slots[outputIndex] = block
             val start = when (block) {
@@ -967,17 +996,16 @@ object OpenAiResponsesShared {
                 }
 
                 item.string("type") == "function_call" && slot is Block.Tool &&
-                    slot.customInput == null -> {
-                    val parsed = parseToolCallArguments(
-                        item.truthyString("arguments")
-                            ?: slot.partialJson?.takeIf { it.isNotEmpty() }
-                    )
-                    slot.arguments = parsed.arguments
-                    slot.argumentsError = parsed.argumentsError
+                    slot.input is ToolCallInput.Json -> {
+                    val input = slot.input as ToolCallInput.Json
+                    val arguments = item.truthyString("arguments")
+                    if (!arguments.isNullOrEmpty()) input.arguments.replace(arguments)
+                    val finished = input.arguments.finish()
+                    slot.arguments = finished.arguments
+                    slot.argumentsError = finished.argumentsError
                     item.string("namespace")?.let { slot.namespace = it }
-                    // The scratch buffer is stripped so replay only carries
-                    // parsed arguments.
-                    slot.partialJson = null
+                    slot.input = null
+                    unfinishedToolCalls.remove(slot)
                     slot.built = null
                     slots.remove(outputIndex)
                     return events + listOf(
@@ -990,13 +1018,14 @@ object OpenAiResponsesShared {
                 }
 
                 item.string("type") == "custom_tool_call" && slot is Block.Tool &&
-                    slot.customInput != null -> {
-                    val input = item.string("input") ?: getCustomToolCallInput(slot)
-                    appendCustomToolCallInput(slot, input, true)?.let {
+                    slot.input is ToolCallInput.Custom -> {
+                    val input = slot.input as ToolCallInput.Custom
+                    closeCustomInput(slot, input, item.string("input"))?.let {
                         events += AssistantMessageEvent.ToolCallDelta(slot.index, it)
                     }
                     item.string("namespace")?.let { slot.namespace = it }
-                    slot.customInput = null
+                    slot.input = null
+                    unfinishedToolCalls.remove(slot)
                     slot.built = null
                     slots.remove(outputIndex)
                     return events + listOf(
@@ -1095,17 +1124,13 @@ object OpenAiResponsesShared {
             }
             // The agent runs every tool call in the final message. Refuse to hand over calls whose
             // output_item.done never arrived: their arguments may be cut off or mixed up, e.g. when
-            // a non-compliant server omits output_index. Finished calls have their scratch buffers
-            // removed.
+            // a non-compliant server omits output_index.
             if (stopReason == StopReason.TOOL_USE) {
-                for (block in blocks) {
-                    if (block !is Block.Tool) continue
-                    if (block.partialJson != null || block.customInput != null) {
-                        throw ProviderStreamException(
-                            "OpenAI Responses stream completed with an unfinished tool call: " +
-                                "${block.name} (${block.id})"
-                        )
-                    }
+                for (toolCall in unfinishedToolCalls) {
+                    throw ProviderStreamException(
+                        "OpenAI Responses stream completed with an unfinished tool call: " +
+                            "${toolCall.name} (${toolCall.id})"
+                    )
                 }
             }
         }

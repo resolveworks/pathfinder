@@ -864,6 +864,39 @@ class OpenAiResponsesSharedTest {
     }
 
     @Test
+    fun `non-prefix final arguments restart the streamed arguments`() {
+        val s = state()
+        val deltas = mutableListOf<String>()
+        fun feed(jsonText: String) {
+            deltas += s.onEvent(event(jsonText))
+                .filterIsInstance<AssistantMessageEvent.ToolCallDelta>()
+                .joinToString("") { it.delta }
+        }
+        feed(
+            """{"type":"response.output_item.added","output_index":0,
+                "item":{"type":"function_call","id":"fc_1","call_id":"call_1",
+                    "name":"edit","arguments":""}}"""
+        )
+        feed(
+            """{"type":"response.function_call_arguments.delta","output_index":0,
+                "delta":"{\"p\":1"}"""
+        )
+        feed(
+            """{"type":"response.function_call_arguments.done","output_index":0,
+                "arguments":"{\"q\":2}"}"""
+        )
+        feed(
+            """{"type":"response.output_item.done","output_index":0,
+                "item":{"type":"function_call","id":"fc_1","call_id":"call_1",
+                    "name":"edit","arguments":"{\"q\":2}"}}"""
+        )
+        val toolCall = assertIs<ToolCall>(s.partialSnapshot().content.single())
+        assertEquals(buildJsonObject { put("q", 2) }, toolCall.arguments)
+        // The restart is not emitted as a tail of the discarded prefix.
+        assertEquals("""{"p":1""", deltas.filter { it.isNotEmpty() }.joinToString(""))
+    }
+
+    @Test
     fun `function namespace received only on output_item_done replays`() {
         val s = state()
         s.onEvent(
@@ -1146,7 +1179,7 @@ class OpenAiResponsesSharedTest {
             "s1",
             getCompat(model())
         )
-        assertEquals(mapOf("session_id" to "s1", "x-client-request-id" to "s1"), openai)
+        assertEquals(mapOf("session-id" to "s1", "x-client-request-id" to "s1"), openai)
         val openrouter = sessionAffinityHeaders(
             "s1",
             getCompat(model(provider = "openrouter"))
@@ -1483,6 +1516,69 @@ class OpenAiResponsesSharedTest {
         assertIs<AssistantMessageEvent.ToolCallEnd>(
             allEvents.filterIsInstance<AssistantMessageEvent.ToolCallEnd>().single()
         )
+    }
+
+    @Test
+    fun `custom tool call initial input merges into the first emitted delta`() {
+        val s = state(
+            options = OpenAiResponsesShared.StreamProcessingOptions(
+                grammarToolInputProperties = mapOf("sample_tool" to "payload")
+            )
+        )
+        val deltas = mutableListOf<String>()
+        fun feed(jsonText: String) {
+            deltas += s.onEvent(event(jsonText))
+                .filterIsInstance<AssistantMessageEvent.ToolCallDelta>()
+                .joinToString("") { it.delta }
+        }
+        feed(
+            """{"type":"response.output_item.added","output_index":0,
+                "item":{"type":"custom_tool_call","call_id":"call_1","id":"ctc_1",
+                    "name":"sample_tool","input":"ab"}}"""
+        )
+        feed(
+            """{"type":"response.custom_tool_call_input.delta","output_index":0,"delta":"c"}"""
+        )
+        feed(
+            """{"type":"response.output_item.done","output_index":0,
+                "item":{"type":"custom_tool_call","call_id":"call_1","id":"ctc_1",
+                    "name":"sample_tool","input":"abc"}}"""
+        )
+        assertEquals("""{"payload":"abc"}""", deltas.joinToString(""))
+        val toolCall = assertIs<ToolCall>(s.partialSnapshot().content.single())
+        assertEquals(buildJsonObject { put("payload", "abc") }, toolCall.arguments)
+    }
+
+    @Test
+    fun `custom tool call close tolerates a missing final input`() {
+        val s = state(
+            options = OpenAiResponsesShared.StreamProcessingOptions(
+                grammarToolInputProperties = mapOf("sample_tool" to "payload")
+            )
+        )
+        val deltas = mutableListOf<String>()
+        fun feed(jsonText: String) {
+            deltas += s.onEvent(event(jsonText))
+                .filterIsInstance<AssistantMessageEvent.ToolCallDelta>()
+                .joinToString("") { it.delta }
+        }
+        feed(
+            """{"type":"response.output_item.added","output_index":0,
+                "item":{"type":"custom_tool_call","call_id":"call_1","id":"ctc_1",
+                    "name":"sample_tool","input":""}}"""
+        )
+        feed(
+            """{"type":"response.custom_tool_call_input.delta","output_index":0,"delta":"abc"}"""
+        )
+        feed("""{"type":"response.custom_tool_call_input.done","output_index":0}""")
+        feed(
+            """{"type":"response.output_item.done","output_index":0,
+                "item":{"type":"custom_tool_call","call_id":"call_1","id":"ctc_1",
+                    "name":"sample_tool"}}"""
+        )
+        assertEquals("""{"payload":"abc"}""", deltas.joinToString(""))
+        val toolCall = assertIs<ToolCall>(s.partialSnapshot().content.single())
+        assertEquals(buildJsonObject { put("payload", "abc") }, toolCall.arguments)
     }
 
     @Test

@@ -686,25 +686,30 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         val jsonBuffer: GrammarToolInputJsonBuffer = GrammarToolInputJsonBuffer()
     )
 
-    /** Last accepted custom-tool input, stored as the sole arguments property. */
-    private fun getCustomToolCallInput(accumulator: ToolCallAccumulator): String {
-        val customInput = accumulator.customInput ?: return ""
-        return accumulator.arguments[customInput.property].stringOrNull() ?: ""
-    }
-
     private fun appendCustomToolCallInput(
         accumulator: ToolCallAccumulator,
-        nextInput: String,
-        close: Boolean
+        inputDelta: String
     ): String? {
         val customInput = accumulator.customInput ?: return null
         val delta = appendGrammarToolInputJsonDelta(
             customInput.jsonBuffer,
             customInput.property,
-            nextInput,
-            close
+            inputDelta
         )
-        accumulator.arguments = buildJsonObject { put(customInput.property, nextInput) }
+        accumulator.arguments =
+            buildJsonObject { put(customInput.property, customInput.jsonBuffer.input) }
+        return delta
+    }
+
+    private fun closeCustomToolCallInput(accumulator: ToolCallAccumulator): String? {
+        val customInput = accumulator.customInput ?: return null
+        val delta = closeGrammarToolInputJson(
+            customInput.jsonBuffer,
+            customInput.property,
+            null
+        )
+        accumulator.arguments =
+            buildJsonObject { put(customInput.property, customInput.jsonBuffer.input) }
         return delta
     }
 
@@ -859,11 +864,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         } else {
             val input = custom?.get("input").strOrNull()
             if (!input.isNullOrEmpty()) {
-                argDelta = appendCustomToolCallInput(
-                    accumulator,
-                    getCustomToolCallInput(accumulator) + input,
-                    close = false
-                ) ?: ""
+                argDelta = appendCustomToolCallInput(accumulator, input) ?: ""
             }
         }
         invalidate(blockIndex)
@@ -890,11 +891,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
                 is Block.Tool -> {
                     val accumulator = block.accumulator
                     if (accumulator.customInput != null) {
-                        appendCustomToolCallInput(
-                            accumulator,
-                            getCustomToolCallInput(accumulator),
-                            close = true
-                        )?.let { delta ->
+                        closeCustomToolCallInput(accumulator)?.let { delta ->
                             events.add(AssistantMessageEvent.ToolCallDelta(index, delta))
                         }
                     } else {

@@ -32,6 +32,7 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelCost
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
+import works.resolve.pathfinder.ai.PromptCacheKeyMode
 import works.resolve.pathfinder.ai.SessionAffinityFormat
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
@@ -48,6 +49,7 @@ import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.normalizeContext
+import works.resolve.pathfinder.ai.utils.shortHash
 
 class OpenAiResponsesApiTest {
 
@@ -130,8 +132,9 @@ class OpenAiResponsesApiTest {
         val request = transport.requests.single()
         // pi sends the raw session id in the affinity headers; only the
         // prompt_cache_key body param is clamped.
-        assertEquals(sessionId, request.headers["session_id"])
+        assertEquals(sessionId, request.headers["session-id"])
         assertEquals(sessionId, request.headers["x-client-request-id"])
+        assertNull(request.headers["session_id"])
         assertEquals(
             "s".repeat(64),
             body(transport)["prompt_cache_key"]!!.jsonPrimitive.content
@@ -280,6 +283,43 @@ class OpenAiResponsesApiTest {
             "explicit",
             body["prompt_cache_options"]!!.jsonObject["mode"]!!.jsonPrimitive.content
         )
+    }
+
+    @Test
+    fun `prompt cache key mode disabled omits the key`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        val disabled = model.copy(
+            responsesCompat = OpenAiResponsesCompat(
+                promptCacheKeyMode = PromptCacheKeyMode.DISABLED
+            )
+        )
+        api(transport).stream(
+            disabled,
+            context,
+            OpenAiResponsesOptions(apiKey = "sk-test", sessionId = "s1")
+        ).toList()
+        assertNull(body(transport)["prompt_cache_key"])
+    }
+
+    @Test
+    fun `prompt cache key mode auto and enabled send the key`() = runTest {
+        for (mode in listOf(PromptCacheKeyMode.AUTO, PromptCacheKeyMode.ENABLED)) {
+            val transport = FakeTransport()
+            transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+            api(transport).stream(
+                model.copy(
+                    responsesCompat = OpenAiResponsesCompat(promptCacheKeyMode = mode)
+                ),
+                context,
+                OpenAiResponsesOptions(apiKey = "sk-test", sessionId = "s1")
+            ).toList()
+            assertEquals(
+                "s1",
+                body(transport)["prompt_cache_key"]!!.jsonPrimitive.content,
+                mode.name
+            )
+        }
     }
 
     @Test
@@ -487,6 +527,7 @@ class OpenAiResponsesApiTest {
             .toList()
         val headers = transport.requests.single().headers
         assertEquals("session-proxy", headers["x-client-request-id"])
+        assertNull(headers["session-id"])
         assertNull(headers["session_id"])
         assertNull(headers["x-session-id"])
         assertEquals("session-proxy", body(transport)["prompt_cache_key"]!!.jsonPrimitive.content)
@@ -512,6 +553,7 @@ class OpenAiResponsesApiTest {
             .toList()
         val headers = transport.requests.single().headers
         assertEquals("session-or", headers["x-session-id"])
+        assertNull(headers["session-id"])
         assertNull(headers["session_id"])
         assertNull(headers["x-client-request-id"])
         assertEquals("session-or", body(transport)["prompt_cache_key"]!!.jsonPrimitive.content)
@@ -528,14 +570,15 @@ class OpenAiResponsesApiTest {
                 apiKey = "sk-test",
                 sessionId = "session-123",
                 headers = mapOf(
-                    "session_id" to "override-session",
+                    "session-id" to "override-session",
                     "x-client-request-id" to "override-request"
                 )
             )
         ).toList()
         val headers = transport.requests.single().headers
-        assertEquals("override-session", headers["session_id"])
+        assertEquals("override-session", headers["session-id"])
         assertEquals("override-request", headers["x-client-request-id"])
+        assertNull(headers["session_id"])
     }
 
     @Test
@@ -552,6 +595,7 @@ class OpenAiResponsesApiTest {
             )
         ).toList()
         val headers = transport.requests.single().headers
+        assertNull(headers["session-id"])
         assertNull(headers["session_id"])
         assertNull(headers["x-client-request-id"])
     }
@@ -803,6 +847,11 @@ class OpenAiResponsesApiTest {
         assertEquals(
             call["call_id"]!!.jsonPrimitive.content,
             output["call_id"]!!.jsonPrimitive.content
+        )
+        // The leading system message is seeded with index 0, not -1.
+        assertEquals(
+            "pi_tool_load_${shortHash("system:3:late_tool")}",
+            call["call_id"]!!.jsonPrimitive.content
         )
         val tool = output["tools"]!!.jsonArray.single().jsonObject
         assertEquals("late_tool", tool["name"]!!.jsonPrimitive.content)

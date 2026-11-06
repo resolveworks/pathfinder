@@ -24,6 +24,7 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelCost
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
+import works.resolve.pathfinder.ai.PromptCacheKeyMode
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
@@ -383,6 +384,22 @@ class AzureOpenAiResponsesApiTest {
             works.resolve.pathfinder.ai.utils.formatUserAgent(),
             transport.requests.single().headers["User-Agent"]
         )
+    }
+
+    @Test
+    fun `prompt cache key mode disabled omits the key`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completed().toTypedArray()))
+        api(transport).stream(
+            model.copy(
+                responsesCompat = OpenAiResponsesCompat(
+                    promptCacheKeyMode = PromptCacheKeyMode.DISABLED
+                )
+            ),
+            context,
+            AzureOpenAiResponsesOptions(apiKey = "k", sessionId = "session-1")
+        ).toList()
+        assertNull(bodyOf(transport)["prompt_cache_key"])
     }
 
     @Test
