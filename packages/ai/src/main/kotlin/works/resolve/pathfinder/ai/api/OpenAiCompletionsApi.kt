@@ -90,6 +90,7 @@ import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
 import works.resolve.pathfinder.ai.utils.trimJsWhitespace
 import works.resolve.pathfinder.ai.utils.truthyString
+import works.resolve.pathfinder.ai.utils.withCauseDetail
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
@@ -610,7 +611,7 @@ class OpenAiCompletionsApi(
         // pi's safeJsonStringify fallback for non-Error throws is moot in Kotlin.
         is ProviderStreamException -> error.message ?: "Provider stream error"
 
-        else -> error.message ?: error::class.simpleName ?: "Unknown error"
+        else -> withCauseDetail(error)
     }
 
     private fun openRouterRawMetadata(body: String): String? {

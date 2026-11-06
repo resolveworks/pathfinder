@@ -79,6 +79,7 @@ import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.strictDoubleOrNull
 import works.resolve.pathfinder.ai.utils.stringOrNull
 import works.resolve.pathfinder.ai.utils.trimJsWhitespace
+import works.resolve.pathfinder.ai.utils.withCauseDetail
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 internal fun resolveCacheRetention(
@@ -525,7 +526,7 @@ class AnthropicMessagesApi(
     private fun formatProviderError(error: Exception): String = when (error) {
         is ProviderHttpException -> formatProviderError(normalizeProviderError(error))
         is ProviderStreamException -> error.message ?: "Provider stream error"
-        else -> error.message ?: error::class.simpleName ?: "Unknown error"
+        else -> withCauseDetail(error)
     }
 
     private companion object {

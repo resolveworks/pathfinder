@@ -46,6 +46,7 @@ import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.resolveSamplingParams
 import works.resolve.pathfinder.ai.utils.resolveTranscript
 import works.resolve.pathfinder.ai.utils.resolveTranscriptTools
+import works.resolve.pathfinder.ai.utils.withCauseDetail
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
@@ -696,5 +697,5 @@ internal fun processSseEvent(
 internal fun formatResponsesProviderError(error: Exception, prefix: String): String = when (error) {
     is ProviderHttpException -> formatProviderError(normalizeProviderError(error), prefix)
     is ProviderStreamException -> error.message ?: "Provider stream error"
-    else -> error.message ?: error::class.simpleName ?: "Unknown error"
+    else -> withCauseDetail(error)
 }
