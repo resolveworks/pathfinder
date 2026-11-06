@@ -99,6 +99,11 @@ const PROVIDER_IDENTITY = {
 		label: "Qwen Token Plan Individual API key",
 		envKey: "QWEN_TOKEN_PLAN_API_KEY",
 	},
+	"qwen-token-plan-individual-cn": {
+		name: "Qwen Token Plan Individual CN",
+		label: "Qwen Token Plan Individual CN API key",
+		envKey: "QWEN_TOKEN_PLAN_CN_API_KEY",
+	},
 	together: { name: "Together", label: "Together API key", envKey: "TOGETHER_API_KEY" },
 	"vercel-ai-gateway": {
 		name: "Vercel AI Gateway",
@@ -213,7 +218,7 @@ function generatePiCatalog() {
 	try {
 		execFileSync(
 			process.execPath,
-			["scripts/generate-models.ts", "--strict", "--json-only", "--json-output", tmp],
+			["catalog/generate.ts", "--strict", "--json-only", "--json-output", tmp],
 			{ cwd: packageDir, stdio: "inherit" },
 		);
 		return JSON.parse(readFileSync(join(tmp, "models.json"), "utf8"));

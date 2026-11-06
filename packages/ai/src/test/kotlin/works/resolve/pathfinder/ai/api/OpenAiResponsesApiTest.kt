@@ -698,8 +698,8 @@ class OpenAiResponsesApiTest {
     }
 
     @Test
-    fun `deferred tools load through additional_tools for gpt-5_4`() {
-        val model = realAsset().getModel("openai", "gpt-5.4")!!
+    fun `deferred tools load through additional_tools for gpt-6_1_terra`() {
+        val model = realAsset().getModel("openai", "gpt-6.1-terra")!!
         val json =
             params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))
         // A later additional_tools item cannot replace a top-level tool, so no tool is declared
@@ -724,7 +724,7 @@ class OpenAiResponsesApiTest {
 
     @Test
     fun `additional_tools marker is preserved after the loaded tool is used`() {
-        val model = realAsset().getModel("openai", "gpt-5.4")!!
+        val model = realAsset().getModel("openai", "gpt-6.1-terra")!!
         val baseTool = makeTool("base_tool")
         val lateTool = makeTool("late_tool")
         val context = normalizeContext(
@@ -756,7 +756,7 @@ class OpenAiResponsesApiTest {
                         ),
                         api = "openai-responses",
                         provider = "openai",
-                        model = "gpt-5.4",
+                        model = "gpt-6.1-terra",
                         stopReason = StopReason.TOOL_USE,
                         timestamp = 3
                     ),

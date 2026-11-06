@@ -392,6 +392,7 @@ class DefaultModelSelectionTest {
     fun `gateway and qwen token plan individual defaults track current models`() {
         assertEquals("zai/glm-5.1", defaults["vercel-ai-gateway"])
         assertEquals("qwen3.8-max", defaults["qwen-token-plan-individual"])
+        assertEquals("qwen3.8-max", defaults["qwen-token-plan-individual-cn"])
     }
 
     @Test
