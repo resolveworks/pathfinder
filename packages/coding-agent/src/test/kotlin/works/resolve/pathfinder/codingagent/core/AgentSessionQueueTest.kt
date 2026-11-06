@@ -440,4 +440,52 @@ class AgentSessionQueueTest {
         assertEquals(2, events.count { it is AgentEvent.AgentStart })
         assertEquals(0, session.pendingMessageCount)
     }
+
+    /**
+     * pi's _isEmittingAgentSettled/_deferredSettledActions: a prompt
+     * submitted by an agent_settled listener runs after the emission
+     * finishes, never inside it.
+     */
+    @Test
+    fun `a prompt from a settled listener runs after the settled emission`() = runTest {
+        val faux = FauxProvider()
+        faux.setResponses(assistant("one"), assistant("two"))
+        val session = AgentSession(
+            agent = Agent(faux.model, streamFn = modelsStreamFn(faux.models)),
+            manager = SessionManager.create(
+                createTempDirectory("queue-settled-test").toFile(),
+                clock = clock,
+                ioDispatcher = Dispatchers.Unconfined,
+                idFactory = { "sess-queue-settled" },
+                entryIdFactory = { "e${entryCounter++}" }
+            ),
+            settingsManager = SettingsManager.inMemory(
+                Settings(retry = RetrySettings(enabled = false))
+            )
+        )
+
+        var responded = false
+        var assistantCountAtReturn = -1
+        val collector = launch(Dispatchers.Unconfined) {
+            session.events.collect { event ->
+                if (event is AgentEvent.AgentSettled && !responded) {
+                    responded = true
+                    session.prompt("follow-up")
+                    assistantCountAtReturn = assistantTexts(session).size
+                }
+            }
+        }
+        yield()
+
+        session.prompt("first")
+
+        assertEquals(
+            "the listener's prompt returned before its run started",
+            1,
+            assistantCountAtReturn
+        )
+        assertEquals(listOf("first", "follow-up"), userTexts(session))
+        assertEquals(listOf("one", "two"), assistantTexts(session))
+        collector.cancelAndJoin()
+    }
 }

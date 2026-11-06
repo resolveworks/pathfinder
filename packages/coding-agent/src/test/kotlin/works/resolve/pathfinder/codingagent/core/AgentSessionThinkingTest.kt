@@ -30,6 +30,7 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ThinkingLevelMap
+import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.fixedApiKeyAuth
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
@@ -165,6 +166,60 @@ class AgentSessionThinkingTest {
                 events.filterIsInstance<AgentEvent.ThinkingLevelChanged>().map { it.level }
             )
         }
+
+    /**
+     * pi's _recordThinkingLevel (#11451): navigation can leave the latest
+     * thinking_level_change on the abandoned branch, so the next prompt
+     * records the live level on the branch it extends.
+     */
+    @Test
+    fun `a prompt records the live thinking level after tree navigation`() = runTest {
+        val manager = newManager()
+        manager.appendMessage(UserMessage.ofText("hello"))
+        manager.appendThinkingLevelChange("low")
+        manager.appendMessage(assistant(reasoningModel, "branch A"))
+        val branchA = manager.getLeafId()!!
+        manager.appendThinkingLevelChange("high")
+        manager.appendMessage(assistant(reasoningModel, "branch B"))
+
+        val s = session(reasoningModel, manager)
+        // The live level comes from the abandoned branch; navigation leaves
+        // the agent's thinking level untouched.
+        s.agent.setThinkingLevel(ModelThinkingLevel.HIGH)
+
+        s.navigateTree(branchA)
+        s.prompt("next")
+
+        val thinkingEntries = manager.getBranch().filterIsInstance<ThinkingLevelEntry>()
+        assertEquals(
+            listOf("low", "high"),
+            thinkingEntries.map { it.thinkingLevel }
+        )
+        assertEquals(
+            "the appended record chains under the navigation target",
+            branchA,
+            thinkingEntries.last().parentId
+        )
+    }
+
+    @Test
+    fun `a prompt does not re-record a clamped thinking level`() = runTest {
+        val manager = newManager()
+        manager.appendMessage(UserMessage.ofText("hello"))
+        manager.appendThinkingLevelChange("xhigh")
+        manager.appendMessage(assistant(extendedModel, "branch A"))
+
+        val s = session(extendedModel, manager)
+        // extendedModel does not support xhigh; it runs as the clamped max.
+        s.agent.setThinkingLevel(ModelThinkingLevel.MAX)
+
+        s.prompt("next")
+
+        assertEquals(
+            listOf("xhigh"),
+            manager.getBranch().filterIsInstance<ThinkingLevelEntry>().map { it.thinkingLevel }
+        )
+    }
 
     /** Clamping rounds up to the nearest supported level first, then down. */
     @Test

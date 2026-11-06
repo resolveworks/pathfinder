@@ -2,9 +2,12 @@ package works.resolve.pathfinder.codingagent.core
 
 import java.io.File
 import kotlin.io.path.createTempDirectory
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -111,6 +114,11 @@ class AgentNavigationTest {
         provider = model.provider,
         model = model.id,
         stopReason = StopReason.STOP
+    )
+
+    private fun okStream(): Flow<AssistantMessageEvent> = flowOf(
+        AssistantMessageEvent.Start(assistant("")),
+        AssistantMessageEvent.Done(StopReason.STOP, assistant("ok"))
     )
 
     /**
@@ -373,6 +381,53 @@ class AgentNavigationTest {
         }
         assertTrue(session.sessionManager.getEntries().none { it is BranchSummaryEntry })
         assertEquals(oldLeaf, session.sessionManager.getLeafId())
+    }
+
+    @Test
+    fun `navigation is rejected while a prompt preflight is in flight`() = runTest {
+        val (manager, branchA) = forkedSession()
+        val preflightEntered = CompletableDeferred<Unit>()
+        val releasePreflight = CompletableDeferred<Unit>()
+        val session = AgentSession(
+            agent = restoredAgent(StreamFn { _, _, _ -> okStream() }, manager),
+            manager = manager,
+            models = Models(
+                listOf(
+                    Provider(
+                        model.provider,
+                        model.provider,
+                        "https://faux.test",
+                        auth = fixedApiKeyAuth("faux-key"),
+                        models = listOf(model),
+                        apis = emptyMap()
+                    )
+                )
+            ),
+            settingsManager = SettingsManager.inMemory(
+                Settings(retry = RetrySettings(enabled = false))
+            ),
+            hasConfiguredAuth = {
+                preflightEntered.complete(Unit)
+                releasePreflight.await()
+                true
+            }
+        )
+
+        val prompt = launch { session.prompt("racing prompt") }
+        preflightEntered.await()
+        val error = runCatching { session.navigateTree(branchA) }.exceptionOrNull()
+        assertEquals(
+            "Wait for the current response to finish before navigating the session tree.",
+            (error as? IllegalStateException)?.message
+        )
+
+        releasePreflight.complete(Unit)
+        prompt.join()
+        // The reservation ends with the prompt; navigation then runs.
+        assertEquals(
+            AgentSession.NavigationOutcome.NAVIGATED,
+            session.navigateTree(branchA).outcome
+        )
     }
 
     @Test

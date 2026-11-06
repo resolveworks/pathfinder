@@ -598,12 +598,11 @@ class AgentSessionFidelityTest {
     }
 
     @Test
-    fun `prompt during navigation is accepted like pi's unguarded race`() = runTest {
-        val faux = GatedSummaryApi()
+    fun `prompt during navigation is rejected while the branch summary runs`() = runTest {
+        val faux = GatedSummaryApi().apply { responses.add(assistant("## Goal\nraced summary")) }
         val (manager, branchA) = forkedSession()
-        val streams = ScriptedStreams().apply { streams.add(okStream("raced reply")) }
         val agent = AgentSession(
-            agent = Agent(model = model, streamFn = streams.streamFn),
+            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
             manager = manager,
             models = summaryModels(faux.api),
             settingsManager = SettingsManager.inMemory(
@@ -619,24 +618,24 @@ class AgentSessionFidelityTest {
         }
         faux.entered.await()
 
-        // pi's prompt does not guard against navigation: the prompt runs and
-        // the tree serializes both under the manager's mutex. The navigation
-        // never mutates the tree (still gated at its summarization).
-        agent.prompt("raced")
-        navigation.cancelAndJoin()
+        // pi's prompt rejects a running branch summarization (#9154): the
+        // navigation keeps the tree to itself.
+        val error = runCatching { agent.prompt("raced") }.exceptionOrNull()
+        assertEquals(
+            "Cannot submit a prompt while compaction is in progress. " +
+                "Wait for compaction to finish and retry.",
+            (error as? IllegalStateException)?.message
+        )
 
-        val racedUserMessage = manager.getBranch()
+        faux.gate.complete(Unit)
+        val result = navigation.await()
+        assertFalse(result.cancelled)
+        assertNotNull(result.summaryEntry)
+        val racedUserMessages = manager.getBranch()
             .filterIsInstance<MessageEntry>()
             .map { it.message }
             .filterIsInstance<UserMessage>()
             .map { user -> (user.content.single() as TextContent).text }
-        assertTrue("raced" in racedUserMessage)
-        // The raced prompt's reply committed after the branch's own messages.
-        val racedReply = manager.getBranch()
-            .filterIsInstance<MessageEntry>()
-            .map { it.message }
-            .filterIsInstance<AssistantMessage>()
-            .map { assistant -> (assistant.content.single() as TextContent).text }
-        assertTrue("raced reply" in racedReply)
+        assertFalse("raced" in racedUserMessages)
     }
 }

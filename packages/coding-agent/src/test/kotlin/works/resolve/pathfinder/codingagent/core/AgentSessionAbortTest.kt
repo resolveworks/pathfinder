@@ -205,13 +205,15 @@ class AgentSessionAbortTest {
     }
 
     /**
-     * abort during the pre-prompt preflight compaction: pi's abortCompaction
-     * cancels it, waitForIdle awaits it, and — because _runAutoCompaction
-     * swallows the abort into compaction_end{aborted} — the prompt itself
-     * still runs. The tracked pre-prompt job gives abort() that reach.
+     * abort during the pre-prompt preflight compaction: the run slot is
+     * claimed before the checkpoint (pi's _startRun before _prepareRun), so
+     * the abort request cancels and is awaited by abortCompaction, and —
+     * because _runAutoCompaction swallows the abort into
+     * compaction_end{aborted} — the prompt proceeds; the pending abort then
+     * stops the run at agent_start instead of starting a request.
      */
     @Test
-    fun `abort cancels and awaits pre-prompt compaction and the prompt proceeds`() = runTest {
+    fun `abort during pre-prompt compaction stops the run at agent start`() = runTest {
         val faux = GatedSummaryApi().apply { responses.add(assistant("## Summary")) }
         val streams = ScriptedStreams().apply { streams.add(okStream("proceeded")) }
         val manager = newManager()
@@ -239,24 +241,34 @@ class AgentSessionAbortTest {
             }
         }
         yield()
-        val run = launch { session.prompt("next") }
+        val failure = CompletableDeferred<Throwable>()
+        val run = launch {
+            try {
+                session.prompt("next")
+            } catch (e: Throwable) {
+                failure.complete(e)
+            }
+        }
         faux.entered.await()
         assertTrue(session.isCompacting)
         session.abort()
         // pi's waitForIdle: abort() returns only once the compaction settled.
         assertFalse(session.isCompacting)
+        val error = failure.await()
         run.join()
         collector.cancelAndJoin()
 
-        // pi's prompt proceeds past the aborted checkpoint.
-        assertFalse(run.isCancelled)
+        assertTrue(error is CancellationException)
+        assertEquals("Prompt aborted", error.message)
+        assertFalse(session.isStreaming.value)
         val end = sawEnd.await()
         assertTrue(end.aborted)
         assertEquals(AgentEvent.CompactionReason.THRESHOLD, end.reason)
         assertTrue(manager.getBranch().none { it is CompactionEntry })
-        val texts = branchTexts(session)
-        assertTrue("next" in texts)
-        assertTrue("proceeded" in texts)
+        assertTrue(
+            "the pending abort stops the run before any request",
+            "proceeded" !in branchTexts(session)
+        )
     }
 
     /**

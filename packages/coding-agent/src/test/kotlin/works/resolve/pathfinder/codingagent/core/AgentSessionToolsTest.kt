@@ -118,43 +118,70 @@ class AgentSessionToolsTest {
                 s.systemPrompt
             )
 
-            s.setActiveToolsByName(listOf("web_fetch", "nope", "web_search"))
+            s.setActiveToolsByName(listOf("web_fetch", "nope"))
 
             assertEquals(
-                "unknown names dropped, request order preserved",
-                listOf("web_fetch", "web_search"),
+                "unknown names dropped",
+                listOf("web_fetch"),
                 s.getActiveToolNames()
             )
             assertEquals(
-                listOf(webFetch, webSearch),
+                listOf(webFetch),
                 s.agent.state.value.tools
             )
             assertEquals(
-                buildSystemPrompt(listOf(webFetch, webSearch)),
+                buildSystemPrompt(listOf(webFetch)),
                 s.systemPrompt
             )
             assertEquals("no session entry is appended", 0, s.sessionManager.getEntries().size)
 
             s.prompt("go")
             assertEquals(
-                listOf("web_fetch", "web_search"),
+                listOf("web_fetch"),
                 getCurrentTools(contexts.single().messages).map { it.name }
             )
             assertEquals(
-                buildSystemPrompt(listOf(webFetch, webSearch)),
+                buildSystemPrompt(listOf(webFetch)),
                 getCurrentSystemPrompt(contexts.single().messages)
             )
         }
 
     @Test
-    fun `duplicate names are not deduped`() = runTest {
+    fun `reordering the active tools keeps the current order and records no prompt update`() =
+        runTest {
+            val webSearch = tool("web_search")
+            val webFetch = tool("web_fetch")
+            val s = session(tools = listOf(webSearch, webFetch))
+
+            s.prompt("first")
+            val systemMessages = s.agent.state.value.messages
+                .filterIsInstance<SystemMessage>()
+                .size
+
+            s.setActiveToolsByName(listOf("web_fetch", "web_search"))
+
+            assertEquals(
+                "tools that stay active keep their current order",
+                listOf("web_search", "web_fetch"),
+                s.getActiveToolNames()
+            )
+            s.prompt("second")
+            assertEquals(
+                "reordering the same set records no system prompt patch",
+                systemMessages,
+                s.agent.state.value.messages.filterIsInstance<SystemMessage>().size
+            )
+        }
+
+    @Test
+    fun `duplicate names are deduped`() = runTest {
         val webSearch = tool("web_search")
         val s = session(tools = listOf(webSearch))
 
         s.setActiveToolsByName(listOf("web_search", "web_search"))
 
-        assertEquals(listOf("web_search", "web_search"), s.getActiveToolNames())
-        assertEquals(listOf(webSearch, webSearch), s.agent.state.value.tools)
+        assertEquals(listOf("web_search"), s.getActiveToolNames())
+        assertEquals(listOf(webSearch), s.agent.state.value.tools)
     }
 
     @Test
