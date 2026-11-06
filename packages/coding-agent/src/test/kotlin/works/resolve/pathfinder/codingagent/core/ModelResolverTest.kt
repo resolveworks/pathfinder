@@ -40,7 +40,12 @@ class ModelReferenceResolutionTest {
         referenceModel("gw-b", "anthropic/future"),
         referenceModel("gw-b", "claude-opus-4-8"),
         referenceModel("gw-b", "gw-b/free"),
-        referenceModel("gw-b", "zz:free")
+        referenceModel("gw-b", "zz:free"),
+        // Case-only difference: Node's localeCompare picks the uppercase id.
+        referenceModel("gw-a", "mixed-Alpha"),
+        referenceModel("gw-a", "mixed-alpha"),
+        // URL-derived provider id containing "/"
+        referenceModel("llama=http://host:10800", "unsloth/qwen-gguf:BF16")
     )
 
     private sealed interface Expected {
@@ -102,6 +107,21 @@ class ModelReferenceResolutionTest {
             text = "openrouter/qwen/qwen3-coder:exacto:high",
             expected = Expected.Resolved(
                 "openrouter/qwen/qwen3-coder:exacto",
+                thinkingLevel = ModelThinkingLevel.HIGH
+            )
+        ),
+        ReferenceCase(
+            name = "provider id containing a slash",
+            text = "llama=http://host:10800/unsloth/qwen-gguf:BF16",
+            expected = Expected.Resolved(
+                "llama=http://host:10800/unsloth/qwen-gguf:BF16"
+            )
+        ),
+        ReferenceCase(
+            name = "provider id containing a slash, with thinking suffix",
+            text = "llama=http://host:10800/unsloth/qwen-gguf:BF16:high",
+            expected = Expected.Resolved(
+                "llama=http://host:10800/unsloth/qwen-gguf:BF16",
                 thinkingLevel = ModelThinkingLevel.HIGH
             )
         ),
@@ -265,6 +285,12 @@ class ModelReferenceResolutionTest {
             usable = setOf("anthropic"),
             expected = Expected.Resolved("anthropic/claude-opus-4-8")
         ),
+        // Node's localeCompare reverses case-only difference order relative to code points.
+        ReferenceCase(
+            name = "fuzzy latest pick follows Node collation, not code points",
+            text = "mixed",
+            expected = Expected.Resolved("gw-a/mixed-Alpha")
+        ),
 
         // Explicit provider constraint
         ReferenceCase(
@@ -359,18 +385,20 @@ class DefaultModelSelectionTest {
 
     @Test
     fun `openai defaults track current models`() {
-        assertEquals("gpt-5.5", defaults["openai"])
+        assertEquals("gpt-6.1-sol", defaults["openai"])
         assertEquals("gpt-6.1-sol", defaults["openai-codex"])
+        assertEquals("claude-opus-5-5", defaults["anthropic"])
+        assertEquals("gemini-4-argon", defaults["google"])
     }
 
     @Test
     fun `provider defaults track current catalog models`() {
-        assertEquals("gpt-5.4", defaults["azure"])
+        assertEquals("gpt-6.1-sol", defaults["azure"])
         assertEquals("gpt-6.1-sol", defaults["github-copilot"])
         assertEquals("nvidia/nemotron-3.5-super-vl-120b-a12b", defaults["nvidia"])
         assertEquals("accounts/fireworks/models/kimi-k3", defaults["fireworks"])
         assertEquals("moonshotai/Kimi-K3", defaults["together"])
-        assertEquals("kimi-k3", defaults["opencode-go"])
+        assertEquals("kimi-k3.1-pro", defaults["opencode-go"])
         assertEquals("mimo-v2.6-pro", defaults["xiaomi"])
         assertEquals("mimo-v2.6-pro", defaults["xiaomi-token-plan-cn"])
         assertEquals("mimo-v2.6-pro", defaults["xiaomi-token-plan-ams"])
@@ -382,15 +410,28 @@ class DefaultModelSelectionTest {
     fun `zai minimax cerebras and ant-ling defaults track current models`() {
         assertEquals("glm-5.3", defaults["zai"])
         assertEquals("glm-5.3", defaults["zai-coding-cn"])
-        assertEquals("MiniMax-M2.7", defaults["minimax"])
-        assertEquals("MiniMax-M2.7", defaults["minimax-cn"])
+        assertEquals("MiniMax-M3", defaults["minimax"])
+        assertEquals("MiniMax-M3", defaults["minimax-cn"])
         assertEquals("gpt-oss-120b", defaults["cerebras"])
         assertEquals("Ring-2.6-1T", defaults["ant-ling"])
     }
 
     @Test
-    fun `gateway and qwen token plan individual defaults track current models`() {
-        assertEquals("zai/glm-5.1", defaults["vercel-ai-gateway"])
+    fun `gateway, moonshot, and qwen token plan defaults track current models`() {
+        assertEquals("zai/glm-5.3", defaults["vercel-ai-gateway"])
+        assertEquals("moonshotai/kimi-k2.7-code", defaults["openrouter"])
+        assertEquals("moonshotai/Kimi-K2.7-Code", defaults["huggingface"])
+        assertEquals("zai-org/GLM-5.3", defaults["baseten"])
+        assertEquals("kimi-k2.7-code", defaults["moonshotai"])
+        assertEquals("kimi-k2.7-code", defaults["moonshotai-cn"])
+        assertEquals("kimi-k2.7-code", defaults["opencode"])
+        assertEquals("@cf/moonshotai/kimi-k2.7-code", defaults["cloudflare-workers-ai"])
+        assertEquals(
+            "workers-ai/@cf/moonshotai/kimi-k2.7-code",
+            defaults["cloudflare-ai-gateway"]
+        )
+        assertEquals("qwen3.8-max", defaults["qwen-token-plan"])
+        assertEquals("qwen3.8-max", defaults["qwen-token-plan-cn"])
         assertEquals("qwen3.8-max", defaults["qwen-token-plan-individual"])
         assertEquals("qwen3.8-max", defaults["qwen-token-plan-individual-cn"])
     }

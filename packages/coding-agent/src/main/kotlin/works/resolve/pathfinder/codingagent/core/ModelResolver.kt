@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.codingagent.core
 
+import java.text.Collator
+import java.util.Locale
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
@@ -18,37 +20,37 @@ internal val DEFAULT_THINKING_LEVEL = ModelThinkingLevel.MEDIUM
  */
 internal val DEFAULT_MODEL_PER_PROVIDER: List<Pair<String, String>> = listOf(
     "ant-ling" to "Ring-2.6-1T",
-    "anthropic" to "claude-opus-4-8",
-    "openai" to "gpt-5.5",
-    "azure" to "gpt-5.4",
+    "anthropic" to "claude-opus-5-5",
+    "openai" to "gpt-6.1-sol",
+    "azure" to "gpt-6.1-sol",
     "openai-codex" to "gpt-6.1-sol",
     "nvidia" to "nvidia/nemotron-3.5-super-vl-120b-a12b",
     "deepseek" to "deepseek-v4-pro",
-    "google" to "gemini-3.1-pro-preview",
+    "google" to "gemini-4-argon",
     "github-copilot" to "gpt-6.1-sol",
-    "openrouter" to "moonshotai/kimi-k2.6",
-    "vercel-ai-gateway" to "zai/glm-5.1",
+    "openrouter" to "moonshotai/kimi-k2.7-code",
+    "vercel-ai-gateway" to "zai/glm-5.3",
     "xai" to "grok-4.7",
     "groq" to "openai/gpt-oss-120b",
     "cerebras" to "gpt-oss-120b",
     "zai" to "glm-5.3",
     "zai-coding-cn" to "glm-5.3",
     "mistral" to "devstral-medium-latest",
-    "minimax" to "MiniMax-M2.7",
-    "minimax-cn" to "MiniMax-M2.7",
-    "moonshotai" to "kimi-k2.6",
-    "moonshotai-cn" to "kimi-k2.6",
-    "huggingface" to "moonshotai/Kimi-K2.6",
+    "minimax" to "MiniMax-M3",
+    "minimax-cn" to "MiniMax-M3",
+    "moonshotai" to "kimi-k2.7-code",
+    "moonshotai-cn" to "kimi-k2.7-code",
+    "huggingface" to "moonshotai/Kimi-K2.7-Code",
     "fireworks" to "accounts/fireworks/models/kimi-k3",
     "together" to "moonshotai/Kimi-K3",
-    "baseten" to "zai-org/GLM-5.2",
-    "opencode" to "kimi-k2.6",
-    "opencode-go" to "kimi-k3",
+    "baseten" to "zai-org/GLM-5.3",
+    "opencode" to "kimi-k2.7-code",
+    "opencode-go" to "kimi-k3.1-pro",
     "kimi-coding" to "kimi-for-coding",
-    "cloudflare-workers-ai" to "@cf/moonshotai/kimi-k2.6",
-    "cloudflare-ai-gateway" to "workers-ai/@cf/moonshotai/kimi-k2.6",
-    "qwen-token-plan" to "qwen3.7-max",
-    "qwen-token-plan-cn" to "qwen3.7-max",
+    "cloudflare-workers-ai" to "@cf/moonshotai/kimi-k2.7-code",
+    "cloudflare-ai-gateway" to "workers-ai/@cf/moonshotai/kimi-k2.7-code",
+    "qwen-token-plan" to "qwen3.8-max",
+    "qwen-token-plan-cn" to "qwen3.8-max",
     "qwen-token-plan-individual" to "qwen3.8-max",
     "qwen-token-plan-individual-cn" to "qwen3.8-max",
     "xiaomi" to "mimo-v2.6-pro",
@@ -207,13 +209,31 @@ private fun splitThinkingSuffix(text: String): ThinkingSuffix? {
 private data class ProviderPrefix(val provider: String, val modelText: String)
 
 private fun splitProviderPrefix(text: String, models: List<Model>): ProviderPrefix? {
-    val slashIndex = text.indexOf('/')
-    if (slashIndex == -1) return null
-    val prefix = trimJsWhitespace(text.substring(0, slashIndex)).lowercase()
-    val modelText = trimJsWhitespace(text.substring(slashIndex + 1))
-    if (prefix.isEmpty() || modelText.isEmpty()) return null
-    val provider = models.firstOrNull { it.provider.lowercase() == prefix }?.provider
-    return provider?.let { ProviderPrefix(it, modelText) }
+    // Provider ids may contain "/" themselves (e.g. URL-derived ids), so match known ids, longest first
+    val lowerText = text.lowercase()
+    var best: ProviderPrefix? = null
+    for (model in models) {
+        val provider = model.provider
+        val prefix = trimJsWhitespace(provider).lowercase()
+        if (prefix.isEmpty() || (best != null && best.provider.length >= provider.length)) {
+            continue
+        }
+        val slashIndex = lowerText.indexOf('/', prefix.length)
+        if (slashIndex == -1) continue
+        if (trimJsWhitespace(lowerText.substring(0, slashIndex)) != prefix) continue
+        val modelText = trimJsWhitespace(text.substring(slashIndex + 1))
+        if (modelText.isNotEmpty()) best = ProviderPrefix(provider, modelText)
+    }
+    return best
+}
+
+/**
+ * Approximates Node's default `localeCompare` (ICU root collation) for
+ * deterministic ordering instead of code-point ordering; punctuation still
+ * differs (Java sorts `a-b` after `aB`).
+ */
+private fun nodeCollator(): Collator = Collator.getInstance(Locale.ROOT).apply {
+    strength = Collator.TERTIARY
 }
 
 /**
@@ -399,7 +419,8 @@ private fun selectFuzzy(matches: List<Model>, usable: (String) -> Boolean): Mode
  */
 private fun bestFuzzyMatch(matches: List<Model>): Model? {
     val aliases = matches.filter { isAlias(it.id) }
-    return (if (aliases.isNotEmpty()) aliases else matches).maxByOrNull { it.id }
+    val pool = if (aliases.isNotEmpty()) aliases else matches
+    return pool.maxWithOrNull(compareBy(nodeCollator()) { it.id })
 }
 
 private fun isAlias(id: String): Boolean =
@@ -478,7 +499,7 @@ fun resolveModelScope(
     }
 
     fun ambiguous(pattern: String, candidates: List<Model>) {
-        val providers = candidates.map { it.provider }.toSet().sorted()
+        val providers = candidates.map { it.provider }.toSet().sortedWith(nodeCollator())
         diagnostics.add(
             ModelScopeDiagnostic(
                 code = ModelScopeDiagnosticCode.AMBIGUOUS,

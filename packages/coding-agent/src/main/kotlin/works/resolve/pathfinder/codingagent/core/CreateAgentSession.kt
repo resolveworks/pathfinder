@@ -29,7 +29,15 @@ data class ModelFallback(
 )
 
 /** Result of [createAgentSession]. */
-data class CreateAgentSessionResult(val session: AgentSession, val modelFallback: ModelFallback?)
+data class CreateAgentSessionResult(
+    val session: AgentSession,
+    val modelFallback: ModelFallback?,
+    /**
+     * pi's `resolveModelScope` warnings: the runtime stays quiet, so the
+     * app logs them (no UI sink exists at startup).
+     */
+    val diagnostics: List<ModelScopeDiagnostic> = emptyList()
+)
 
 /**
  * pi's createAgentSession (core/sdk.ts), ported as the single owner of
@@ -79,11 +87,12 @@ suspend fun createAgentSession(
     val hasThinkingEntry = manager.getBranch().any { it is ThinkingLevelEntry }
 
     val scopePatterns = settingsManager.getEnabledModels()
-    val scopedModels = if (scopePatterns.isNullOrEmpty()) {
-        emptyList()
+    val scope = if (scopePatterns.isNullOrEmpty()) {
+        ResolveModelScopeResult(emptyList(), emptyList())
     } else {
-        resolveModelScope(scopePatterns, models.getAvailableSnapshot()).scopedModels
+        resolveModelScope(scopePatterns, models.getAvailableSnapshot())
     }
+    val scopedModels = scope.scopedModels
 
     var model: Model? = null
     var modelFallback: ModelFallback? = null
@@ -200,5 +209,9 @@ suspend fun createAgentSession(
         hasConfiguredAuth = hasConfiguredAuth,
         loopDispatcher = loopDispatcher
     )
-    return CreateAgentSessionResult(session = session, modelFallback = modelFallback)
+    return CreateAgentSessionResult(
+        session = session,
+        modelFallback = modelFallback,
+        diagnostics = scope.diagnostics
+    )
 }

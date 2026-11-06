@@ -159,7 +159,8 @@ class ChatViewModel(
         { providerCredentials.state.value.modelOptions },
         providerCredentials::availableModels,
         ::reprojectTreeRows,
-        ::setError
+        ::setError,
+        ::setWarning
     )
 
     private val searchProviders = SearchProviderController(
@@ -869,6 +870,10 @@ class ChatViewModel(
                 }
             )
         }
+        // pi warns these while resolving the scope; startup has no UI sink.
+        for (diagnostic in result.diagnostics) {
+            logger.warn("Model scope pattern {}: {}", diagnostic.pattern, diagnostic.message)
+        }
         // Synchronize web_search against the active search provider
         // before anything binds to the session.
         return result.session.also(searchProviders::applyTo)
@@ -1300,6 +1305,12 @@ class ChatViewModel(
     private fun setError(message: UiString, cause: Throwable? = null) {
         _uiState.update { it.copy(error = message) }
         logger.error(message.toString(), cause)
+    }
+
+    /** Non-failing notice on the same snackbar surface as [setError]. */
+    private fun setWarning(message: UiString) {
+        _uiState.update { it.copy(error = message) }
+        logger.warn(message.toString())
     }
 
     private companion object {
