@@ -9,7 +9,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
-import works.resolve.pathfinder.ai.utils.str
+import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.truthyString
 
 /** Serper (Google SERP) search executor (open-webui's serper.py wire shape). */
@@ -46,16 +46,27 @@ class SerperSearchExecutor(
         }
 
         val data = lenientJson.parseToJsonElement(response.body) as? JsonObject
-        val results = data?.arr("organic") ?: return emptyList()
+            ?: throw IllegalStateException("Serper search response was not a JSON object")
+        val results = data.arr("organic")
+            ?: throw IllegalStateException("Serper search response is missing the organic array")
         // The API does not guarantee organic order; rank by its "position" field before truncating.
         return results
             .sortedBy { (it as? JsonObject)?.int("position") ?: Int.MAX_VALUE }
             .take(RESULT_COUNT)
-            .map { element ->
-                val r = element as? JsonObject ?: JsonObject(emptyMap())
+            .mapIndexed { index, element ->
+                val r = element as? JsonObject
+                    ?: throw IllegalStateException(
+                        "Serper search result $index was not a JSON object"
+                    )
                 SearchResult(
-                    title = r.str("title") ?: "",
-                    url = r.str("link") ?: "",
+                    title = r.string("title")?.takeIf { it.isNotBlank() }
+                        ?: throw IllegalStateException(
+                            "Serper search result $index is missing a non-blank title"
+                        ),
+                    url = r.string("link")?.takeIf { it.isNotBlank() }
+                        ?: throw IllegalStateException(
+                            "Serper search result $index is missing a non-blank link"
+                        ),
                     snippet = r.truthyString("snippet")
                 )
             }

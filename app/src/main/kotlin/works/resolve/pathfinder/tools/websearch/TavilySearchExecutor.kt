@@ -9,7 +9,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
-import works.resolve.pathfinder.ai.utils.str
+import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.truthyString
 
 /** Tavily Search API executor (open-webui's tavily.py wire shape). */
@@ -47,12 +47,21 @@ class TavilySearchExecutor(
         }
 
         val data = lenientJson.parseToJsonElement(response.body) as? JsonObject
-        val results = data?.arr("results") ?: return emptyList()
-        return results.map { element ->
-            val r = element as? JsonObject ?: JsonObject(emptyMap())
+            ?: throw IllegalStateException("Tavily search response was not a JSON object")
+        val results = data.arr("results")
+            ?: throw IllegalStateException("Tavily search response is missing the results array")
+        return results.mapIndexed { index, element ->
+            val r = element as? JsonObject
+                ?: throw IllegalStateException("Tavily search result $index was not a JSON object")
             SearchResult(
-                title = r.str("title") ?: "",
-                url = r.str("url") ?: "",
+                title = r.string("title")?.takeIf { it.isNotBlank() }
+                    ?: throw IllegalStateException(
+                        "Tavily search result $index is missing a non-blank title"
+                    ),
+                url = r.string("url")?.takeIf { it.isNotBlank() }
+                    ?: throw IllegalStateException(
+                        "Tavily search result $index is missing a non-blank url"
+                    ),
                 snippet = r.truthyString("content")
             )
         }

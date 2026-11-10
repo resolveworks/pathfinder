@@ -12,6 +12,7 @@ import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.str
+import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.truthyString
 
 /** Brave Web Search API executor (open-webui's brave.py wire shape). */
@@ -59,12 +60,21 @@ class BraveSearchExecutor(
         }
 
         val data = lenientJson.parseToJsonElement(response.body) as? JsonObject
-        val results = data?.obj("web")?.arr("results") ?: return emptyList()
-        return results.map { element ->
-            val r = element as? JsonObject ?: JsonObject(emptyMap())
+            ?: throw IllegalStateException("Brave search response was not a JSON object")
+        val results = data.obj("web")?.arr("results")
+            ?: throw IllegalStateException("Brave search response is missing the web.results array")
+        return results.mapIndexed { index, element ->
+            val r = element as? JsonObject
+                ?: throw IllegalStateException("Brave search result $index was not a JSON object")
             SearchResult(
-                title = r.str("title") ?: "",
-                url = r.str("url") ?: "",
+                title = r.string("title")?.takeIf { it.isNotBlank() }
+                    ?: throw IllegalStateException(
+                        "Brave search result $index is missing a non-blank title"
+                    ),
+                url = r.string("url")?.takeIf { it.isNotBlank() }
+                    ?: throw IllegalStateException(
+                        "Brave search result $index is missing a non-blank url"
+                    ),
                 snippet = r.truthyString("description")
             )
         }

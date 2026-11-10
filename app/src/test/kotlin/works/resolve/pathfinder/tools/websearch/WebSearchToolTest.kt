@@ -157,13 +157,17 @@ class WebSearchToolTest {
     @Test
     fun `no results yields chosen message`() = runBlocking<Unit> {
         server.enqueue(MockResponse().setBody("""{"web":{"results":[]}}"""))
-        var result = tool().execute("t1", tool().prepare(args(query = "nothing")), {})
+        val result = tool().execute("t1", tool().prepare(args(query = "nothing")), {})
         assertEquals("No results found for \"nothing\".", resultText(result))
 
         server.enqueue(MockResponse().setBody("{}"))
-        result = tool().execute("t2", tool().prepare(args(query = "nothing")), {})
-        assertEquals("No results found for \"nothing\".", resultText(result))
-        assertEquals("{\"resultCount\":0}", result.details.toString())
+        val malformed = assertFailsWith<IllegalStateException> {
+            tool().execute("t2", tool().prepare(args(query = "nothing")), {})
+        }
+        assertEquals(
+            "Brave search response is missing the web.results array",
+            malformed.message
+        )
     }
 
     @Test

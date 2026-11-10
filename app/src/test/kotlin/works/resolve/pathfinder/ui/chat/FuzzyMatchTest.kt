@@ -65,6 +65,17 @@ class FuzzyMatchTest {
     }
 
     @Test
+    fun scoresContiguousOccurrenceInsteadOfEarlierScatteredAlignment() {
+        val opus = fuzzyMatch("opus", "openrouter openrouter/anthropic/claude-opus-4.1")
+        val sonnet = fuzzyMatch("opus", "openrouter openrouter/anthropic/claude-sonnet-4.5")
+        val gptOss = fuzzyMatch("opus", "openrouter openrouter/openai/gpt-oss-120b")
+
+        assertTrue(opus.matches && sonnet.matches && gptOss.matches)
+        assertTrue(opus.score < sonnet.score)
+        assertTrue(opus.score < gptOss.score)
+    }
+
+    @Test
     fun matchesSwappedAlphaNumericTokens() {
         val result = fuzzyMatch("codex52", "gpt-5.2-codex")
         assertTrue(result.matches)
