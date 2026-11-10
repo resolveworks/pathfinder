@@ -606,12 +606,7 @@ private fun parseThinkingLevel(value: String, where: String): ModelThinkingLevel
 
 private fun parseThinkingLevelMap(raw: Map<String, String?>, where: String): ThinkingLevelMap {
     val pairs = raw.entries
-        // Unknown level keys are ignored leniently, unlike enum values elsewhere.
-        .mapNotNull { (key, value) ->
-            val level = runCatching { parseThinkingLevel(key, where) }.getOrNull()
-                ?: return@mapNotNull null
-            level to value
-        }
+        .map { (key, value) -> parseThinkingLevel(key, where) to value }
         .toTypedArray()
     return ThinkingLevelMap.of(*pairs)
 }

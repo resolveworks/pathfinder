@@ -160,7 +160,13 @@ private val ARRAY_KEYWORDS = listOf("allOf", "anyOf", "oneOf", "prefixItems", "i
 private val UNSUPPORTED_KEYWORDS =
     setOf("${'$'}dynamicRef", "unevaluatedProperties", "unevaluatedItems")
 
-/** JSON regexes shared by source, as pi's `sharedRegex` shares them. */
+/**
+ * JSON regexes shared by source, as pi's `sharedRegex` shares them.
+ *
+ * pi compiles ECMAScript `RegExp` (preferring the `u` flag); the JVM has no
+ * equivalent engine, so [Regex] is a documented approximation: `.`, `$`, and
+ * Unicode class escapes can differ for schema `pattern` and `patternProperties`.
+ */
 internal object SharedRegex {
     private val cache = HashMap<String, Regex>()
 
