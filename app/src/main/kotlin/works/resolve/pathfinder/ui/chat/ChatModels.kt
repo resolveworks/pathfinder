@@ -190,6 +190,11 @@ data class ChatUiState(
      * behaves as no scope downstream.
      */
     val enabledModels: List<String>? = null,
+    /**
+     * The stored scope resolved against the available models, as
+     * `provider/id` keys; null = no curated scope (everything shown).
+     */
+    val scopedModelKeys: Set<String>? = null,
     /** The bound session's live model, independent of the startup default. */
     val selectedModel: ModelOption? = null,
     /**
@@ -245,9 +250,8 @@ data class ChatUiState(
 
     val scopedModelOptions: List<ModelOption>
         get() {
-            if (enabledModels.isNullOrEmpty()) return modelOptions
-            val enabled = enabledModels.mapTo(mutableSetOf()) { it.lowercase() }
-            return modelOptions.filter { it.key.lowercase() in enabled }
+            val keys = scopedModelKeys ?: return modelOptions
+            return modelOptions.filter { it.key in keys }
         }
 }
 

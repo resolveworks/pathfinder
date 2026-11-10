@@ -197,7 +197,8 @@ class ChatViewModel(
                 modelOptions = credentials.modelOptions,
                 defaultModel = modelSettings.defaultModel,
                 defaultThinkingLevel = modelSettings.defaultThinkingLevel,
-                enabledModels = modelSettings.enabledModels
+                enabledModels = modelSettings.enabledModels,
+                scopedModelKeys = modelSettings.scopedModelKeys
             )
         }
             .stateIn(viewModelScope, SharingStarted.Eagerly, _uiState.value)
