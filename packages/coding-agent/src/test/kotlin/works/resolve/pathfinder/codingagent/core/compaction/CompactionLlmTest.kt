@@ -39,7 +39,7 @@ import works.resolve.pathfinder.codingagent.core.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.MessageEntry
 import works.resolve.pathfinder.codingagent.core.SessionEntry
 import works.resolve.pathfinder.codingagent.core.buildSessionContext
-import works.resolve.pathfinder.codingagent.core.utils.addUsage
+import works.resolve.pathfinder.codingagent.core.utils.combineUsage
 
 class CompactionLlmTest {
 
@@ -528,7 +528,7 @@ class CompactionLlmTest {
             totalTokens = 10,
             cost = Cost(input = 0.5, output = 0.5, cacheRead = 0.5, cacheWrite = 0.5, total = 2.0)
         )
-        val combined = addUsage(first, second)
+        val combined = combineUsage(first, second)
         assertEquals(11, combined.input)
         assertEquals(7, combined.output)
         assertEquals(6, combined.cacheRead)

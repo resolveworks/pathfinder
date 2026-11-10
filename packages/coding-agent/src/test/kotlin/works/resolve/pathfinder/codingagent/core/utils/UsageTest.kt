@@ -28,19 +28,19 @@ class UsageTest {
 
     @Test
     fun `marks the combined total as provider-reported only when both totals are`() {
-        val providerAndProvider = addUsage(usage(1.0, true), usage(2.0, true)).cost
+        val providerAndProvider = combineUsage(usage(1.0, true), usage(2.0, true)).cost
         assertEquals(3.0, providerAndProvider.total)
         assertTrue(providerAndProvider.totalFromProvider)
 
-        val providerAndCatalog = addUsage(usage(1.0, true), usage(2.0)).cost
+        val providerAndCatalog = combineUsage(usage(1.0, true), usage(2.0)).cost
         assertEquals(3.0, providerAndCatalog.total)
         assertFalse(providerAndCatalog.totalFromProvider)
 
-        val catalogAndProvider = addUsage(usage(1.0), usage(2.0, true)).cost
+        val catalogAndProvider = combineUsage(usage(1.0), usage(2.0, true)).cost
         assertEquals(3.0, catalogAndProvider.total)
         assertFalse(catalogAndProvider.totalFromProvider)
 
-        val catalogAndCatalog = addUsage(usage(1.0), usage(2.0)).cost
+        val catalogAndCatalog = combineUsage(usage(1.0), usage(2.0)).cost
         assertEquals(3.0, catalogAndCatalog.total)
         assertFalse(catalogAndCatalog.totalFromProvider)
     }

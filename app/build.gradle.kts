@@ -189,7 +189,6 @@ dependencies {
 
     // HTTP + JSON for the native provider layer.
     implementation(libs.okhttp)
-    implementation(libs.okhttp.sse)
     implementation(libs.kotlinx.serialization.json)
 
     // zstd request-body compression for the Codex SSE path. The AAR packages
