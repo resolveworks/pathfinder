@@ -3,6 +3,7 @@ package works.resolve.pathfinder.ai.api
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -25,6 +26,7 @@ import works.resolve.pathfinder.ai.ModelCost
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
 import works.resolve.pathfinder.ai.PromptCacheKeyMode
+import works.resolve.pathfinder.ai.ProviderAuthException
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
@@ -204,17 +206,16 @@ class AzureOpenAiResponsesApiTest {
     }
 
     @Test
-    fun `streamSimple defers missing auth into the flow as an error event`() = runTest {
-        // pi wraps every API in lazyStream: streamSimple setup failures
-        // (missing auth included) become terminal error events in-stream.
+    fun `streamSimple throws synchronously for missing auth`() = runTest {
         val transport = FakeTransport()
-        val events = api(transport).streamSimple(
-            model,
-            context,
-            works.resolve.pathfinder.ai.SimpleStreamOptions()
-        ).toList()
-        val error = assertIs<AssistantMessageEvent.Error>(events.single())
-        assertEquals("No API key for provider: azure", error.error.errorMessage)
+        val error = assertFailsWith<ProviderAuthException> {
+            api(transport).streamSimple(
+                model,
+                context,
+                works.resolve.pathfinder.ai.SimpleStreamOptions()
+            )
+        }
+        assertEquals("No API key for provider: azure", error.message)
         assertTrue(transport.requests.isEmpty())
     }
 

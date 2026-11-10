@@ -312,6 +312,8 @@ class OpenAiResponsesApi(
         context: TranscriptContext,
         options: SimpleStreamOptions
     ): Flow<AssistantMessageEvent> {
+        getClientApiKey(model.provider, options.apiKey, options.headers)
+
         val clamped = options.reasoning?.let {
             works.resolve.pathfinder.ai.clampThinkingLevel(model, it.toModelThinkingLevel())
         }
