@@ -1,7 +1,6 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
 import java.util.Base64
-import java.util.Locale
 import kotlin.math.max
 import kotlin.math.pow
 import kotlin.time.Clock
@@ -16,6 +15,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthPrompt
@@ -137,21 +137,14 @@ class GitHubCopilotOAuthAuth(
     )
 
     /**
-     * WHATWG `new URL` lower-cases the host; [java.net.URI] preserves case,
-     * so the host is explicitly lower-cased to keep hostname semantics
-     * identical. Anything WHATWG accepts but `URI` rejects is null:
-     * strictly rejecting rather than opening.
+     * pi's `new URL(...).hostname`: a bare domain gets an `https://` scheme
+     * and the host is read from the WHATWG parse, which lower-cases it.
      */
     internal fun normalizeDomain(input: String): String? {
         val trimmed = trimJsWhitespace(input)
         if (trimmed.isEmpty()) return null
-        return try {
-            java.net.URI(if (trimmed.contains("://")) trimmed else "https://$trimmed")
-                .host
-                ?.lowercase(Locale.ROOT)
-        } catch (_: Exception) {
-            null
-        }
+        val url = if (trimmed.contains("://")) trimmed else "https://$trimmed"
+        return url.toHttpUrlOrNull()?.host
     }
 
     internal fun getUrls(domain: String): CopilotUrls = CopilotUrls(

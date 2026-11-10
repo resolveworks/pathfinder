@@ -794,6 +794,8 @@ class GitHubCopilotOAuthAuthTest {
         val a = auth(FakeHttpClient())
         assertEquals("company.ghe.com", a.normalizeDomain("company.ghe.com"))
         assertEquals("company.ghe.com", a.normalizeDomain("  https://Company.GHE.com/org  "))
+        // WHATWG accepts the space in the path where java.net.URI rejects it.
+        assertEquals("company.ghe.com", a.normalizeDomain("https://company.ghe.com/org with space"))
         assertNull(a.normalizeDomain(""))
         assertNull(a.normalizeDomain("   "))
         assertNull(a.normalizeDomain("://"))
