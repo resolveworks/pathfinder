@@ -4,6 +4,33 @@ import works.resolve.pathfinder.codingagent.core.SessionInfo
 
 internal data class FuzzyMatch(val matches: Boolean, val score: Double)
 
+private fun scorePositions(textLower: String, positions: List<Int>): Double {
+    var score = 0.0
+    var lastMatchIndex = -1
+    var consecutiveMatches = 0
+
+    for (i in positions) {
+        if (lastMatchIndex == i - 1) {
+            consecutiveMatches++
+            score -= consecutiveMatches * 5.0
+        } else {
+            consecutiveMatches = 0
+            if (lastMatchIndex >= 0) {
+                score += (i - lastMatchIndex - 1) * 2.0
+            }
+        }
+
+        val prev = if (i == 0) null else textLower[i - 1]
+        if (prev == null || prev.isWhitespace() || prev in "-_./:") score -= 10.0
+
+        score += i * 0.1
+
+        lastMatchIndex = i
+    }
+
+    return score
+}
+
 /**
  * Greedy in-order subsequence match over lowercased strings. Lower score is better.
  */
@@ -19,37 +46,28 @@ internal fun fuzzyMatch(query: String, text: String): FuzzyMatch {
             return FuzzyMatch(matches = false, score = 0.0)
         }
 
-        var queryIndex = 0
-        var score = 0.0
+        // Greedy alignment: each query character at its first occurrence after the previous one.
+        val positions = mutableListOf<Int>()
         var lastMatchIndex = -1
-        var consecutiveMatches = 0
-
-        var i = 0
-        while (i < textLower.length && queryIndex < normalizedQuery.length) {
-            if (textLower[i] == normalizedQuery[queryIndex]) {
-                val prev = if (i == 0) null else textLower[i - 1]
-                val isWordBoundary = i == 0 || prev!!.isWhitespace() || prev in "-_./:"
-
-                if (lastMatchIndex == i - 1) {
-                    consecutiveMatches++
-                    score -= consecutiveMatches * 5.0
-                } else {
-                    consecutiveMatches = 0
-                    if (lastMatchIndex >= 0) {
-                        score += (i - lastMatchIndex - 1) * 2.0
-                    }
-                }
-
-                if (isWordBoundary) score -= 10.0
-                score += i * 0.1
-
-                lastMatchIndex = i
-                queryIndex++
-            }
-            i++
+        for (queryIndex in normalizedQuery.indices) {
+            val i = textLower.indexOf(normalizedQuery[queryIndex], lastMatchIndex + 1)
+            if (i == -1) return FuzzyMatch(matches = false, score = 0.0)
+            positions.add(i)
+            lastMatchIndex = i
         }
 
-        if (queryIndex < normalizedQuery.length) return FuzzyMatch(matches = false, score = 0.0)
+        var score = scorePositions(textLower, positions)
+
+        // The greedy alignment can scatter the query over an earlier, unrelated part of the text,
+        // e.g. "opus" in "openrouter openrouter/anthropic/claude-opus" takes o, p, u from
+        // "openrouter". Also score every contiguous occurrence and keep the best alignment.
+        var start = textLower.indexOf(normalizedQuery)
+        while (start != -1) {
+            for (k in positions.indices) positions[k] = start + k
+            score = minOf(score, scorePositions(textLower, positions))
+            start = textLower.indexOf(normalizedQuery, start + 1)
+        }
+
         if (normalizedQuery == textLower) score -= 100.0
         return FuzzyMatch(matches = true, score)
     }

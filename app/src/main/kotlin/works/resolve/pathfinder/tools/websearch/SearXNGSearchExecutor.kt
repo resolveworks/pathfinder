@@ -6,7 +6,7 @@ import okhttp3.Request
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.double
 import works.resolve.pathfinder.ai.utils.lenientJson
-import works.resolve.pathfinder.ai.utils.str
+import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.truthyString
 
 /**
@@ -55,20 +55,29 @@ class SearXNGSearchExecutor(private val transport: SearchTransport) : SearchExec
         }
 
         val data = lenientJson.parseToJsonElement(response.body) as? JsonObject
-        val results = data?.arr("results") ?: return emptyList()
+            ?: throw IllegalStateException("SearXNG search response was not a JSON object")
+        val results = data.arr("results")
+            ?: throw IllegalStateException("SearXNG search response is missing the results array")
         // The instance's array is not ranked; open-webui sorts by score
         // descending before truncating.
         return results
             .map { element ->
-                val r = element as? JsonObject ?: JsonObject(emptyMap())
+                val r = element as? JsonObject
+                    ?: throw IllegalStateException("SearXNG search result was not a JSON object")
                 r to (r.double("score") ?: 0.0)
             }
             .sortedByDescending { it.second }
             .take(RESULT_COUNT)
-            .map { (r, _) ->
+            .mapIndexed { index, (r, _) ->
                 SearchResult(
-                    title = r.str("title") ?: "",
-                    url = r.str("url") ?: "",
+                    title = r.string("title")?.takeIf { it.isNotBlank() }
+                        ?: throw IllegalStateException(
+                            "SearXNG search result $index is missing a non-blank title"
+                        ),
+                    url = r.string("url")?.takeIf { it.isNotBlank() }
+                        ?: throw IllegalStateException(
+                            "SearXNG search result $index is missing a non-blank url"
+                        ),
                     snippet = r.truthyString("content")
                 )
             }
