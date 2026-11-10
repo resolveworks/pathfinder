@@ -8,17 +8,21 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.ImageContent
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.AssistantMessageDiagnostic
+import works.resolve.pathfinder.ai.utils.DiagnosticErrorInfo
 
 class JsonlCodecTest {
 
@@ -85,7 +89,26 @@ class JsonlCodecTest {
                 rawStopReason = "stop",
                 responseId = "r",
                 responseModel = "glm-4.6-actual",
-                endTurn = true
+                providerThinkingLevel = "high",
+                thinkingLevel = ModelThinkingLevel.HIGH,
+                diagnostics = listOf(
+                    AssistantMessageDiagnostic(
+                        type = "retry",
+                        timestamp = 5L,
+                        error = DiagnosticErrorInfo(
+                            name = "TimeoutError",
+                            message = "timed out",
+                            stack = "stack",
+                            code = JsonPrimitive(504)
+                        ),
+                        details = Json.parseToJsonElement("{\"attempt\":2}").jsonObject
+                    )
+                ),
+                endTurn = true,
+                durationMs = 42L,
+                usage = assistant("hi", 2L).usage.copy(
+                    cost = assistant("hi", 2L).usage.cost.copy(totalFromProvider = true)
+                )
             )
         )
         assertEquals(assistant, roundtripEntry(assistant))
@@ -109,7 +132,8 @@ class JsonlCodecTest {
                 toolName = "read",
                 content = listOf(TextContent("ok")),
                 isError = false,
-                timestamp = 3L
+                timestamp = 3L,
+                durationMs = 7L
             )
         )
         assertEquals(tool, roundtripEntry(tool))
