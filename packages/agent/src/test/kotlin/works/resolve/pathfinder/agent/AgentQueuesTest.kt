@@ -226,6 +226,6 @@ class AgentQueuesTest {
 
         val failure = agent.state.value.messages.last() as AssistantMessage
         assertEquals(StopReason.ABORTED, failure.stopReason)
-        assertEquals("Run aborted", failure.errorMessage)
+        assertEquals("listener exploded", failure.errorMessage)
     }
 }

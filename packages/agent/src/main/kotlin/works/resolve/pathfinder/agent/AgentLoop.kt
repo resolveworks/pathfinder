@@ -41,6 +41,7 @@ import works.resolve.pathfinder.ai.utils.getCurrentTools
 import works.resolve.pathfinder.ai.utils.getToolStateChanges
 import works.resolve.pathfinder.ai.utils.mergeClientIdentity
 import works.resolve.pathfinder.ai.utils.normalizeContext
+import works.resolve.pathfinder.ai.utils.parseStreamingJson
 import works.resolve.pathfinder.ai.utils.toToolDeclaration
 import works.resolve.pathfinder.ai.utils.validateToolArguments
 
@@ -580,15 +581,16 @@ private suspend fun streamAssistantResponse(
  * Google emits the complete arguments as a single redundant delta after a
  * complete start scaffold, while other providers stream JSON fragments — so
  * each content index keeps one [ToolCallArgumentsStream] across boundaries,
- * and materialize uses the partial arguments of every call that received a
- * delta, replacing the scaffold's arguments.
+ * and materialize salvages every call's complete accumulated text with
+ * [parseStreamingJson], replacing the scaffold's arguments whenever any
+ * delta arrived. The stream's own snapshot lags while its copy credit is
+ * exhausted, so the full text is parsed once here instead.
  */
 private class AssistantStreamFold {
     private var boundary: AssistantMessage? = null
     private val textSinceBoundary = mutableMapOf<Int, StringBuilder>()
     private val thinkingSinceBoundary = mutableMapOf<Int, StringBuilder>()
     private val toolArguments = mutableMapOf<Int, ToolCallArgumentsStream>()
-    private val toolArgumentSnapshots = mutableMapOf<Int, JsonObject>()
 
     fun onBoundary(partial: AssistantMessage) {
         boundary = partial
@@ -605,8 +607,7 @@ private class AssistantStreamFold {
     }
 
     fun appendToolArguments(contentIndex: Int, delta: String) {
-        toolArgumentSnapshots[contentIndex] =
-            toolArguments.getOrPut(contentIndex) { ToolCallArgumentsStream() }.append(delta)
+        toolArguments.getOrPut(contentIndex) { ToolCallArgumentsStream() }.append(delta)
     }
 
     fun materialize(): AssistantMessage? {
@@ -625,8 +626,12 @@ private class AssistantStreamFold {
                             ?: block
 
                     is ToolCall ->
-                        toolArgumentSnapshots[index]
-                            ?.let { arguments -> block.copy(arguments = arguments) }
+                        toolArguments[index]
+                            ?.let { stream ->
+                                block.copy(
+                                    arguments = parseStreamingJson<JsonObject>(stream.text)
+                                )
+                            }
                             ?: block
 
                     else -> block
