@@ -908,9 +908,7 @@ enum class PromptCacheKeyMode { AUTO, ENABLED, DISABLED }
  * when request auth is missing; once a stream is returned, request/model/
  * runtime failures are encoded in the stream itself rather than thrown.
  * [Models.stream] converts these setup throws into terminal error events,
- * as pi's lazyStream does. Divergence: the Anthropic, Google, and Mistral
- * adapters sync-throw for missing auth; the remaining adapters encode it as
- * a terminal [AssistantMessageEvent.Error] in the returned flow.
+ * as pi's lazyStream does.
  */
 interface ChatApi {
     fun streamSimple(

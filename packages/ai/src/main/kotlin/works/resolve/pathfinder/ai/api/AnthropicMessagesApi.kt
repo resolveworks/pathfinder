@@ -590,7 +590,10 @@ class AnthropicMessagesApi(
                             (
                                 errorCode == null &&
                                     error.status == 400 &&
-                                    apiError?.message?.contains("thread") == true
+                                    (
+                                        apiError?.message?.contains("thread") == true ||
+                                            (apiError == null && error.body.contains("thread"))
+                                        )
                                 )
                     // Any other error (prompt too long, unknown model, strict
                     // tool limits, ...) is not about the thread, and resending
@@ -602,7 +605,7 @@ class AnthropicMessagesApi(
                             type = "anthropic_thread_fallback",
                             timestamp = clock.now().toEpochMilliseconds(),
                             error = DiagnosticErrorInfo(
-                                message = apiError.message
+                                message = apiError?.message
                                     ?: error.message
                                     ?: error::class.simpleName
                                     ?: "Anthropic thread fallback"
