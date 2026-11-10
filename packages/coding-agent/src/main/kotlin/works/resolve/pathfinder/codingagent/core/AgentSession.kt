@@ -1,8 +1,10 @@
 package works.resolve.pathfinder.codingagent.core
 
 import java.util.IdentityHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
@@ -181,6 +183,9 @@ class AgentSession(
     /** pi's _deferredSettledActions: prompts submitted by `agent_settled` listeners. Guarded by [lock]. */
     private val deferredSettledActions = mutableListOf<suspend () -> Unit>()
 
+    /** pi's _idleWaitPromise: created on demand by [waitForIdle], cleared when idle. Guarded by [lock]. */
+    private var idleWait: CompletableDeferred<Unit>? = null
+
     /**
      * pi's _agentRunAbortRequested: set by [abort] while a run is active,
      * consumed by the post-run abort-window checks (retry, post-run
@@ -258,6 +263,9 @@ class AgentSession(
             prePromptCompactionJob != null ||
             autoCompactionInProgress ||
             branchSummaryJob != null
+
+    /** pi's isIdle: no agent run and no compaction or branch summarization is active. */
+    val isIdle: Boolean get() = !agentRunActive && !isCompacting
 
     /** The session's complete prompt configuration, derived once from the constructor inputs. */
     private val promptConfig = PromptConfig(
@@ -504,7 +512,7 @@ class AgentSession(
      * requested while it runs stops the run at its first `agent_start`.
      *
      * A prompt submitted while [AgentEvent.AgentSettled] is being emitted is
-     * deferred and run once the emission finishes (pi's
+     * deferred and run once the settlement finishes (pi's
      * _deferredSettledActions).
      *
      * @throws IllegalStateException when manual compaction or branch
@@ -597,6 +605,7 @@ class AgentSession(
                 promptMessages = listOfNotNull(updateMessage, promptMessage)
             } catch (e: Throwable) {
                 releaseRunSlot()
+                resolveIdleWaitIfIdle()
                 throw e
             }
         } finally {
@@ -604,6 +613,7 @@ class AgentSession(
         }
 
         var aborted = false
+        val runStarted = AtomicBoolean(false)
         try {
             // The loop runs on loopDispatcher: prompt() is Main-friendly in the app
             // (per-token reduce, event emission, and tool execution leave the
@@ -616,6 +626,7 @@ class AgentSession(
                     // Lazily started so promptJob is published before the job
                     // can run anything (abort guarantee).
                     val job = launch(start = CoroutineStart.LAZY) {
+                        runStarted.set(true)
                         runAgentPrompt(promptMessages)
                     }
                     promptJob = job
@@ -627,9 +638,14 @@ class AgentSession(
             }
         } finally {
             promptJob = null
-            // Deferred submits are new work, not part of the settled cycle: a
-            // cancelled caller drops them, an aborted cycle still runs them.
-            if (currentCoroutineContext().isActive) drainDeferredSettledActions()
+            // A caller cancelled before the launched block runs (withContext
+            // observes the cancellation at entry) would otherwise leave the
+            // slot claimed, since runAgentPrompt's finally is what releases it.
+            // pi's _startRun catch frees the slot on the same failed start.
+            if (!runStarted.get()) {
+                releaseRunSlot()
+                resolveIdleWaitIfIdle()
+            }
         }
         if (aborted) throw CancellationException("Prompt aborted")
     }
@@ -643,7 +659,9 @@ class AgentSession(
     /**
      * pi's _deferredSettledActions: prompts submitted while `agent_settled`
      * was being emitted run once the emission finished, outside the
-     * settlement's [NonCancellable] tail.
+     * settlement's [NonCancellable] tail. A cancelled caller drops them: the
+     * deferred prompt is submitted from its own coroutine, so it cannot run
+     * once that coroutine is gone.
      */
     private suspend fun drainDeferredSettledActions() {
         while (true) {
@@ -653,6 +671,14 @@ class AgentSession(
             }
             action()
         }
+    }
+
+    private fun resolveIdleWaitIfIdle() {
+        val waiter = synchronized(lock) {
+            if (!isIdle) return
+            idleWait.also { idleWait = null } ?: return
+        }
+        waiter.complete(Unit)
     }
 
     /**
@@ -790,17 +816,26 @@ class AgentSession(
                     isEmittingAgentSettled = false
                 }
             }
+            // pi's _emitAgentSettled ordering: settle, then run the deferred
+            // submits outside NonCancellable, then expose idle.
+            try {
+                if (currentCoroutineContext().isActive) drainDeferredSettledActions()
+            } finally {
+                resolveIdleWaitIfIdle()
+            }
         }
     }
 
     /**
      * pi's abort: request abortion of the active prompt cycle, cancel
      * in-flight retry backoff (through the prompt job), manual compaction,
-     * pre-prompt auto-compaction, and branch summarization, and await their
-     * completion — pi's waitForIdle covers both the run and every
-     * compaction controller, so this does too. In-cycle automatic
-     * compaction is cancelled through the prompt job it lives in. May be
-     * called from any coroutine outside the cycle it aborts.
+     * pre-prompt auto-compaction, and branch summarization, then await idle.
+     * In-cycle automatic compaction is cancelled through the prompt job it
+     * lives in. May be called from any coroutine outside the cycle it aborts.
+     *
+     * pi's `await this.waitForIdle()` covers the preflight window too: with
+     * no prompt job yet (before the run is launched) abort waits for the
+     * settlement instead of returning early.
      */
     suspend fun abort() {
         if (agentRunActive) {
@@ -822,6 +857,18 @@ class AgentSession(
         manualCompaction?.join()
         prePromptCompaction?.join()
         branchSummary?.join()
+        waitForIdle()
+    }
+
+    /** pi's waitForIdle: suspend until no agent run or compaction is active. */
+    suspend fun waitForIdle() {
+        // The idle check and waiter registration are one critical section: a
+        // resolve must either observe this waiter or the check must observe idle.
+        val waiter = synchronized(lock) {
+            if (isIdle) return
+            idleWait ?: CompletableDeferred<Unit>().also { idleWait = it }
+        }
+        waiter.await()
     }
 
     /**
@@ -1023,6 +1070,7 @@ class AgentSession(
             // withContext treats the controller as the block's parent job;
             // complete it so it does not outlive the caller.
             controller.complete()
+            resolveIdleWaitIfIdle()
         }
     }
 
@@ -1689,6 +1737,12 @@ class AgentSession(
         }
     }
 
+    /** pi's _clearManualCompactionState. */
+    private fun clearManualCompactionState() {
+        manualCompactionJob = null
+        resolveIdleWaitIfIdle()
+    }
+
     /**
      * Manually compact the session context (pi's compact: the `/compact`
      * entry point). Aborts the current agent operation first — including an
@@ -1713,7 +1767,7 @@ class AgentSession(
         try {
             return withContext(controller) { compactBody(customInstructions) }
         } finally {
-            manualCompactionJob = null
+            clearManualCompactionState()
             // withContext treats the controller as the block's parent job;
             // complete it so it does not outlive the caller.
             controller.complete()
@@ -1723,7 +1777,7 @@ class AgentSession(
     private suspend fun compactBody(customInstructions: String?): AgentEvent.CompactionResult {
         // pi's _clearManualCompactionState: compaction_end listeners may
         // submit prompts, so expose idle state before notifying them.
-        val clearInProgress = { manualCompactionJob = null }
+        val clearInProgress = { clearManualCompactionState() }
         try {
             _events.emit(AgentEvent.CompactionStart(AgentEvent.CompactionReason.MANUAL))
 
