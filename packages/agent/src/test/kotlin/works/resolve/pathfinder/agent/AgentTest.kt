@@ -422,7 +422,7 @@ class AgentTest {
     }
 
     @Test
-    fun `unexpected throw synthesizes ERROR message with safe message`() = runTest {
+    fun `unexpected throw synthesizes ERROR message with the cause's message`() = runTest {
         val agent = agent(
             streamFn = StreamFn { _, _, _ ->
                 throw RuntimeException("boom with key sk-supersecret")
@@ -464,9 +464,8 @@ class AgentTest {
         assertEquals(3, final.messages.size)
         val error = final.messages[2] as AssistantMessage
         assertEquals(StopReason.ERROR, error.stopReason)
-        assertEquals("Unexpected error (RuntimeException)", error.errorMessage)
-        assertFalse(error.errorMessage!!.contains("sk-supersecret"))
-        assertEquals("Unexpected error (RuntimeException)", final.errorMessage)
+        assertEquals("boom with key sk-supersecret", error.errorMessage)
+        assertEquals("boom with key sk-supersecret", final.errorMessage)
     }
 
     @Test
@@ -811,8 +810,8 @@ class AgentTest {
         assertEquals(4, state.messages.size)
         val failure = state.messages.last() as AssistantMessage
         assertEquals(StopReason.ERROR, failure.stopReason)
-        assertEquals("Unexpected error (IllegalStateException)", failure.errorMessage)
-        assertEquals("Unexpected error (IllegalStateException)", state.errorMessage)
+        assertEquals("sink boom", failure.errorMessage)
+        assertEquals("sink boom", state.errorMessage)
     }
 
     @Test

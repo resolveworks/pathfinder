@@ -496,9 +496,10 @@ class Agent(
      * the loop throws, like pi's failure handler — including after the loop
      * already emitted agent_end.
      *
-     * Message shape matches pi (empty text content, zeroed usage); the error
-     * text is sanitized because raw exception messages can embed request
-     * details such as options or credentials.
+     * Message shape matches pi (empty text content, zeroed usage). The error
+     * text is pi's thrown-error message; a coroutine abort terminates
+     * without an exception, where pi has a platform AbortError, so the
+     * no-cause abort keeps a fixed string instead.
      *
      * The synthesized message carries the live selected model — a mid-run
      * switch relabels the failure even though the failed run itself used its
@@ -512,7 +513,7 @@ class Agent(
             model = model.id,
             usage = Usage(),
             stopReason = if (aborted) StopReason.ABORTED else StopReason.ERROR,
-            errorMessage = if (aborted) ABORT_ERROR_MESSAGE else safeErrorMessage(cause),
+            errorMessage = cause?.message ?: cause?.toString() ?: ABORT_ERROR_MESSAGE,
             timestamp = clock.now().toEpochMilliseconds()
         )
         processEvent(AgentEvent.MessageStart(failure))
@@ -590,15 +591,5 @@ class Agent(
             "Agent is already processing. Wait for completion before continuing."
 
         const val ABORT_ERROR_MESSAGE = "Run aborted"
-
-        /**
-         * Bounded, user-facing message for unexpected failures. Only the
-         * exception kind is used — raw exception text can embed request
-         * details such as options or credentials.
-         */
-        fun safeErrorMessage(cause: Throwable?): String {
-            val kind = cause?.let { it::class.java.simpleName } ?: "UnknownError"
-            return "Unexpected error ($kind)".take(200)
-        }
     }
 }
