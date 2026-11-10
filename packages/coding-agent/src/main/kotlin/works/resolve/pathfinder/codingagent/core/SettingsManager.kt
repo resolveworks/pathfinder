@@ -9,6 +9,8 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import works.resolve.pathfinder.agent.QueueMode
+import works.resolve.pathfinder.agent.queueModeFromWire
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
@@ -28,8 +30,8 @@ import works.resolve.pathfinder.codingagent.core.utils.stripBom
  * trust, or migration of legacy fields), and just the fields pathfinder uses.
  * Fields pi owns that this type doesn't model stay untouched in storage.
  *
- * Thinking levels are typed, so an unknown stored value reads as absent from
- * the typed getters where pi returns the raw string; because only modified
+ * Thinking levels and queue modes are typed, so an unknown stored value reads
+ * as absent from the typed getters where pi returns the raw string; because only modified
  * fields (and, for `modelThinkingLevels`, only modified entries) are ever
  * persisted, unknown stored values still round-trip until explicitly
  * overwritten. `retry` is held resolved (absent stored keys default at read,
@@ -44,7 +46,9 @@ data class Settings(
     val enabledModels: List<String>? = null,
     val compaction: CompactionSettings? = null,
     val branchSummary: BranchSummarySettings? = null,
-    val retry: RetrySettings? = null
+    val retry: RetrySettings? = null,
+    val steeringMode: QueueMode? = null,
+    val followUpMode: QueueMode? = null
 )
 
 /** pi's CompactionModelOverride: per-model token budgets keyed by "provider/modelId". */
@@ -122,6 +126,8 @@ private fun encodeSettings(settings: Settings): JsonObject = JsonObject(
         settings.compaction?.let { put("compaction", encodeCompaction(it)) }
         settings.branchSummary?.let { put("branchSummary", encodeBranchSummary(it)) }
         settings.retry?.let { put("retry", encodeRetry(it)) }
+        settings.steeringMode?.let { put("steeringMode", JsonPrimitive(it.wire)) }
+        settings.followUpMode?.let { put("followUpMode", JsonPrimitive(it.wire)) }
     }
 )
 
@@ -144,6 +150,10 @@ private fun encodeField(settings: Settings, field: String): JsonElement? = when 
     "branchSummary" -> settings.branchSummary?.let(::encodeBranchSummary)
 
     "retry" -> settings.retry?.let(::encodeRetry)
+
+    "steeringMode" -> settings.steeringMode?.let { JsonPrimitive(it.wire) }
+
+    "followUpMode" -> settings.followUpMode?.let { JsonPrimitive(it.wire) }
 
     else -> throw IllegalStateException("Unknown settings field: $field")
 }
@@ -187,8 +197,8 @@ private fun encodeRetry(retry: RetrySettings): JsonObject = JsonObject(
 
 /**
  * Tolerant decode: unknown fields and non-object roots yield defaults, and
- * thinking-level values that don't map to a known level read as absent (the
- * stored strings survive saves). Compaction token budgets are validated
+ * thinking-level or queue-mode values that don't map to a known value read as
+ * absent (the stored strings survive saves). Compaction token budgets are validated
  * lazily when read, like pi's `getCompactionTokenSetting`; decode only
  * requires each present budget to be an integral number a Long can hold.
  * Values pi rejects at read time (negative, beyond the safe-integer range)
@@ -213,7 +223,9 @@ private fun decodeSettings(content: String): Settings {
         },
         compaction = (obj["compaction"] as? JsonObject)?.let(::decodeCompaction),
         branchSummary = (obj["branchSummary"] as? JsonObject)?.let(::decodeBranchSummary),
-        retry = (obj["retry"] as? JsonObject)?.let(::decodeRetry)
+        retry = (obj["retry"] as? JsonObject)?.let(::decodeRetry),
+        steeringMode = obj.str("steeringMode")?.let(::queueModeFromWire),
+        followUpMode = obj.str("followUpMode")?.let(::queueModeFromWire)
     )
 }
 
@@ -495,6 +507,18 @@ class SettingsManager private constructor(
     fun getBranchSummarySkipPrompt(): Boolean = settings.branchSummary?.skipPrompt ?: false
 
     fun getRetrySettings(): RetrySettings = settings.retry ?: RetrySettings()
+
+    fun getSteeringMode(): QueueMode = settings.steeringMode ?: QueueMode.ONE_AT_A_TIME
+
+    suspend fun setSteeringMode(mode: QueueMode) {
+        mutateFields("steeringMode") { it.copy(steeringMode = mode) }
+    }
+
+    fun getFollowUpMode(): QueueMode = settings.followUpMode ?: QueueMode.ONE_AT_A_TIME
+
+    suspend fun setFollowUpMode(mode: QueueMode) {
+        mutateFields("followUpMode") { it.copy(followUpMode = mode) }
+    }
 
     suspend fun setRetryEnabled(enabled: Boolean) {
         mutateNestedKey("retry", "enabled") { s ->

@@ -21,6 +21,7 @@ import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.agent.AgentToolUpdateCallback
+import works.resolve.pathfinder.agent.QueueMode
 import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
@@ -263,6 +264,36 @@ class AgentSessionQueueTest {
     }
 
     @Test
+    fun `delivers all steering messages in one batch in all mode`() = runTest {
+        val faux = FauxProvider()
+        faux.setResponses(waitToolCall())
+        var batchedUserMessages: List<String> = emptyList()
+        faux.appendResponse(
+            FauxResponseFactory { context, _, _, _ ->
+                batchedUserMessages = context.messages
+                    .filterIsInstance<UserMessage>()
+                    .map { contentText(it.content) }
+                assistant("batched steer response")
+            }
+        )
+        val waiting = waitingSession(faux)
+        val session = waiting.session
+        session.setSteeringMode(QueueMode.ALL)
+
+        collectDuringRun(session) {
+            val run = launch { session.prompt("start") }
+            waiting.toolStart.await()
+            session.steer("steer 1")
+            session.steer("steer 2")
+            waiting.releaseTool()
+            run.join()
+        }
+
+        assertEquals(listOf("start", "steer 1", "steer 2"), batchedUserMessages)
+        assertEquals(listOf("", "batched steer response"), assistantTexts(session))
+    }
+
+    @Test
     fun `delivers multiple follow-ups in order in one-at-a-time mode`() = runTest {
         val faux = FauxProvider()
         faux.setResponses(
@@ -286,6 +317,39 @@ class AgentSessionQueueTest {
         assertEquals(listOf("start", "follow-up 1", "follow-up 2"), userTexts(session))
         assertEquals(
             listOf("", "original turn complete", "handled follow-up 1", "handled follow-up 2"),
+            assistantTexts(session)
+        )
+    }
+
+    @Test
+    fun `delivers all follow-up messages in one batch in all mode`() = runTest {
+        val faux = FauxProvider()
+        faux.setResponses(waitToolCall(), assistant("original turn complete"))
+        var batchedUserMessages: List<String> = emptyList()
+        faux.appendResponse(
+            FauxResponseFactory { context, _, _, _ ->
+                batchedUserMessages = context.messages
+                    .filterIsInstance<UserMessage>()
+                    .map { contentText(it.content) }
+                assistant("batched follow-up response")
+            }
+        )
+        val waiting = waitingSession(faux)
+        val session = waiting.session
+        session.setFollowUpMode(QueueMode.ALL)
+
+        collectDuringRun(session) {
+            val run = launch { session.prompt("start") }
+            waiting.toolStart.await()
+            session.followUp("follow-up 1")
+            session.followUp("follow-up 2")
+            waiting.releaseTool()
+            run.join()
+        }
+
+        assertEquals(listOf("start", "follow-up 1", "follow-up 2"), batchedUserMessages)
+        assertEquals(
+            listOf("", "original turn complete", "batched follow-up response"),
             assistantTexts(session)
         )
     }

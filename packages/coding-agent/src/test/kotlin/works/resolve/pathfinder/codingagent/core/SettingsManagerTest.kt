@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import works.resolve.pathfinder.agent.QueueMode
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings as ResolvedCompactionSettings
@@ -337,6 +338,27 @@ class SettingsManagerTest {
     }
 
     @Test
+    fun queueModesRoundTripAndDecodeUnknownAsAbsent() = runTest {
+        val storage = InMemorySettingsStorage()
+        writeStorage(storage, """{"steeringMode":"all","followUpMode":"bogus"}""")
+        val manager = SettingsManager.fromStorage(storage)
+
+        assertEquals(QueueMode.ALL, manager.getSteeringMode())
+        assertEquals(QueueMode.ONE_AT_A_TIME, manager.getFollowUpMode())
+
+        // An unrelated save leaves both stored values untouched.
+        manager.setEnabledModels(listOf("claude-*"))
+        assertEquals("all", storedString(readStorage(storage), "steeringMode"))
+        assertEquals("bogus", storedString(readStorage(storage), "followUpMode"))
+
+        manager.setFollowUpMode(QueueMode.ALL)
+        assertEquals("all", storedString(readStorage(storage), "followUpMode"))
+
+        manager.setSteeringMode(QueueMode.ONE_AT_A_TIME)
+        assertEquals("one-at-a-time", storedString(readStorage(storage), "steeringMode"))
+    }
+
+    @Test
     fun defaultsWhenNothingStored() = runTest {
         val manager = SettingsManager.fromStorage(InMemorySettingsStorage())
 
@@ -345,6 +367,8 @@ class SettingsManagerTest {
         assertNull(manager.getDefaultThinkingLevel())
         assertTrue(manager.getAllModelThinkingLevels().isEmpty())
         assertNull(manager.getEnabledModels())
+        assertEquals(QueueMode.ONE_AT_A_TIME, manager.getSteeringMode())
+        assertEquals(QueueMode.ONE_AT_A_TIME, manager.getFollowUpMode())
         assertEquals(
             ResolvedCompactionSettings(
                 enabled = true,

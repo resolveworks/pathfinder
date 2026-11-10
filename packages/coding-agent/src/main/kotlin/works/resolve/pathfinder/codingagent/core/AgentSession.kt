@@ -32,6 +32,7 @@ import works.resolve.pathfinder.agent.AgentLoopTurnUpdate
 import works.resolve.pathfinder.agent.AgentState
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.PrepareNextTurnContext
+import works.resolve.pathfinder.agent.QueueMode
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.MessageRole
@@ -307,6 +308,7 @@ class AgentSession(
             agent.setTools(resolveTools(tools.map { it.definition.name }))
         }
         restoreToolsFromTranscript()
+        syncQueueModesFromSettings()
         installAgentNextTurnRefresh()
     }
 
@@ -784,6 +786,23 @@ class AgentSession(
 
     /** Pending follow-up messages, in queue order. */
     fun getFollowUpMessages(): List<String> = synchronized(lock) { followUpMessages.toList() }
+
+    private fun syncQueueModesFromSettings() {
+        agent.steeringMode = settingsManager.getSteeringMode()
+        agent.followUpMode = settingsManager.getFollowUpMode()
+    }
+
+    /** Set the steering message mode and persist it. */
+    suspend fun setSteeringMode(mode: QueueMode) {
+        agent.steeringMode = mode
+        settingsManager.setSteeringMode(mode)
+    }
+
+    /** Set the follow-up message mode and persist it. */
+    suspend fun setFollowUpMode(mode: QueueMode) {
+        agent.followUpMode = mode
+        settingsManager.setFollowUpMode(mode)
+    }
 
     /**
      * pi's _runAgentPrompt: the prompt cycle — one agent run plus the
