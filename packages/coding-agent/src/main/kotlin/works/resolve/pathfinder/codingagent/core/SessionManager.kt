@@ -54,10 +54,15 @@ import works.resolve.pathfinder.ai.ToolReference
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
+import works.resolve.pathfinder.ai.utils.AssistantMessageDiagnostic
+import works.resolve.pathfinder.ai.utils.DiagnosticErrorInfo
 import works.resolve.pathfinder.ai.utils.constrainedSamplingToJson
 import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
 import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.strictBoolean
 import works.resolve.pathfinder.ai.utils.strictDouble
+import works.resolve.pathfinder.ai.utils.strictDoubleOrNull
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
 import works.resolve.pathfinder.ai.utils.uuidv7
@@ -748,6 +753,15 @@ internal object JsonlCodec {
     private fun invalid(reason: String = "malformed session line"): Nothing =
         throw JsonlDecodeException(reason)
 
+    private fun JsonObject.optionalString(key: String): String? =
+        if (key !in this) null else string(key) ?: invalid()
+
+    private fun JsonObject.optionalLong(key: String): Long? =
+        if (key !in this) null else strictDouble(key)?.toLong() ?: invalid()
+
+    private fun JsonObject.optionalBoolean(key: String): Boolean? =
+        if (key !in this) null else strictBoolean(key) ?: invalid()
+
     class JsonlDecodeException(message: String) : Exception(message)
 
     // ---- message codecs (unchanged wire shape from the v4 codec) ----
@@ -806,7 +820,12 @@ internal object JsonlCodec {
             message.rawStopReason?.let { put("rawStopReason", it) }
             message.responseId?.let { put("responseId", it) }
             message.responseModel?.let { put("responseModel", it) }
+            message.providerThinkingLevel?.let { put("providerThinkingLevel", it) }
+            message.thinkingLevel?.let { put("thinkingLevel", it.wire) }
+            message.diagnostics.takeIf { it.isNotEmpty() }
+                ?.let { put("diagnostics", encodeDiagnostics(it)) }
             message.endTurn?.let { put("endTurn", it) }
+            message.durationMs?.let { put("durationMs", it) }
         }
 
         is ToolResultMessage -> buildJsonObject {
@@ -818,6 +837,7 @@ internal object JsonlCodec {
             put("isError", message.isError)
             message.details?.let { put("details", it) }
             message.usage?.let { put("usage", encodeUsage(it)) }
+            message.durationMs?.let { put("durationMs", it) }
         }
     }
 
@@ -884,8 +904,14 @@ internal object JsonlCodec {
                 rawStopReason = obj.string("rawStopReason"),
                 responseId = obj.string("responseId"),
                 responseModel = obj.string("responseModel"),
+                providerThinkingLevel = obj.optionalString("providerThinkingLevel"),
+                thinkingLevel = obj.optionalString("thinkingLevel")?.let {
+                    modelThinkingLevelFromWire(it) ?: invalid()
+                },
+                diagnostics = obj["diagnostics"]?.let(::decodeDiagnostics) ?: emptyList(),
                 endTurn = obj["endTurn"]?.let { (it as JsonPrimitive).content.toBooleanStrict() },
-                timestamp = obj.strictDouble("timestamp")?.toLong() ?: entryTimestamp
+                timestamp = obj.strictDouble("timestamp")?.toLong() ?: entryTimestamp,
+                durationMs = obj.optionalLong("durationMs")
             )
 
             "toolResult" -> ToolResultMessage(
@@ -897,7 +923,8 @@ internal object JsonlCodec {
                 isError =
                     obj["isError"]?.let { (it as JsonPrimitive).content.toBooleanStrict() }
                         ?: invalid(),
-                timestamp = obj.strictDouble("timestamp")?.toLong() ?: entryTimestamp
+                timestamp = obj.strictDouble("timestamp")?.toLong() ?: entryTimestamp,
+                durationMs = obj.optionalLong("durationMs")
             )
 
             else -> invalid("unknown message role $role")
@@ -1005,6 +1032,7 @@ internal object JsonlCodec {
             put("cacheRead", usage.cost.cacheRead)
             put("cacheWrite", usage.cost.cacheWrite)
             put("total", usage.cost.total)
+            put("totalFromProvider", usage.cost.totalFromProvider)
         }
     }
 
@@ -1032,8 +1060,59 @@ internal object JsonlCodec {
                 output = c("output"),
                 cacheRead = c("cacheRead"),
                 cacheWrite = c("cacheWrite"),
-                total = c("total")
+                total = c("total"),
+                totalFromProvider = cost.optionalBoolean("totalFromProvider") ?: false
             )
+        )
+    }
+
+    private fun encodeDiagnostics(diagnostics: List<AssistantMessageDiagnostic>): JsonArray =
+        JsonArray(diagnostics.map(::encodeDiagnostic))
+
+    private fun encodeDiagnostic(diagnostic: AssistantMessageDiagnostic): JsonObject =
+        buildJsonObject {
+            put("type", diagnostic.type)
+            put("timestamp", diagnostic.timestamp)
+            diagnostic.error?.let { error ->
+                putJsonObject("error") {
+                    error.name?.let { put("name", it) }
+                    put("message", error.message)
+                    error.stack?.let { put("stack", it) }
+                    error.code?.let { put("code", it) }
+                }
+            }
+            diagnostic.details?.let { put("details", it) }
+        }
+
+    private fun decodeDiagnostics(
+        element: kotlinx.serialization.json.JsonElement
+    ): List<AssistantMessageDiagnostic> {
+        val array = element as? JsonArray ?: invalid()
+        return array.map { item ->
+            val obj = item as? JsonObject ?: invalid()
+            AssistantMessageDiagnostic(
+                type = obj.string("type") ?: invalid(),
+                timestamp = obj.strictDouble("timestamp")?.toLong() ?: invalid(),
+                error = obj["error"]?.let(::decodeDiagnosticError),
+                details = obj["details"]?.let { it as? JsonObject ?: invalid() }
+            )
+        }
+    }
+
+    private fun decodeDiagnosticError(
+        element: kotlinx.serialization.json.JsonElement
+    ): DiagnosticErrorInfo {
+        val obj = element as? JsonObject ?: invalid()
+        val code = obj["code"]?.let { value ->
+            val primitive = value as? JsonPrimitive ?: invalid()
+            if (!primitive.isString && primitive.strictDoubleOrNull() == null) invalid()
+            primitive
+        }
+        return DiagnosticErrorInfo(
+            name = obj.optionalString("name"),
+            message = obj.string("message") ?: invalid(),
+            stack = obj.optionalString("stack"),
+            code = code
         )
     }
 

@@ -263,11 +263,16 @@ private fun entryContextMessages(entry: SessionEntry): List<Message> =
  * pi sums `estimateTokens` over an entry's context messages, where the
  * summary entries project dedicated branchSummary/compactionSummary roles;
  * pathfinder projects wrapped user messages, so the summary length is
- * measured at the entry instead.
+ * measured at the entry instead. A compaction entry also replays its stored
+ * system message.
  */
 internal fun estimateEntryTokens(entry: SessionEntry): Int = when (entry) {
-    is CompactionEntry -> ceil(entry.summary.length / 4.0).toInt()
+    is CompactionEntry ->
+        (entry.systemMessage?.let(::estimateTokens) ?: 0) +
+            ceil(entry.summary.length / 4.0).toInt()
+
     is BranchSummaryEntry -> ceil(entry.summary.length / 4.0).toInt()
+
     else -> entryContextMessages(entry).sumOf { estimateTokens(it) }
 }
 
