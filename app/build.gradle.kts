@@ -132,7 +132,7 @@ android {
         buildConfig = true
     }
 
-    sourceSets["main"].assets.srcDirs(defuddleAssetsDir.get())
+    sourceSets["main"].assets.directories.add(defuddleAssetsDir.get().asFile.absolutePath)
 
     // android.util.Log calls at the ViewModel error boundary must not throw
     // in JVM unit tests.
