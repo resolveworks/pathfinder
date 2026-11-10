@@ -8,9 +8,9 @@ import java.security.MessageDigest
 // (never a local checkout). To update: download the new tarball from
 // https://registry.npmjs.org/defuddle/-/defuddle-<version>.tgz, then bump
 // defuddleVersion and defuddleSha256 together (sha256sum of the tarball).
-val defuddleVersion = "0.19.3"
+val defuddleVersion = "0.19.6"
 val defuddleSha256 =
-    "5ee0e894b27f8342975f7acbbb96dd31b79baa0e2f1bba47d0d25f16cc49d153"
+    "a911cacd4f3d2ceb256e19965a4a970efa861b2943b149c19888df9114cbd45f"
 
 // Cached tarball under the build dir; downloaded only when missing, so
 // up-to-date checks do not re-hit the network.

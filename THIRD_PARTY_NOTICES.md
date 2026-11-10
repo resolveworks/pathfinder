@@ -33,7 +33,7 @@ SOFTWARE.
 ## defuddle
 
 The app bundles the browser build of
-[defuddle](https://github.com/kepano/defuddle) (npm release `defuddle@0.19.3`,
+[defuddle](https://github.com/kepano/defuddle) (npm release `defuddle@0.19.6`,
 file `dist/index.full.js`), which compiles in:
 
 - defuddle — Copyright (c) 2025 Steph Ango (@kepano)
