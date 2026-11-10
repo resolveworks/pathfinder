@@ -354,15 +354,16 @@ class SchemaValidator(
         }
         number(node["minProperties"])?.let { if (value.size < it) return false }
         number(node["maxProperties"])?.let { if (value.size > it) return false }
-        checkDependencies(node, base, value)
-        return true
+        return checkDependencies(node, base, value)
     }
 
-    private fun checkDependencies(node: JsonObject, base: String, value: JsonObject) {
+    private fun checkDependencies(node: JsonObject, base: String, value: JsonObject): Boolean {
         (node["dependentRequired"] as? JsonObject)?.let { dependencies ->
             for ((key, list) in dependencies) {
                 if (!value.containsKey(key)) continue
-                for (required in stringList(list)) if (!value.containsKey(required)) return
+                for (required in stringList(list)) {
+                    if (!value.containsKey(required)) return false
+                }
             }
         }
         for (key in listOf("dependentSchemas", "dependencies")) {
@@ -370,12 +371,15 @@ class SchemaValidator(
             for ((dependency, schema) in dependencies) {
                 if (!value.containsKey(dependency)) continue
                 if (schema is JsonArray) {
-                    for (required in stringList(schema)) if (!value.containsKey(required)) return
+                    for (required in stringList(schema)) {
+                        if (!value.containsKey(required)) return false
+                    }
                 } else if (!checkNode(schema, base, value)) {
-                    return
+                    return false
                 }
             }
         }
+        return true
     }
 
     private fun checkArray(node: JsonObject, base: String, value: JsonArray): Boolean {
