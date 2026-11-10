@@ -159,6 +159,12 @@ The tag must point at the bump commit: the workflow builds from the tag, so
 an unbumped tag ships an APK whose versionCode does not advance and
 Obtainium installs fail.
 
+Test builds ship the same way, tagged `vX.Y.Z-beta.N` with `versionName`
+`X.Y.Z-beta.N` and marked as a pre-release on GitHub; tag and versionName
+match exactly, since Obtainium compares the tag against the APK's
+`versionName`. Promotion is a fresh `X.Y.Z` bump and `vX.Y.Z` release, never
+un-flagging the beta tag.
+
 ## Check
 
 ```bash
