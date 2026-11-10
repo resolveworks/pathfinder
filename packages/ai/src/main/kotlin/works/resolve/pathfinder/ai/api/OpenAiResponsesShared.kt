@@ -830,7 +830,11 @@ object OpenAiResponsesShared {
             "response.function_call_arguments.done" -> {
                 val slot = getSlot<Block.Tool>(event) ?: return emptyList()
                 val input = slot.input as? ToolCallInput.Json ?: return emptyList()
-                val replaced = input.arguments.replace(event.string("arguments").orEmpty())
+                val arguments = event.string("arguments")
+                    ?: throw IllegalStateException(
+                        "response.function_call_arguments.done is missing arguments"
+                    )
+                val replaced = input.arguments.replace(arguments)
                 slot.arguments = replaced.arguments
                 slot.built = null
                 val delta = replaced.delta?.takeIf { it.isNotEmpty() } ?: return emptyList()

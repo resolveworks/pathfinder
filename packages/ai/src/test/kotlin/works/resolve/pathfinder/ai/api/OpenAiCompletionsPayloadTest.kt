@@ -394,6 +394,67 @@ class OpenAiCompletionsPayloadTest {
     }
 
     @Test
+    fun `requires non null assistant content sends empty string for tool call only messages`() {
+        val m = model.copy(
+            compat = model.compat.copy(requiresNonNullAssistantContent = true)
+        )
+        val context = normalizeContext(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("hi"),
+                    AssistantMessage(
+                        content = listOf(ToolCall("call_1", "read_file", JsonObject(emptyMap()))),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2"
+                    )
+                )
+            )
+        )
+        val messages = body(context, model = m)["messages"]!!.jsonArray
+        assertEquals(JsonPrimitive(""), messages[1].jsonObject["content"])
+    }
+
+    @Test
+    fun `requires assistant after tool result inserts synthetic message before user`() {
+        val m = model.copy(
+            compat = model.compat.copy(requiresAssistantAfterToolResult = true)
+        )
+        val context = normalizeContext(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("hi"),
+                    AssistantMessage(
+                        content = listOf(ToolCall("call_1", "read_file", JsonObject(emptyMap()))),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2"
+                    ),
+                    ToolResultMessage(
+                        toolCallId = "call_1",
+                        toolName = "read_file",
+                        content = listOf(TextContent("contents"))
+                    ),
+                    UserMessage.ofText("follow-up")
+                )
+            )
+        )
+        val messages = body(context, model = m)["messages"]!!.jsonArray
+        assertEquals(5, messages.size)
+        assertEquals("assistant", messages[3].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals(
+            "I have processed the tool results.",
+            messages[3].jsonObject["content"]!!.jsonPrimitive.content
+        )
+        assertEquals("user", messages[4].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals(
+            "follow-up",
+            messages[4].jsonObject["content"]!!.jsonArray[0]
+                .jsonObject["text"]!!.jsonPrimitive.content
+        )
+    }
+
+    @Test
     fun `tool call arguments replay as stringified json with exact escaping`() {
         val arguments = buildJsonObject {
             put("path", "/tmp/a\"b")
