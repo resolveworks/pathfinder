@@ -745,6 +745,8 @@ data class OpenAiCompletionsCompat(
     val supportsFinishReason: Boolean = true,
     val maxTokensField: MaxTokensField = MaxTokensField.MAX_COMPLETION_TOKENS,
     val requiresToolResultName: Boolean = false,
+    val requiresAssistantAfterToolResult: Boolean = false,
+    val requiresNonNullAssistantContent: Boolean = false,
     val requiresThinkingAsText: Boolean = false,
     val thinkingFormat: ThinkingFormat = ThinkingFormat.OPENAI,
     /** ZAI tool-call streaming flag (`tool_stream: true`). */

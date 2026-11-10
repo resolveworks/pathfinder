@@ -1409,8 +1409,21 @@ object OpenAiCompletionsPayload {
             }
         var i = 0
         var systemIndex = 0
+        var lastRole: MessageRole? = null
         while (i < messages.size) {
             val msg = messages[i]
+            // Some providers don't allow user messages directly after tool results.
+            if (compat.requiresAssistantAfterToolResult &&
+                lastRole == MessageRole.TOOL_RESULT &&
+                msg.role == MessageRole.USER
+            ) {
+                params.add(
+                    buildJsonObject {
+                        put("role", "assistant")
+                        put("content", "I have processed the tool results.")
+                    }
+                )
+            }
             when (msg.role) {
                 MessageRole.SYSTEM -> {
                     val system = msg as SystemMessage
@@ -1498,6 +1511,14 @@ object OpenAiCompletionsPayload {
                     }
                     i = j - 1
                     if (imageParts.isNotEmpty()) {
+                        if (compat.requiresAssistantAfterToolResult) {
+                            params.add(
+                                buildJsonObject {
+                                    put("role", "assistant")
+                                    put("content", "I have processed the tool results.")
+                                }
+                            )
+                        }
                         params.add(
                             buildJsonObject {
                                 put("role", "user")
@@ -1515,9 +1536,15 @@ object OpenAiCompletionsPayload {
                                 )
                             }
                         )
+                        lastRole = MessageRole.USER
+                    } else {
+                        lastRole = MessageRole.TOOL_RESULT
                     }
+                    i++
+                    continue
                 }
             }
+            lastRole = msg.role
             i++
         }
         return params
@@ -1640,7 +1667,14 @@ object OpenAiCompletionsPayload {
             // some models mirror the structure literally.
             assistant["content"] = JsonPrimitive(text)
         } else {
-            assistant["content"] = JsonNull
+            assistant["content"] =
+                if (compat.requiresAssistantAfterToolResult ||
+                    compat.requiresNonNullAssistantContent
+                ) {
+                    JsonPrimitive("")
+                } else {
+                    JsonNull
+                }
         }
 
         // The raw reasoning field is replayed only when no structured

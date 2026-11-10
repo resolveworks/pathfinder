@@ -306,7 +306,7 @@ private data class PromptDto(
 private data class ModelDto(
     val id: String,
     val name: String,
-    val api: String = "openai-completions",
+    val api: String,
     val provider: String = "",
     val baseUrl: String = "",
     val reasoning: Boolean = false,
@@ -314,8 +314,8 @@ private data class ModelDto(
     val thinkingLevelMap: Map<String, String?>? = null,
     val input: List<String> = listOf("text"),
     val cost: CostDto = CostDto(),
-    val contextWindow: Int = 4096,
-    val maxTokens: Int = 4096,
+    val contextWindow: Int,
+    val maxTokens: Int,
     val compat: CompatDto = CompatDto(),
     val headers: Map<String, String> = emptyMap()
 ) {
@@ -420,6 +420,8 @@ private data class CompatDto(
     val supportsFinishReason: Boolean? = null,
     val maxTokensField: String? = null,
     val requiresToolResultName: Boolean? = null,
+    val requiresAssistantAfterToolResult: Boolean? = null,
+    val requiresNonNullAssistantContent: Boolean? = null,
     val requiresThinkingAsText: Boolean? = null,
     val thinkingFormat: String? = null,
     val zaiToolStream: Boolean? = null,
@@ -464,6 +466,8 @@ private data class CompatDto(
             maxTokensField = maxTokensField?.let { parseMaxTokensField(it, where) }
                 ?: MaxTokensField.MAX_COMPLETION_TOKENS,
             requiresToolResultName = requiresToolResultName ?: false,
+            requiresAssistantAfterToolResult = requiresAssistantAfterToolResult ?: false,
+            requiresNonNullAssistantContent = requiresNonNullAssistantContent ?: false,
             requiresThinkingAsText = requiresThinkingAsText ?: false,
             thinkingFormat =
                 thinkingFormat?.let { parseThinkingFormat(it, where) } ?: ThinkingFormat.OPENAI,

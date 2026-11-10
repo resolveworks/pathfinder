@@ -118,7 +118,7 @@ class ProviderCatalogTest {
                   "id": "p1", "name": "P1", "baseUrl": "https://p1.test/v1",
                   "models": [
                     {
-                      "id": "m1", "name": "M1",
+                      "id": "m1", "name": "M1", "api": "openai-completions",
                       "baseUrl": "https://override.test/v1",
                       "reasoning": true,
                       "thinkingLevelMap": {"off": "none", "high": "high"},
@@ -197,17 +197,17 @@ class ProviderCatalogTest {
                 {
                   "id": "openrouter", "name": "OR", "baseUrl": "https://openrouter.ai/api/v1",
                   "models": [
-                    {"id": "anthropic/claude-sonnet-4", "name": "A"},
-                    {"id": "openai/gpt-4o", "name": "B"},
+                    {"id": "anthropic/claude-sonnet-4", "name": "A", "api": "openai-completions", "contextWindow": 4096, "maxTokens": 4096},
+                    {"id": "openai/gpt-4o", "name": "B", "api": "openai-completions", "contextWindow": 4096, "maxTokens": 4096},
                     {
-                      "id": "qwen/qwen3", "name": "C",
+                      "id": "qwen/qwen3", "name": "C", "api": "openai-completions", "contextWindow": 4096, "maxTokens": 4096,
                       "compat": {"cacheControlFormat": "anthropic"}
                     }
                   ]
                 },
                 {
                   "id": "other", "name": "O", "baseUrl": "https://other.test/v1",
-                  "models": [{"id": "anthropic/claude-sonnet-4", "name": "D"}]
+                  "models": [{"id": "anthropic/claude-sonnet-4", "name": "D", "api": "openai-completions", "contextWindow": 4096, "maxTokens": 4096}]
                 }
               ]
             }
@@ -264,10 +264,10 @@ class ProviderCatalogTest {
               "providers": [{
                 "id": "p", "name": "P", "baseUrl": "https://p.test/v1",
                 "models": [
-                  {"id": "a", "name": "A", "api": "openai-responses",
+                  {"id": "a", "name": "A", "api": "openai-responses", "contextWindow": 4096, "maxTokens": 4096,
                    "compat": {"supportsMaxOutputTokens": false}},
-                  {"id": "b", "name": "B", "api": "openai-responses"},
-                  {"id": "c", "name": "C",
+                  {"id": "b", "name": "B", "api": "openai-responses", "contextWindow": 4096, "maxTokens": 4096},
+                  {"id": "c", "name": "C", "api": "openai-completions", "contextWindow": 4096, "maxTokens": 4096,
                    "compat": {"requiresReasoningContentOnAssistantMessages": true}}
                 ]
               }]
@@ -292,8 +292,8 @@ class ProviderCatalogTest {
                   "providers": [{
                     "id": "p", "name": "P", "baseUrl": "https://p.test/v1",
                     "models": [
-                      {"id": "a", "name": "A"},
-                      {"id": "b", "name": "B", "compat": {"supportsInfiniteContext": true}}
+                      {"id": "a", "name": "A", "api": "openai-completions", "contextWindow": 4096, "maxTokens": 4096},
+                      {"id": "b", "name": "B", "api": "openai-completions", "contextWindow": 4096, "maxTokens": 4096, "compat": {"supportsInfiniteContext": true}}
                     ]
                   }]
                 }
@@ -336,8 +336,8 @@ class ProviderCatalogTest {
               "providers": [{
                 "id": "p", "name": "P", "baseUrl": "https://p.test/v1",
                 "models": [
-                  {"id": "a", "name": "A"},
-                  {"id": "b", "name": "B", "compat": {"supportsStrictMode": false}}
+                  {"id": "a", "name": "A", "api": "openai-completions", "contextWindow": 4096, "maxTokens": 4096},
+                  {"id": "b", "name": "B", "api": "openai-completions", "contextWindow": 4096, "maxTokens": 4096, "compat": {"supportsStrictMode": false}}
                 ]
               }]
             }
@@ -355,12 +355,12 @@ class ProviderCatalogTest {
               "providers": [{
                 "id": "p", "name": "P", "baseUrl": "https://p.test/v1",
                 "models": [
-                  {"id": "a", "name": "A", "api": "openai-responses",
+                  {"id": "a", "name": "A", "api": "openai-responses", "contextWindow": 4096, "maxTokens": 4096,
                    "compat": {"supportsOpenAIGrammarTools": true}},
-                  {"id": "b", "name": "B", "api": "openai-responses"},
-                  {"id": "c", "name": "C",
+                  {"id": "b", "name": "B", "api": "openai-responses", "contextWindow": 4096, "maxTokens": 4096},
+                  {"id": "c", "name": "C", "api": "openai-completions", "contextWindow": 4096, "maxTokens": 4096,
                    "compat": {"supportsOpenAIGrammarTools": true}},
-                  {"id": "d", "name": "D"}
+                  {"id": "d", "name": "D", "api": "openai-completions", "contextWindow": 4096, "maxTokens": 4096}
                 ]
               }]
             }
@@ -380,9 +380,9 @@ class ProviderCatalogTest {
         val catalog = ProviderCatalog.parse(
             """
             {"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-              {"id":"a","name":"A","api":"anthropic-messages",
+              {"id":"a","name":"A","api":"anthropic-messages","contextWindow":4096,"maxTokens":4096,
                "compat":{"supportsStrictTools": true}},
-              {"id":"b","name":"B","api":"anthropic-messages"}
+              {"id":"b","name":"B","api":"anthropic-messages","contextWindow":4096,"maxTokens":4096}
             ]}]}
             """
         )
@@ -395,9 +395,9 @@ class ProviderCatalogTest {
         val catalog = ProviderCatalog.parse(
             """
             {"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-              {"id":"a","name":"A","api":"anthropic-messages",
+              {"id":"a","name":"A","api":"anthropic-messages","contextWindow":4096,"maxTokens":4096,
                "compat":{"allowedFallbackModels":[{"provider":"p","model":"b","cost":{"input":5,"output":25,"cacheRead":0.5,"cacheWrite":6.25}}]}},
-              {"id":"b","name":"B","api":"anthropic-messages"}
+              {"id":"b","name":"B","api":"anthropic-messages","contextWindow":4096,"maxTokens":4096}
             ]}]}
             """
         )
@@ -437,7 +437,7 @@ class ProviderCatalogTest {
         val model = ProviderCatalog.parse(
             """
             {"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-              {"id":"m","name":"M","compat":{"chatTemplateArgs":{"e":{"${'$'}var":"thinking.enabled"}}}}
+              {"id":"m","name":"M","api":"openai-completions","contextWindow":4096,"maxTokens":4096,"compat":{"chatTemplateArgs":{"e":{"${'$'}var":"thinking.enabled"}}}}
             ]}]}
             """
         ).getModel("p", "m")!!
@@ -451,7 +451,7 @@ class ProviderCatalogTest {
         val model = ProviderCatalog.parse(
             """
             {"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-              {"id":"m","name":"M","reasoning":true,
+              {"id":"m","name":"M","api":"openai-completions","contextWindow":4096,"maxTokens":4096,"reasoning":true,
                "thinkingLevelMap":{"off":"none","low":null,"high":"high"}}
             ]}]}
             """
@@ -465,7 +465,7 @@ class ProviderCatalogTest {
     @Test
     fun `absent fields fall back to the core Kotlin defaults`() {
         val model = ProviderCatalog.parse(
-            """{"providers":[{"id":"p","name":"P","baseUrl":"https://p.test","models":[{"id":"m","name":"M"}]}]}"""
+            """{"providers":[{"id":"p","name":"P","baseUrl":"https://p.test","models":[{"id":"m","name":"M","api":"openai-completions","contextWindow":4096,"maxTokens":4096}]}]}"""
         ).getModel("p", "m")!!
         assertEquals(listOf(InputModality.TEXT), model.input)
         assertEquals(ThinkingFormat.OPENAI, model.compat.thinkingFormat)
@@ -490,7 +490,7 @@ class ProviderCatalogTest {
             val model = ProviderCatalog.parse(
                 """
                 {"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-                  {"id":"m","name":"M","compat":{"thinkingFormat":"$raw"}}
+                  {"id":"m","name":"M","api":"openai-completions","contextWindow":4096,"maxTokens":4096,"compat":{"thinkingFormat":"$raw"}}
                 ]}]}
                 """.trimIndent()
             ).getModel("p", "m")!!
@@ -590,7 +590,7 @@ class ProviderCatalogTest {
         val error = assertFailsWith<IllegalArgumentException> {
             ProviderCatalog.parse(
                 """{"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-                   {"id":"m","name":"M","compat":{"thinkingFormat":"nope"}}]}]}"""
+                   {"id":"m","name":"M","api":"openai-completions","contextWindow":4096,"maxTokens":4096,"compat":{"thinkingFormat":"nope"}}]}]}"""
             )
         }
         assertContains(error.message!!, "nope")
@@ -602,7 +602,7 @@ class ProviderCatalogTest {
         assertFailsWith<IllegalArgumentException> {
             ProviderCatalog.parse(
                 """{"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-                   {"id":"m","name":"M","input":["audio"]}]}]}"""
+                   {"id":"m","name":"M","api":"openai-completions","contextWindow":4096,"maxTokens":4096,"input":["audio"]}]}]}"""
             )
         }
     }
@@ -612,7 +612,7 @@ class ProviderCatalogTest {
         assertFailsWith<IllegalArgumentException> {
             ProviderCatalog.parse(
                 """{"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-                   {"id":"m","name":"M","compat":{"maxTokensField":"tokens_please"}}]}]}"""
+                   {"id":"m","name":"M","api":"openai-completions","contextWindow":4096,"maxTokens":4096,"compat":{"maxTokensField":"tokens_please"}}]}]}"""
             )
         }
     }
@@ -656,7 +656,7 @@ class ProviderCatalogTest {
     fun `compat anthropic flags map with pi defaults when absent`() {
         val model = ProviderCatalog.parse(
             """{"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-               {"id":"m","name":"M","api":"anthropic-messages"}]}]}"""
+               {"id":"m","name":"M","api":"anthropic-messages","contextWindow":4096,"maxTokens":4096}]}]}"""
         ).getModel("p", "m")!!
         assertEquals(works.resolve.pathfinder.ai.AnthropicMessagesCompat(), model.anthropicCompat)
     }
@@ -666,7 +666,7 @@ class ProviderCatalogTest {
         val model = ProviderCatalog.parse(
             """
             {"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-              {"id":"m","name":"M","api":"anthropic-messages","compat":{
+              {"id":"m","name":"M","api":"anthropic-messages","contextWindow":4096,"maxTokens":4096,"compat":{
                 "supportsEagerToolInputStreaming": false,
                 "supportsLongCacheRetention": false,
                 "sendSessionAffinityHeaders": true,
