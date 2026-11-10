@@ -102,7 +102,7 @@ class InMemoryTelemetryContext :
                 null
             }
         }
-        val recorded = admitted ?: return NOOP_TELEMETRY_CONTEXT.startSpan(options, callback)
+        val recorded = admitted ?: return InertSpan().startSpan(options, callback)
 
         val span: TelemetrySpan = object : TelemetrySpan {
             override val metrics: TelemetryMetrics get() = this@InMemoryTelemetryContext
@@ -152,6 +152,24 @@ class InMemoryTelemetryContext :
             settleSpan(recorded, failed = true, error = error)
             throw error
         }
+    }
+
+    /**
+     * A child span under a settled parent (pi's `startInertSpan`): records
+     * nothing, but carries this context's metrics so instrumentation still
+     * reaches the adapter.
+     */
+    private inner class InertSpan : TelemetrySpan {
+        override val metrics: TelemetryMetrics get() = this@InMemoryTelemetryContext
+
+        override suspend fun <T> startSpan(
+            options: SpanOptions,
+            callback: suspend (TelemetrySpan) -> T
+        ): T = callback(this)
+
+        override fun addEvent(name: String, attributes: SpanAttributes) {}
+        override fun setAttributes(attributes: SpanAttributes) {}
+        override fun setStatus(status: SpanStatus) {}
     }
 
     /** Under [lock]; the automatic error never marks the status explicit. */
