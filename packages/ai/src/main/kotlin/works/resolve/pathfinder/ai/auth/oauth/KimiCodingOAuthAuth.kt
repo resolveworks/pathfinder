@@ -25,9 +25,11 @@ import works.resolve.pathfinder.ai.utils.string
  * Android process has no ambient provider env at this layer, so this port
  * always uses pi's default host [OAUTH_HOST].
  *
- * Secret safety: nothing secret is logged. Error text can carry response
- * bodies and server-provided error details, so it is not safe to treat
- * exceptions as free of server payload content.
+ * Secret safety: nothing secret is logged. Error text keeps only the
+ * operation, status, and a JSON error object's structured `error` /
+ * `error_description`; response bodies are never interpolated, since a
+ * malformed token or device response can carry credentials. pi includes
+ * those bodies.
  */
 class KimiCodingOAuthAuth(
     private val http: OAuthHttpClient,
@@ -101,7 +103,7 @@ class KimiCodingOAuthAuth(
             verificationUriComplete == null
         ) {
             throw IllegalStateException(
-                "Invalid Kimi Code device authorization response: ${json.jsonString()}"
+                "Invalid Kimi Code device authorization response: ${REDACTED_BODY}"
             )
         }
 
@@ -138,7 +140,7 @@ class KimiCodingOAuthAuth(
             expiresIn == null || !expiresIn.isFinite() || expiresIn <= 0
         ) {
             throw IllegalStateException(
-                "Kimi Code token $operation response missing fields: ${json.jsonString()}"
+                "Kimi Code token $operation response missing fields: ${REDACTED_BODY}"
             )
         }
         return TokenResponse(
@@ -288,9 +290,9 @@ class KimiCodingOAuthAuth(
                 continue
             }
 
-            val text = json.jsonString()
+            val detail = safeErrorDetail(json)
             throw IllegalStateException(
-                "Kimi Code token refresh failed with status ${response.status}${if (text.isNotEmpty()) ": $text" else ""}"
+                "Kimi Code token refresh failed with status ${response.status}: $detail"
             )
         }
 
@@ -315,6 +317,8 @@ class KimiCodingOAuthAuth(
 
         private const val DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 
+        internal const val REDACTED_BODY: String = GitHubCopilotOAuthAuth.REDACTED_BODY
+
         private val FORM_HEADERS = mapOf(
             "Content-Type" to "application/x-www-form-urlencoded",
             "Accept" to "application/json"
@@ -325,10 +329,9 @@ class KimiCodingOAuthAuth(
 
         /**
          * JS `typeof [] === "object"`, so any non-null JSON object *or array*
-         * is returned as-is (pi keeps it for `JSON.stringify` in
-         * malformed-response errors); scalars and unparseable bodies become
-         * null. Field access still only succeeds on [JsonObject], matching
-         * pi's `json?.field` → `undefined` on arrays.
+         * is returned as-is; scalars and unparseable bodies become null.
+         * Field access still only succeeds on [JsonObject], matching pi's
+         * `json?.field` → `undefined` on arrays.
          */
         internal fun readJson(response: OAuthHttpResponse): JsonElement? {
             val parsed = try {
@@ -351,13 +354,26 @@ class KimiCodingOAuthAuth(
         internal fun trustedHttpUrl(value: String?): String? =
             if (value.isNullOrEmpty()) null else normalizedHttpUrlOrNull(value)
 
-        /** pi's `JSON.stringify(json)` rendering (`"null"` for null, compact JSON otherwise). */
-        private fun JsonElement?.jsonString(): String = this?.toString() ?: "null"
+        /**
+         * Redacts a response body down to its structured `error` /
+         * `error_description` strings: provider-authored text can echo request
+         * material, and a raw body can carry credentials. Anything else — an
+         * unparseable body, a non-object, or no error fields — is replaced by
+         * [REDACTED_BODY], never interpolated.
+         */
+        private fun safeErrorDetail(json: JsonElement?): String {
+            val record = json as? JsonObject
+            val detail = listOfNotNull(
+                record.string("error"),
+                record.string("error_description")
+            ).joinToString(": ")
+            return detail.ifEmpty { REDACTED_BODY }
+        }
 
-        /** pi's `: ${await response.text()}` suffix for error bodies. */
+        /** pi's `: ${await response.text()}` suffix, redacted down to structured error fields. */
         private fun OAuthHttpResponse.errorTextSuffix(): String {
-            val text = body.toString(Charsets.UTF_8)
-            return if (text.isNotEmpty()) ": $text" else ""
+            if (body.isEmpty()) return ""
+            return ": ${safeErrorDetail(readJson(this))}"
         }
     }
 }

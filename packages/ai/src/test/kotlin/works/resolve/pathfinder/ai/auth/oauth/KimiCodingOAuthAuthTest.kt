@@ -193,7 +193,10 @@ class KimiCodingOAuthAuthTest {
     fun `device authorization failure surfaces pi's status message`() = runTest {
         val (flow, _) = newFlow { json(500, "boom") }
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
-        assertEquals("Kimi Code device authorization failed with status 500: boom", error.message)
+        assertEquals(
+            "Kimi Code device authorization failed with status 500: <redacted response body>",
+            error.message
+        )
     }
 
     @Test
@@ -369,7 +372,7 @@ class KimiCodingOAuthAuthTest {
         }
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
         assertEquals(
-            "Kimi Code device token request failed with status 503: overloaded",
+            "Kimi Code device token request failed with status 503: <redacted response body>",
             error.message
         )
     }
@@ -385,7 +388,7 @@ class KimiCodingOAuthAuthTest {
         }
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
         assertEquals(
-            "Kimi Code token poll response missing fields: {\"access_token\":\"a\"}",
+            "Kimi Code token poll response missing fields: <redacted response body>",
             error.message
         )
     }
@@ -482,8 +485,11 @@ class KimiCodingOAuthAuthTest {
         val error = assertFailsWith<IllegalStateException> {
             flow.refresh(OAuthCredential(access = "", refresh = "ref", expires = 0))
         }
-        // pi appends JSON.stringify of the parsed body; "{}" still renders
-        assertEquals("Kimi Code token refresh failed with status 503: {}", error.message)
+        // pi appends JSON.stringify of the parsed body; the body is redacted here
+        assertEquals(
+            "Kimi Code token refresh failed with status 503: <redacted response body>",
+            error.message
+        )
         // attempts 0..REFRESH_MAX_RETRIES: 4 requests, backoff 1s/2s/4s
         assertEquals(listOf(0L, 1_000L, 3_000L, 7_000L), http.requests.map { it.first })
     }
@@ -529,7 +535,7 @@ class KimiCodingOAuthAuthTest {
             flow.refresh(OAuthCredential(access = "", refresh = "ref", expires = 0))
         }
         assertEquals(
-            "Kimi Code token refresh failed with status 404: {\"error\":\"not_found\"}",
+            "Kimi Code token refresh failed with status 404: not_found",
             error.message
         )
         assertEquals(1, http.requests.size)
@@ -543,7 +549,7 @@ class KimiCodingOAuthAuthTest {
             flow.refresh(OAuthCredential(access = "", refresh = "ref", expires = 0))
         }
         assertEquals(
-            "Kimi Code token refresh response missing fields: {\"access_token\":\"a\",\"expires_in\":60}",
+            "Kimi Code token refresh response missing fields: <redacted response body>",
             error.message
         )
     }
@@ -704,21 +710,19 @@ class KimiCodingOAuthAuthTest {
 
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
         assertEquals(
-            "Kimi Code token poll response missing fields: " +
-                "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":\"60\"}",
+            "Kimi Code token poll response missing fields: <redacted response body>",
             error.message
         )
     }
 
     @Test
-    fun `array device authorization body renders in the malformed-response error`() = runTest {
-        // JS typeof [] === "object", so readJson keeps the array; field lookups
-        // fail and JSON.stringify renders it in the error
+    fun `array device authorization body fails as a malformed response`() = runTest {
+        // JS typeof [] === "object", so readJson keeps the array; field lookups fail
         val (flow, _) = newFlow { json(200, "[\"device_code\"]") }
 
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
         assertEquals(
-            "Invalid Kimi Code device authorization response: [\"device_code\"]",
+            "Invalid Kimi Code device authorization response: <redacted response body>",
             error.message
         )
     }
