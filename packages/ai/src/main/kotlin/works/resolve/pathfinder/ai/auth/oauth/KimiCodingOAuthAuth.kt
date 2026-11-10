@@ -25,8 +25,9 @@ import works.resolve.pathfinder.ai.utils.string
  * Android process has no ambient provider env at this layer, so this port
  * always uses pi's default host [OAUTH_HOST].
  *
- * Secret safety: nothing secret is logged; exceptions carry only statuses
- * and server-provided error details.
+ * Secret safety: nothing secret is logged. Error text can carry response
+ * bodies and server-provided error details, so it is not safe to treat
+ * exceptions as free of server payload content.
  */
 class KimiCodingOAuthAuth(
     private val http: OAuthHttpClient,

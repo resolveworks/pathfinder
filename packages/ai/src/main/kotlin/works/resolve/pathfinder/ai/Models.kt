@@ -10,10 +10,13 @@ import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ChatApi
@@ -234,9 +237,10 @@ class Models(
     }
 
     /**
-     * pi's configured-provider snapshot: whether [checkAuth] finds usable auth
-     * without refreshing OAuth. A store or check failure reports
-     * unconfigured, like a snapshot entry that never resolved.
+     * Whether [checkAuth] finds usable auth without refreshing OAuth. This
+     * approximates pi's cached configured-provider snapshot by checking on
+     * demand, so it touches the credential store and the provider's check on
+     * every call. A store or check failure reports unconfigured.
      */
     suspend fun hasConfiguredAuth(providerId: String): Boolean = try {
         checkAuth(providerId) != null
@@ -268,6 +272,11 @@ class Models(
     /**
      * Persist a successful login. The credential itself is never logged; a
      * store failure surfaces as [ModelsError] (`auth`).
+     *
+     * Aborting before the store write starts cancels without persisting; once
+     * the write starts it runs to completion, because a login may have spent a
+     * single-use OAuth refresh token and its rotated credential must not be
+     * lost to the caller going away.
      */
     suspend fun login(
         providerId: String,
@@ -292,8 +301,11 @@ class Models(
                 startLogin(interaction)
             }
         }
+        currentCoroutineContext().ensureActive()
         try {
-            serverCredentialWrites.modify(providerId) { credential }
+            withContext(NonCancellable) {
+                serverCredentialWrites.modify(providerId) { credential }
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
