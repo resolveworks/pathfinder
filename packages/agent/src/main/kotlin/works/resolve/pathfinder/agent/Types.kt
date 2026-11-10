@@ -31,13 +31,26 @@ import works.resolve.pathfinder.ai.utils.getCurrentSystemPrompt
  */
 enum class ToolExecutionMode { SEQUENTIAL, PARALLEL }
 
-/** pi's QueueMode: how a pending-message queue is drained. */
-enum class QueueMode {
+/**
+ * pi's QueueMode: how a pending-message queue is drained. [wire] is the
+ * persisted settings name.
+ */
+enum class QueueMode(val wire: String) {
     /** Every queued message is delivered in one turn. */
-    ALL,
+    ALL("all"),
 
     /** One message per turn (pi's default for both queues). */
-    ONE_AT_A_TIME
+    ONE_AT_A_TIME("one-at-a-time")
+}
+
+/**
+ * Decodes a queue-mode wire string (settings); null for unknown values —
+ * never `valueOf` untrusted input.
+ */
+fun queueModeFromWire(wire: String): QueueMode? = when (wire) {
+    "all" -> QueueMode.ALL
+    "one-at-a-time" -> QueueMode.ONE_AT_A_TIME
+    else -> null
 }
 
 data class AgentLoopConfig(

@@ -108,6 +108,16 @@ class Agent(
     /** pi's followUpQueue: messages that start the next run once this one would stop. */
     private val followUpQueue = PendingMessageQueue(followUpMode)
 
+    /** Controls how queued steering messages are drained. */
+    var steeringMode: QueueMode
+        get() = synchronized(lock) { steeringQueue.mode }
+        set(mode) = synchronized(lock) { steeringQueue.mode = mode }
+
+    /** Controls how queued follow-up messages are drained. */
+    var followUpMode: QueueMode
+        get() = synchronized(lock) { followUpQueue.mode }
+        set(mode) = synchronized(lock) { followUpQueue.mode = mode }
+
     /**
      * pi's per-run abort-signal state: set by [abort] while a run is active,
      * cleared when the next run starts (upstream creates a fresh
