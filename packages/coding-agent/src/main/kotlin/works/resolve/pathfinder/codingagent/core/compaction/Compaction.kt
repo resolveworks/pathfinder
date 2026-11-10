@@ -48,7 +48,7 @@ import works.resolve.pathfinder.codingagent.core.buildSessionProjection
 import works.resolve.pathfinder.codingagent.core.createBranchSummaryMessage
 import works.resolve.pathfinder.codingagent.core.createCompactionSummaryMessage
 import works.resolve.pathfinder.codingagent.core.sessionEntryToContextMessages
-import works.resolve.pathfinder.codingagent.core.utils.addUsage
+import works.resolve.pathfinder.codingagent.core.utils.combineUsage
 
 data class CompactionSettings(
     val enabled: Boolean,
@@ -893,7 +893,7 @@ suspend fun compact(
         turnPrefixResult as CompactionResult.Ok
         summary =
             "$historyText\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value.text}"
-        summaryUsage = historyUsage?.let { addUsage(it, turnPrefixResult.value.usage) }
+        summaryUsage = historyUsage?.let { combineUsage(it, turnPrefixResult.value.usage) }
             ?: turnPrefixResult.value.usage
     } else {
         val summaryResult = generateSummaryWithUsage(

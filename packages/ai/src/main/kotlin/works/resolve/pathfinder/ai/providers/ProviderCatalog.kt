@@ -248,7 +248,7 @@ fun normalizeBaseUrl(url: String): String {
 
 @Serializable
 private data class CatalogDto(
-    val generatedAt: String? = null,
+    val piRevision: String? = null,
     val providers: List<ProviderDto> = emptyList()
 )
 
