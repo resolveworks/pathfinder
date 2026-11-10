@@ -252,7 +252,8 @@ internal fun ProviderAuthScreen(
     onOpenApiKeyForm: () -> Unit,
     onBeginLogin: (method: AuthMethodInfo) -> Unit,
     modelOptions: List<ModelOption> = emptyList(),
-    enabledModels: List<String>? = null,
+    /** The curated scope's resolved model keys; null = everything checked. */
+    scopedModelKeys: Set<String>? = null,
     onToggleModelScope: (providerId: String, modelId: String, checked: Boolean) -> Unit =
         { _, _, _ -> }
 ) {
@@ -260,7 +261,7 @@ internal fun ProviderAuthScreen(
         StoredProviderContent(
             provider = provider,
             modelOptions = modelOptions,
-            enabledModels = enabledModels,
+            scopedModelKeys = scopedModelKeys,
             onToggleModelScope = onToggleModelScope
         )
         return
@@ -309,7 +310,7 @@ internal fun ProviderAuthScreen(
 internal fun StoredProviderContent(
     provider: ProviderOption,
     modelOptions: List<ModelOption> = emptyList(),
-    enabledModels: List<String>? = null,
+    scopedModelKeys: Set<String>? = null,
     onToggleModelScope: (providerId: String, modelId: String, checked: Boolean) -> Unit =
         { _, _, _ -> }
 ) {
@@ -359,7 +360,7 @@ internal fun StoredProviderContent(
             } else {
                 Column {
                     visibleModels.forEach { option ->
-                        val checked = enabledModels?.contains(option.key) ?: true
+                        val checked = scopedModelKeys?.contains(option.key) ?: true
                         ListItem(
                             headlineContent = { Text(option.name) },
                             supportingContent = { Text(option.modelId) },

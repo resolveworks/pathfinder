@@ -42,7 +42,9 @@ internal class ModelSettingsController(
     data class State(
         val defaultModel: ModelOption? = null,
         val defaultThinkingLevel: ModelThinkingLevel? = null,
-        val enabledModels: List<String>? = null
+        val enabledModels: List<String>? = null,
+        /** [enabledModels] resolved against the available models; null = no curated scope. */
+        val scopedModelKeys: Set<String>? = null
     )
 
     private val _state = MutableStateFlow(State())
@@ -245,11 +247,22 @@ internal class ModelSettingsController(
         val defaultModel = settings
             .takeIf { !it.defaultProvider.isNullOrBlank() && !it.defaultModel.isNullOrBlank() }
             ?.let { selectedModelProjection(it.defaultProvider!!, it.defaultModel!!) }
+        val enabledModels = settings.enabledModels
+        val scopedModelKeys = enabledModels
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { patterns ->
+                resolveModelScope(patterns, availableModels())
+                    .scopedModels
+                    .mapTo(mutableSetOf()) { "${it.model.provider}/${it.model.id}" }
+            }
+            // Empty resolution is unrestricted at runtime: project no scope.
+            ?.takeIf { it.isNotEmpty() }
         _state.update {
             State(
                 defaultModel = defaultModel,
                 defaultThinkingLevel = settings.defaultThinkingLevel,
-                enabledModels = settings.enabledModels
+                enabledModels = enabledModels,
+                scopedModelKeys = scopedModelKeys
             )
         }
     }

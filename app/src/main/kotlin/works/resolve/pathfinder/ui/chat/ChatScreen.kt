@@ -589,7 +589,7 @@ fun ChatScreen(
                                         provider = option,
                                         methods = authMethods(key.providerId),
                                         modelOptions = uiState.modelOptions,
-                                        enabledModels = uiState.enabledModels,
+                                        scopedModelKeys = uiState.scopedModelKeys,
                                         onToggleModelScope = onToggleModelScope,
                                         onOpenApiKeyForm = {
                                             pushProviderApiKeyForm(key.providerId)
