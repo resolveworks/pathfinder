@@ -161,9 +161,6 @@ Obtainium installs fail.
 
 ## Check
 
-Pathfinder is in early alpha. Do not add regression tests unless explicitly
-requested.
-
 ```bash
 ./gradlew spotlessCheck test assembleDebug
 ```
